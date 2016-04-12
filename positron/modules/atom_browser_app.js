@@ -4,6 +4,13 @@
 
 "use strict";
 
+const Cc = Components.classes;
+const Ci = Components.interfaces;
+const Cr = Components.results;
+const Cu = Components.utils;
+
+Cu.import('resource://gre/modules/Services.jsm');
+
 exports.app = {
   quit: function() {
     // XXX Emit the before-quit and will-quit events.
@@ -21,11 +28,6 @@ exports.hide = function() { /* stub */ };
 exports.show = function() { /* stub */ };
 exports.setMenu = function() { /* stub */ };
 exports.setIcon = function() { /* stub */ };
-
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
 
 // There isn't currently anything we need to do before emitting app.ready,
 // but apps will expect it to happen after a tick, so emit it in a timeout.
