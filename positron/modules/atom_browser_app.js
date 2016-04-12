@@ -4,7 +4,13 @@
 
 "use strict";
 
-exports.app = { /* stub */ };
+exports.app = {
+  quit: function() {
+    // XXX Emit the before-quit and will-quit events.
+    Services.startup.quit(Services.startup.eAttemptQuit);
+  },
+};
+
 exports.appendSwitch = function() { /* stub */ };
 exports.appendArgument = function() { /* stub */ };
 exports.dockBounce = function() { /* stub */ };
