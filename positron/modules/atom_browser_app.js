@@ -4,15 +4,12 @@
 
 "use strict";
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
+const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
 Cu.import('resource://gre/modules/Services.jsm');
 
 exports.app = {
-  quit: function() {
+  quit() {
     // XXX Emit the before-quit and will-quit events.
     Services.startup.quit(Services.startup.eAttemptQuit);
   },

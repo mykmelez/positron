@@ -4,10 +4,7 @@
 
 'use strict';
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
+const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
 Cu.import('resource://gre/modules/Services.jsm');
 
@@ -30,9 +27,8 @@ process.atomBinding = function(name) {
   } catch (error) {
     if (/No such module/.test(error.message)) {
       return process.binding("atom_common_" + name);
-    } else {
-      throw error;
     }
+    throw error;
   }
 };
 
