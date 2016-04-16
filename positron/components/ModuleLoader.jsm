@@ -163,6 +163,11 @@ function ModuleLoader(processType, window) {
     if (processType === 'renderer') {
       globalObj.window = window;
       globalObj.document = window.document;
+      // We shouldn't really inject this into every module, and we won't
+      // actually need it once we make web-view depend on mozbrowser.
+      // But we inject it here for now to work around a web-view error.
+      // XXX Remove this after modifying web-view to use mozbrowser.
+      globalObj.HTMLObjectElement = window.HTMLObjectElement;
     }
   };
 
