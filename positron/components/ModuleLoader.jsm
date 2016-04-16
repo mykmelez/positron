@@ -51,7 +51,7 @@ const windowLoaders = new WeakMap();
  * @return {Function} a module importer.
  */
 
-function ModuleLoader(processType) {
+function ModuleLoader(processType, window) {
   /**
    * Mapping from module IDs (resource: URLs) to module objects.
    *
@@ -159,13 +159,23 @@ function ModuleLoader(processType) {
     // to resolve it relative to the requirer's URL.
     globalObj.process = this.require({}, 'resource:///modules/gecko/process.js');
     globalObj.process.type = processType;
+
+    if (processType === 'renderer') {
+      globalObj.window = window;
+      globalObj.document = window.document;
+    }
   };
+
+  if (processType === 'renderer') {
+    this.require({}, 'resource:///modules/renderer/web-view/web-view.js');
+    this.require({}, 'resource:///modules/renderer/web-view/web-view-attributes.js');
+  }
 }
 
 ModuleLoader.getLoaderForWindow = function(window) {
   let loader = windowLoaders.get(window);
   if (!loader) {
-    loader = new ModuleLoader('renderer');
+    loader = new ModuleLoader('renderer', window);
     windowLoaders.set(window, loader);
   }
   return loader;
