@@ -4,5 +4,21 @@
 
 "use strict";
 
-exports.setHiddenValue = function() { /* stub */ };
-exports.getHiddenValue = function() { /* stub */ };
+const hiddenValueMaps = new WeakMap();
+
+exports.setHiddenValue = function(obj, name, val) {
+  let hiddenValueMap = hiddenValueMaps.get(obj);
+  if (!hiddenValueMap) {
+    hiddenValueMap = new Map();
+    hiddenValueMaps.set(obj, hiddenValueMap);
+  }
+  hiddenValueMap.set(name, val);
+};
+
+exports.getHiddenValue = function(obj, name) {
+  const hiddenValueMap = hiddenValueMaps.get(obj);
+  if (hiddenValueMap) {
+    return hiddenValueMap.get(name);
+  }
+  return undefined;
+};
