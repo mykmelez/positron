@@ -66,7 +66,7 @@ function ModuleLoader(processType, window) {
    * to the `global` symbol as well as implicitly via the sandbox prototype.
    * This object is shared across all modules loaded by this loader.
    */
-  const global = {
+  this.global = {
     // Start defining the `process` property.  We finish defining it below,
     // after defining this.require().
     process: {
@@ -87,7 +87,7 @@ function ModuleLoader(processType, window) {
     moduleGlobalObj.exports = module.exports;
     moduleGlobalObj.module = module;
     moduleGlobalObj.require = this.require.bind(this, module);
-    moduleGlobalObj.global = global;
+    moduleGlobalObj.global = this.global;
 
     if (processType === 'renderer') {
       moduleGlobalObj.window = window;
@@ -172,7 +172,7 @@ function ModuleLoader(processType, window) {
     let sandbox = new Cu.Sandbox(systemPrincipal, {
       sandboxName: uri.spec,
       wantComponents: wantComponents,
-      sandboxPrototype: global,
+      sandboxPrototype: this.global,
     });
 
     this.injectModuleGlobals(sandbox, module);
