@@ -113,6 +113,65 @@ static const double SWIPE_MIN_DISTANCE_INCHES = 0.6;
 
 static Modifiers GetModifiers(int32_t metaState);
 
+template<typename Lambda, bool IsStatic, typename InstanceType, class Impl>
+class nsWindow::WindowEvent : public nsAppShell::LambdaEvent<Lambda>
+{
+    typedef nsAppShell::Event Event;
+    typedef nsAppShell::LambdaEvent<Lambda> Base;
+
+    bool IsStaleCall()
+    {
+        if (IsStatic) {
+            // Static calls are never stale.
+            return false;
+        }
+
+        JNIEnv* const env = mozilla::jni::GetEnvForThread();
+
+        const auto natives = reinterpret_cast<mozilla::WeakPtr<Impl>*>(
+                jni::GetNativeHandle(env, mInstance.Get()));
+        MOZ_CATCH_JNI_EXCEPTION(env);
+
+        // The call is stale if the nsWindow has been destroyed on the
+        // Gecko side, but the Java object is still attached to it through
+        // a weak pointer. Stale calls should be discarded. Note that it's
+        // an error if natives is nullptr here; we return false but the
+        // native call will throw an error.
+        return natives && !natives->get();
+    }
+
+    const InstanceType mInstance;
+    const Event::Type mEventType;
+
+public:
+    WindowEvent(Lambda&& aLambda,
+                InstanceType&& aInstance,
+                Event::Type aEventType = Event::Type::kGeneralActivity)
+        : Base(mozilla::Move(aLambda))
+        , mInstance(mozilla::Move(aInstance))
+        , mEventType(aEventType)
+    {}
+
+    WindowEvent(Lambda&& aLambda,
+                Event::Type aEventType = Event::Type::kGeneralActivity)
+        : Base(mozilla::Move(aLambda))
+        , mInstance(Base::lambda.GetThisArg())
+        , mEventType(aEventType)
+    {}
+
+    void Run() override
+    {
+        if (!IsStaleCall()) {
+            return Base::Run();
+        }
+    }
+
+    Event::Type ActivityType() const override
+    {
+        return mEventType;
+    }
+};
+
 class nsWindow::GeckoViewSupport final
     : public GeckoView::Window::Natives<GeckoViewSupport>
     , public GeckoEditable::Natives<GeckoViewSupport>
@@ -122,58 +181,6 @@ class nsWindow::GeckoViewSupport final
     nsWindow& window;
 
 public:
-    template<typename T>
-    class WindowEvent : public nsAppShell::LambdaEvent<T>
-    {
-        typedef nsAppShell::LambdaEvent<T> Base;
-
-        // Static calls are never stale since they don't need native instances.
-        template<bool Static>
-        typename mozilla::EnableIf<Static, bool>::Type IsStaleCall()
-        { return false; }
-
-        template<bool Static>
-        typename mozilla::EnableIf<!Static, bool>::Type IsStaleCall()
-        {
-            JNIEnv* const env = mozilla::jni::GetEnvForThread();
-            const auto& thisArg = Base::lambda.GetThisArg();
-
-            const auto natives = reinterpret_cast<
-                    mozilla::WeakPtr<typename T::TargetClass>*>(
-                    jni::GetNativeHandle(env, thisArg.Get()));
-            MOZ_CATCH_JNI_EXCEPTION(env);
-
-            // The call is stale if the nsWindow has been destroyed on the
-            // Gecko side, but the Java object is still attached to it through
-            // a weak pointer. Stale calls should be discarded. Note that it's
-            // an error if natives is nullptr here; we return false but the
-            // native call will throw an error.
-            return natives && !natives->get();
-        }
-
-    public:
-        WindowEvent(T&& l) : Base(mozilla::Move(l)) {}
-
-        void Run() override
-        {
-            if (!IsStaleCall<T::isStatic>()) {
-                return Base::Run();
-            }
-        }
-
-        nsAppShell::Event::Type ActivityType() const override
-        {
-            // Events that result in user-visible changes count as UI events.
-            if (Base::lambda.IsTarget(&GeckoViewSupport::OnKeyEvent) ||
-                Base::lambda.IsTarget(&GeckoViewSupport::OnImeReplaceText) ||
-                Base::lambda.IsTarget(&GeckoViewSupport::OnImeUpdateComposition))
-            {
-                return nsAppShell::Event::Type::kUIActivity;
-            }
-            return Base::ActivityType();
-        }
-    };
-
     typedef GeckoView::Window::Natives<GeckoViewSupport> Base;
     typedef GeckoEditable::Natives<GeckoViewSupport> EditableBase;
 
@@ -188,8 +195,16 @@ public:
             // can get a head start on opening our window.
             return aCall();
         }
-        return nsAppShell::PostEvent(mozilla::MakeUnique<
-                WindowEvent<Functor>>(mozilla::Move(aCall)));
+
+        const nsAppShell::Event::Type eventType =
+                aCall.IsTarget(&GeckoViewSupport::OnKeyEvent) ||
+                aCall.IsTarget(&GeckoViewSupport::OnImeReplaceText) ||
+                aCall.IsTarget(&GeckoViewSupport::OnImeUpdateComposition) ?
+                nsAppShell::Event::Type::kUIActivity :
+                nsAppShell::Event::Type::kGeneralActivity;
+
+        nsAppShell::PostEvent(mozilla::MakeUnique<WindowEvent<Functor>>(
+                mozilla::Move(aCall), eventType));
     }
 
     GeckoViewSupport(nsWindow* aWindow,
@@ -849,6 +864,7 @@ class nsWindow::GLControllerSupport final
     GLController::GlobalRef mGLController;
     GeckoLayerClient::GlobalRef mLayerClient;
     Atomic<bool, ReleaseAcquire> mCompositorPaused;
+    mozilla::jni::GlobalRef<mozilla::jni::Object> mSurface;
 
     // In order to use Event::HasSameTypeAs in PostTo(), we cannot make
     // GLControllerEvent a template because each template instantiation is
@@ -895,7 +911,7 @@ public:
             aCall.IsTarget(&GLControllerSupport::PauseCompositor)) {
 
             // These calls are blocking.
-            nsAppShell::SyncRunEvent(GeckoViewSupport::WindowEvent<Functor>(
+            nsAppShell::SyncRunEvent(WindowEvent<Functor>(
                     mozilla::Move(aCall)), &GLControllerEvent::MakeEvent);
             return;
 
@@ -910,7 +926,7 @@ public:
             aCall.SetTarget(&GLControllerSupport::OnResumedCompositor);
             nsAppShell::PostEvent(
                     mozilla::MakeUnique<GLControllerEvent>(
-                    mozilla::MakeUnique<GeckoViewSupport::WindowEvent<Functor>>(
+                    mozilla::MakeUnique<WindowEvent<Functor>>(
                     mozilla::Move(aCall))));
             return;
 
@@ -924,7 +940,7 @@ public:
         // CreateCompositor, PauseCompositor, and OnResumedCompositor. For all
         // other events, use regular WindowEvent.
         nsAppShell::PostEvent(
-                mozilla::MakeUnique<GeckoViewSupport::WindowEvent<Functor>>(
+                mozilla::MakeUnique<WindowEvent<Functor>>(
                 mozilla::Move(aCall)));
     }
 
@@ -955,31 +971,10 @@ public:
         return mCompositorPaused;
     }
 
-    EGLSurface CreateEGLSurface()
+    void* GetSurface()
     {
-        static jfieldID eglSurfacePointerField;
-
-        JNIEnv* const env = jni::GetEnvForThread();
-
-        if (!eglSurfacePointerField) {
-            AutoJNIClass egl(env, "com/google/android/gles_jni/EGLSurfaceImpl");
-            // The pointer type moved to a 'long' in Android L, API version 20
-            eglSurfacePointerField = egl.getField("mEGLSurface",
-                    AndroidBridge::Bridge()->GetAPIVersion() >= 20 ? "J" : "I");
-        }
-
-        // Called on the compositor thread.
-        auto eglSurface = mGLController->CreateEGLSurface();
-        if (!eglSurface) {
-            // We failed to create a surface, but because the compositor is
-            // able to handle this failure gracefully, we pass back null
-            // instead of crashing.
-            return nullptr;
-        }
-        return reinterpret_cast<EGLSurface>(
-                AndroidBridge::Bridge()->GetAPIVersion() >= 20 ?
-                env->GetLongField(eglSurface.Get(), eglSurfacePointerField) :
-                env->GetIntField(eglSurface.Get(), eglSurfacePointerField));
+        mSurface = mGLController->GetSurface();
+        return mSurface.Get();
     }
 
 private:
@@ -1328,11 +1323,16 @@ nsWindow::Destroy(void)
         mGeckoViewSupport = nullptr;
     }
 
+    // Stuff below may release the last ref to this
+    nsCOMPtr<nsIWidget> kungFuDeathGrip(this);
+
     while (mChildren.Length()) {
         // why do we still have children?
         ALOG("### Warning: Destroying window %p and reparenting child %p to null!", (void*)this, (void*)mChildren[0]);
         mChildren[0]->SetParent(nullptr);
     }
+
+    nsBaseWidget::Destroy();
 
     if (IsTopLevel())
         gTopLevelWindows.RemoveElement(this);
@@ -1778,6 +1778,9 @@ nsWindow::CreateLayerManager(int aCompositorWidth, int aCompositorHeight)
         return;
     }
 
+    // Ensure that gfxPlatform is initialized first.
+    gfxPlatform::GetPlatform();
+
     if (ShouldUseOffMainThreadCompositing()) {
         CreateCompositor(aCompositorWidth, aCompositorHeight);
         if (mLayerManager) {
@@ -1864,10 +1867,9 @@ void
 nsWindow::InitEvent(WidgetGUIEvent& event, LayoutDeviceIntPoint* aPoint)
 {
     if (aPoint) {
-        event.refPoint = *aPoint;
+        event.mRefPoint = *aPoint;
     } else {
-        event.refPoint.x = 0;
-        event.refPoint.y = 0;
+        event.mRefPoint = LayoutDeviceIntPoint(0, 0);
     }
 
     event.mTime = PR_Now() / 1000;
@@ -1928,11 +1930,11 @@ nsWindow::GetNativeData(uint32_t aDataType)
             return NS_ONLY_ONE_NATIVE_IME_CONTEXT;
         }
 
-        case NS_NATIVE_NEW_EGL_SURFACE:
+        case NS_NATIVE_WINDOW:
             if (!mGLControllerSupport) {
                 return nullptr;
             }
-            return static_cast<void*>(mGLControllerSupport->CreateEGLSurface());
+            return mGLControllerSupport->GetSurface();
     }
 
     return nullptr;
@@ -1966,9 +1968,9 @@ nsWindow::OnContextmenuEvent(AndroidGeckoEvent *ae)
     // Send the contextmenu event.
     WidgetMouseEvent contextMenuEvent(true, eContextMenu, this,
                                       WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
-    contextMenuEvent.refPoint =
+    contextMenuEvent.mRefPoint =
         RoundedToInt(pt * GetDefaultScale()) - WidgetToScreenOffset();
-    contextMenuEvent.ignoreRootScrollFrame = true;
+    contextMenuEvent.mIgnoreRootScrollFrame = true;
     contextMenuEvent.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
 
     nsEventStatus contextMenuStatus;
@@ -2002,12 +2004,12 @@ nsWindow::OnLongTapEvent(AndroidGeckoEvent *ae)
     WidgetMouseEvent event(true, eMouseLongTap, this,
         WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
     event.button = WidgetMouseEvent::eLeftButton;
-    event.refPoint =
+    event.mRefPoint =
         RoundedToInt(pt * GetDefaultScale()) - WidgetToScreenOffset();
-    event.clickCount = 1;
+    event.mClickCount = 1;
     event.mTime = ae->Time();
     event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
-    event.ignoreRootScrollFrame = true;
+    event.mIgnoreRootScrollFrame = true;
 
     DispatchEvent(&event);
 }
@@ -2022,8 +2024,8 @@ nsWindow::DispatchHitTest(const WidgetTouchEvent& aEvent)
         // highlight element in case the this touchstart is the start of a tap.
         WidgetMouseEvent hittest(true, eMouseHitTest, this,
                                  WidgetMouseEvent::eReal);
-        hittest.refPoint = aEvent.mTouches[0]->mRefPoint;
-        hittest.ignoreRootScrollFrame = true;
+        hittest.mRefPoint = aEvent.mTouches[0]->mRefPoint;
+        hittest.mIgnoreRootScrollFrame = true;
         hittest.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
         nsEventStatus status;
         DispatchEvent(&hittest, status);
@@ -2138,11 +2140,11 @@ nsWindow::OnNativeGestureEvent(AndroidGeckoEvent *ae)
 
     WidgetSimpleGestureEvent event(true, msg, this);
 
-    event.direction = 0;
-    event.delta = delta;
+    event.mDirection = 0;
+    event.mDelta = delta;
     event.mModifiers = 0;
     event.mTime = ae->Time();
-    event.refPoint = pt;
+    event.mRefPoint = pt;
 
     DispatchEvent(&event);
 }
@@ -3101,7 +3103,7 @@ nsWindow::GeckoViewSupport::OnImeReplaceText(int32_t aStart, int32_t aEnd,
                     continue;
                 }
                 // widget for duplicated events is initially nullptr.
-                event->widget = &window;
+                event->mWidget = &window;
                 window.DispatchEvent(event, status);
             }
             mIMEKeyEvents.Clear();
@@ -3369,7 +3371,7 @@ nsWindow::GetIMEUpdatePreference()
 nsresult
 nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
                                      TouchPointerState aPointerState,
-                                     ScreenIntPoint aPointerScreenPoint,
+                                     LayoutDeviceIntPoint aPoint,
                                      double aPointerPressure,
                                      uint32_t aPointerOrientation,
                                      nsIObserver* aObserver)
@@ -3398,8 +3400,7 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
     MOZ_ASSERT(mGLControllerSupport);
     GeckoLayerClient::LocalRef client = mGLControllerSupport->GetLayerClient();
     client->SynthesizeNativeTouchPoint(aPointerId, eventType,
-        aPointerScreenPoint.x, aPointerScreenPoint.y, aPointerPressure,
-        aPointerOrientation);
+        aPoint.x, aPoint.y, aPointerPressure, aPointerOrientation);
 
     return NS_OK;
 }
@@ -3544,7 +3545,14 @@ nsWindow::NeedsPaint()
 CompositorBridgeParent*
 nsWindow::NewCompositorBridgeParent(int aSurfaceWidth, int aSurfaceHeight)
 {
-    return new CompositorBridgeParent(this, true, aSurfaceWidth, aSurfaceHeight);
+    if (!mCompositorWidgetProxy) {
+      mCompositorWidgetProxy = NewCompositorWidgetProxy();
+    }
+    return new CompositorBridgeParent(mCompositorWidgetProxy,
+                                      GetDefaultScale(),
+                                      UseAPZ(),
+                                      true,
+                                      aSurfaceWidth, aSurfaceHeight);
 }
 
 void

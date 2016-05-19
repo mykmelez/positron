@@ -184,6 +184,12 @@ array_slice(JSContext* cx, unsigned argc, js::Value* vp);
 extern JSObject*
 array_slice_dense(JSContext* cx, HandleObject obj, int32_t begin, int32_t end, HandleObject result);
 
+extern bool
+array_reverse(JSContext* cx, unsigned argc, js::Value* vp);
+
+extern bool
+array_splice(JSContext* cx, unsigned argc, js::Value* vp);
+
 /*
  * Append the given (non-hole) value to the end of an array.  The array must be
  * a newborn array -- that is, one which has not been exposed to script for
@@ -205,6 +211,10 @@ ArrayInfo(JSContext* cx, unsigned argc, Value* vp);
 /* Array constructor native. Exposed only so the JIT can know its address. */
 extern bool
 ArrayConstructor(JSContext* cx, unsigned argc, Value* vp);
+
+// Like Array constructor, but doesn't perform GetPrototypeFromConstructor.
+extern bool
+array_construct(JSContext* cx, unsigned argc, Value* vp);
 
 extern bool
 IsWrappedArrayConstructor(JSContext* cx, const Value& v, bool* result);

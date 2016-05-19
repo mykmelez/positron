@@ -390,7 +390,9 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
 
   // Process relocation list.
   for (uint32_t idx = 0; idx < mRelocations.Length(); idx++) {
-    mDocument->DoARIAOwnsRelocation(mRelocations[idx]);
+    if (mRelocations[idx]->IsInDocument()) {
+      mDocument->DoARIAOwnsRelocation(mRelocations[idx]);
+    }
   }
   mRelocations.Clear();
 
@@ -400,7 +402,6 @@ NotificationController::WillRefresh(mozilla::TimeStamp aTime)
   mObservingState = eRefreshProcessing;
 
   mEventTree.Process();
-  mEventTree.Clear();
 
   ProcessEventQueue();
 

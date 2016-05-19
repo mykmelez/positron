@@ -606,8 +606,8 @@ var Scratchpad = {
     let deferred = promise.defer();
 
     if (this.executionContext !== SCRATCHPAD_CONTEXT_CONTENT) {
-      Cu.reportError(this.strings.
-          GetStringFromName("scratchpadContext.invalid"));
+      console.error(this.strings.
+                    GetStringFromName("scratchpadContext.invalid"));
       return;
     }
 
@@ -1157,6 +1157,7 @@ var Scratchpad = {
     let channel = NetUtil.newChannel({
       uri: NetUtil.newURI(aFile),
       loadingNode: window.document,
+      securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS,
       contentPolicyType: Ci.nsIContentPolicy.TYPE_OTHER});
     channel.contentType = "application/javascript";
 
@@ -2386,8 +2387,8 @@ ScratchpadSidebar.prototype = {
  */
 function reportError(aAction, aResponse)
 {
-  Cu.reportError(aAction + " failed: " + aResponse.error + " " +
-                 aResponse.message);
+  console.error(aAction + " failed: " + aResponse.error + " " +
+                aResponse.message);
 }
 
 

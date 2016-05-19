@@ -49,7 +49,8 @@ MediaEngineDefaultVideoSource::MediaEngineDefaultVideoSource()
   , mMonitor("Fake video")
   , mCb(16), mCr(16)
 {
-  mImageContainer = layers::LayerManager::CreateImageContainer();
+  mImageContainer =
+    layers::LayerManager::CreateImageContainer(layers::ImageContainer::ASYNCHRONOUS);
 }
 
 MediaEngineDefaultVideoSource::~MediaEngineDefaultVideoSource()
@@ -251,7 +252,7 @@ MediaEngineDefaultVideoSource::Notify(nsITimer* aTimer)
 		     0, 0);
 #endif
 
-  bool setData = ycbcr_image->SetData(data);
+  bool setData = ycbcr_image->CopyData(data);
   MOZ_ASSERT(setData);
 
   // SetData copies data, so we can free the frame

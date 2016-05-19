@@ -11,6 +11,7 @@ import java.util.List;
 
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.db.BrowserContract.Bookmarks;
+import org.mozilla.gecko.home.BookmarkFolderView.FolderState;
 
 import android.content.Context;
 import android.content.res.Resources;
@@ -118,7 +119,7 @@ class BookmarksListAdapter extends MultiTypeCursorAdapter {
 
     // mParentStack holds folder info instances (id + title) that allow
     // us to navigate back up the folder hierarchy.
-    private final LinkedList<FolderInfo> mParentStack;
+    private LinkedList<FolderInfo> mParentStack;
 
     // Refresh folder listener.
     private OnRefreshFolderListener mListener;
@@ -134,6 +135,11 @@ class BookmarksListAdapter extends MultiTypeCursorAdapter {
         } else {
             mParentStack = new LinkedList<FolderInfo>(parentStack);
         }
+    }
+
+    public void restoreData(List<FolderInfo> parentStack) {
+        mParentStack = new LinkedList<FolderInfo>(parentStack);
+        notifyDataSetChanged();
     }
 
     public List<FolderInfo> getParentStack() {
@@ -196,7 +202,7 @@ class BookmarksListAdapter extends MultiTypeCursorAdapter {
 
     public void swapCursor(Cursor c, FolderInfo folderInfo, RefreshType refreshType) {
         updateOpenFolderType(folderInfo);
-        switch(refreshType) {
+        switch (refreshType) {
             case PARENT:
                 if (!isCurrentFolder(folderInfo)) {
                     mParentStack.removeFirst();
@@ -328,11 +334,18 @@ class BookmarksListAdapter extends MultiTypeCursorAdapter {
             final BookmarkFolderView row = (BookmarkFolderView) view;
             if (cursor == null) {
                 final Resources res = context.getResources();
-                row.setText(res.getString(R.string.home_move_back_to_filter, mParentStack.get(1).title));
-                row.open();
+                row.update(res.getString(R.string.home_move_back_to_filter, mParentStack.get(1).title), -1);
+                row.setState(FolderState.PARENT);
             } else {
-                row.setText(getFolderTitle(context, cursor));
-                row.close();
+                int id = cursor.getInt(cursor.getColumnIndexOrThrow(Bookmarks._ID));
+
+                row.update(getFolderTitle(context, cursor), id);
+
+                if (id == Bookmarks.FAKE_READINGLIST_SMARTFOLDER_ID) {
+                    row.setState(FolderState.READING_LIST);
+                } else {
+                    row.setState(FolderState.FOLDER);
+                }
             }
         }
     }

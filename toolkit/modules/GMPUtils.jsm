@@ -70,16 +70,21 @@ this.GMPUtils = {
    *          The plugin to check.
    */
   _isPluginSupported: function(aPlugin) {
-    if (aPlugin.id != EME_ADOBE_ID) {
-      // Only checking Adobe EME at the moment.
-      return true;
-    }
-
-    if (Services.appinfo.OS != "WINNT") {
-      // Non-Windows OSes currently unsupported.
-      this.maybeReportTelemetry(aPlugin.id,
-                                "VIDEO_EME_ADOBE_UNSUPPORTED_REASON",
-                                GMPPluginUnsupportedReason.NOT_WINDOWS);
+    if (aPlugin.id == EME_ADOBE_ID) {
+      if (Services.appinfo.OS != "WINNT") {
+        // Non-Windows OSes currently unsupported by Adobe EME
+        this.maybeReportTelemetry(aPlugin.id,
+                                  "VIDEO_EME_ADOBE_UNSUPPORTED_REASON",
+                                  GMPPluginUnsupportedReason.NOT_WINDOWS);
+        return false;
+      }
+    } else if (aPlugin.id == WIDEVINE_ID) {
+      // The Widevine plugin is available for Windows versions Vista and later
+      // and Mac OSX 10.7 and later.
+      if (AppConstants.isPlatformAndVersionAtLeast("win", "6") ||
+          AppConstants.isPlatformAndVersionAtLeast("macosx", "10.7")) {
+        return true;
+      }
       return false;
     }
 

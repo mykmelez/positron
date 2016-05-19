@@ -91,10 +91,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DedicatedWorkerGlobalScope",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "DataStore", b2g: true },
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "DataStoreCursor", b2g: true },
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "Directory",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DOMCursor",
@@ -173,6 +169,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "PushSubscription", b2g: false, nightlyAndroid: true, android: false },
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "PushSubscriptionOptions", b2g: false, nightlyAndroid: true, android: false },
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "Request",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Response",
@@ -198,6 +196,8 @@ var interfaceNamesInGlobalScope =
     { name: "WebGLActiveInfo", disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "WebGLBuffer", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLContextEvent", disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "WebGLFramebuffer", disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!

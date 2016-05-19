@@ -49,7 +49,7 @@ StaticMutex AppTrustDomain::sMutex;
 UniquePtr<unsigned char[]> AppTrustDomain::sDevImportedDERData;
 unsigned int AppTrustDomain::sDevImportedDERLen = 0;
 
-AppTrustDomain::AppTrustDomain(ScopedCERTCertList& certChain, void* pinArg)
+AppTrustDomain::AppTrustDomain(UniqueCERTCertList& certChain, void* pinArg)
   : mCertChain(certChain)
   , mPinArg(pinArg)
   , mMinRSABits(DEFAULT_MIN_RSA_BITS)
@@ -165,8 +165,8 @@ AppTrustDomain::SetTrustedRoot(AppTrustedRoot trustedRoot)
       return SECFailure;
   }
 
-  mTrustedRoot = CERT_NewTempCertificate(CERT_GetDefaultCertDB(),
-                                         &trustedDER, nullptr, false, true);
+  mTrustedRoot.reset(CERT_NewTempCertificate(CERT_GetDefaultCertDB(),
+                                             &trustedDER, nullptr, false, true));
   if (!mTrustedRoot) {
     return SECFailure;
   }
@@ -194,7 +194,7 @@ AppTrustDomain::FindIssuer(Input encodedIssuerName, IssuerChecker& checker,
   //    message, passing each one to checker.Check.
   SECItem encodedIssuerNameSECItem =
     UnsafeMapInputToSECItem(encodedIssuerName);
-  ScopedCERTCertList
+  UniqueCERTCertList
     candidates(CERT_CreateSubjectCertList(nullptr, CERT_GetDefaultCertDB(),
                                           &encodedIssuerNameSECItem, 0,
                                           false));
@@ -244,7 +244,7 @@ AppTrustDomain::GetCertTrust(EndEntityOrCA endEntityOrCA,
   // expose it in any other easy-to-use fashion.
   SECItem candidateCertDERSECItem =
     UnsafeMapInputToSECItem(candidateCertDER);
-  ScopedCERTCertificate candidateCert(
+  UniqueCERTCertificate candidateCert(
     CERT_NewTempCertificate(CERT_GetDefaultCertDB(), &candidateCertDERSECItem,
                             nullptr, false, true));
   if (!candidateCert) {
@@ -365,6 +365,14 @@ AppTrustDomain::CheckValidityIsAcceptable(Time /*notBefore*/, Time /*notAfter*/,
                                           EndEntityOrCA /*endEntityOrCA*/,
                                           KeyPurposeId /*keyPurpose*/)
 {
+  return Success;
+}
+
+Result
+AppTrustDomain::NetscapeStepUpMatchesServerAuth(Time /*notBefore*/,
+                                                /*out*/ bool& matches)
+{
+  matches = false;
   return Success;
 }
 

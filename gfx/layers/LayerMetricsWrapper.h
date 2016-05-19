@@ -366,17 +366,26 @@ public:
     return region;
   }
 
-  const Maybe<ParentLayerIntRect>& GetClipRect() const
+  Maybe<ParentLayerIntRect> GetClipRect() const
   {
     MOZ_ASSERT(IsValid());
 
-    static const Maybe<ParentLayerIntRect> sNoClipRect = Nothing();
+    Maybe<ParentLayerIntRect> result;
 
+    // The layer can have a clip rect and a scrolled clip, which are considered
+    // to apply only to the bottommost LayerMetricsWrapper.
+    // TODO: These actually apply in a different coordinate space than the
+    // scroll clip of the bottommost metrics, so we shouldn't be intersecting
+    // them with the scroll clip; bug 1269537 tracks fixing this.
     if (AtBottomLayer()) {
-      return mLayer->GetClipRect();
+      result = mLayer->GetClipRect();
+      result = IntersectMaybeRects(result, mLayer->GetScrolledClipRect());
     }
 
-    return sNoClipRect;
+    // The scroll metadata can have a clip rect as well.
+    result = IntersectMaybeRects(result, Metadata().GetClipRect());
+
+    return result;
   }
 
   float GetPresShellResolution() const
@@ -421,6 +430,19 @@ public:
     } else {
       return mLayer->GetVisibleRegion().GetBounds().width;
     }
+  }
+
+  bool IsScrollbarContainer() const
+  {
+    MOZ_ASSERT(IsValid());
+    return mLayer->IsScrollbarContainer();
+  }
+
+  FrameMetrics::ViewID GetFixedPositionScrollContainerId() const
+  {
+    MOZ_ASSERT(IsValid());
+
+    return mLayer->GetFixedPositionScrollContainerId();
   }
 
   // Expose an opaque pointer to the layer. Mostly used for printf

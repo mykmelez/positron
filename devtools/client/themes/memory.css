@@ -7,8 +7,8 @@
   --cell-border-color: rgba(255,255,255,0.15);
   --cell-border-color-light: rgba(255,255,255,0.1);
   --focus-cell-border-color: rgba(255,255,255,0.5);
-  --row-alt-background-color: rgba(29,79,115,0.15);
-  --row-hover-background-color: rgba(29,79,115,0.25);
+  --row-alt-background-color: rgba(86, 117, 185, 0.15);
+  --row-hover-background-color: rgba(86, 117, 185, 0.25);
 }
 
 .theme-light {
@@ -197,9 +197,30 @@ html, body, #app, #memory-tool {
   font-size: 90%;
 }
 
+.snapshot-list-item .snapshot-title {
+  display: flex;
+  justify-content: space-between;
+}
+
 .snapshot-list-item .save {
   text-decoration: underline;
   cursor: pointer;
+}
+
+.snapshot-list-item .delete {
+  cursor: pointer;
+  position: relative;
+  min-height: 1em;
+  min-width: 1.3em;
+}
+
+.theme-light .snapshot-list-item.selected .delete {
+  filter: invert(100%);
+}
+
+.snapshot-list-item .delete::before {
+  background-image: url("chrome://devtools/skin/images/close.svg");
+  background-position: 0.2em 0;
 }
 
 .snapshot-list-item > .snapshot-title {
@@ -504,7 +525,9 @@ html, body, #app, #memory-tool {
 .heap-tree-item-individuals > button {
   height: 10px;
   width: 32px;
-  margin: 0 auto;
+
+  /* Override default styles for toolbar buttons to fix entire row height. */
+  margin: 0 auto !important;
   padding: 0;
 }
 

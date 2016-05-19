@@ -14,6 +14,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
                                   "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "DOMUtils",
                                    "@mozilla.org/inspector/dom-utils;1", "inIDOMUtils");
+XPCOMUtils.defineLazyModuleGetter(this, "DeferredTask",
+                                  "resource://gre/modules/DeferredTask.jsm");
 
 const kStateHover = 0x00000004; // NS_EVENT_STATE_HOVER
 
@@ -27,6 +29,7 @@ this.SelectContentHelper = function (aElement, aGlobal) {
   this.global = aGlobal;
   this.init();
   this.showDropDown();
+  this._updateTimer = new DeferredTask(this._update.bind(this), 0);
 }
 
 this.SelectContentHelper.prototype = {
@@ -36,6 +39,15 @@ this.SelectContentHelper.prototype = {
     this.global.addMessageListener("Forms:MouseOver", this);
     this.global.addMessageListener("Forms:MouseOut", this);
     this.global.addEventListener("pagehide", this);
+    this.global.addEventListener("mozhidedropdown", this);
+    let MutationObserver = this.element.ownerDocument.defaultView.MutationObserver;
+    this.mut = new MutationObserver(mutations => {
+      // Something changed the <select> while it was open, so
+      // we'll poke a DeferredTask to update the parent sometime
+      // in the very near future.
+      this._updateTimer.arm();
+    });
+    this.mut.observe(this.element, {childList: true, subtree: true});
   },
 
   uninit: function() {
@@ -44,8 +56,12 @@ this.SelectContentHelper.prototype = {
     this.global.removeMessageListener("Forms:MouseOver", this);
     this.global.removeMessageListener("Forms:MouseOut", this);
     this.global.removeEventListener("pagehide", this);
+    this.global.removeEventListener("mozhidedropdown", this);
     this.element = null;
     this.global = null;
+    this.mut.disconnect();
+    this._updateTimer.disarm();
+    this._updateTimer = null;
   },
 
   showDropDown: function() {
@@ -65,6 +81,15 @@ this.SelectContentHelper.prototype = {
 
   _buildOptionList: function() {
     return buildOptionListForChildren(this.element);
+  },
+
+  _update() {
+    // The <select> was updated while the dropdown was open.
+    // Let's send up a new list of options.
+    this.global.sendAsyncMessage("Forms:UpdateDropDown", {
+      options: this._buildOptionList(),
+      selectedIndex: this.element.selectedIndex,
+    });
   },
 
   receiveMessage: function(message) {
@@ -98,6 +123,12 @@ this.SelectContentHelper.prototype = {
     switch (event.type) {
       case "pagehide":
         if (this.element.ownerDocument === event.target) {
+          this.global.sendAsyncMessage("Forms:HideDropDown", {});
+          this.uninit();
+        }
+        break;
+      case "mozhidedropdown":
+        if (this.element === event.target) {
           this.global.sendAsyncMessage("Forms:HideDropDown", {});
           this.uninit();
         }

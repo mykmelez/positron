@@ -272,24 +272,8 @@ public class GeckoView extends LayerView
         }
     }
 
-    private int mLastVisibility = View.GONE;
-
     /* package */ void setInputConnectionListener(final InputConnectionListener icl) {
         mInputConnectionListener = icl;
-        if (mInputConnectionListener != null) {
-            mInputConnectionListener.onWindowVisibilityChanged(mLastVisibility);
-        }
-    }
-
-    @Override
-    protected void onWindowVisibilityChanged (int visibility) {
-        mLastVisibility = visibility;
-
-        if (mInputConnectionListener != null) {
-            mInputConnectionListener.onWindowVisibilityChanged(visibility);
-        }
-
-        super.onWindowVisibilityChanged(visibility);
     }
 
     @Override
@@ -543,7 +527,7 @@ public class GeckoView extends LayerView
             JSONObject result = new JSONObject();
             try {
                 result.put("button", resultCode);
-            } catch(JSONException ex) { }
+            } catch (JSONException ex) { }
             return result;
         }
 
@@ -563,7 +547,7 @@ public class GeckoView extends LayerView
             JSONObject result = makeResult(RESULT_OK);
             try {
                 result.put("textbox0", value);
-            } catch(JSONException ex) { }
+            } catch (JSONException ex) { }
             EventDispatcher.sendResponse(mMessage, result);
         }
 

@@ -69,7 +69,7 @@ interface CanvasRenderingContext2D {
   [NewObject, Throws]
   CanvasGradient createRadialGradient(double x0, double y0, double r0, double x1, double y1, double r1);
   [NewObject, Throws]
-  CanvasPattern createPattern(CanvasImageSource image, [TreatNullAs=EmptyString] DOMString repetition);
+  CanvasPattern? createPattern(CanvasImageSource image, [TreatNullAs=EmptyString] DOMString repetition);
 
   // shadows
            [LenientFloat]
@@ -230,17 +230,6 @@ interface CanvasRenderingContext2D {
   void asyncDrawXULElement(XULElement elem, double x, double y, double w,
                            double h, DOMString bgColor,
                            optional unsigned long flags = 0);
-
-  /**
-   * Render the root widget of a window into the canvas. Unlike drawWindow,
-   * this uses the operating system to snapshot the widget on-screen, rather
-   * than reading from our own compositor.
-   *
-   * Currently, this is only supported on Windows, and only on widgets that
-   * use OMTC, and only from within the chrome process.
-   */
-  [Throws, ChromeOnly]
-  void drawWidgetAsOnScreen(Window window);
 
   /**
    * This causes a context that is currently using a hardware-accelerated

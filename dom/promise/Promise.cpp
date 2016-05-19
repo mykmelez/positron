@@ -15,6 +15,8 @@
 
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/DOMError.h"
+#include "mozilla/dom/DOMException.h"
+#include "mozilla/dom/DOMExceptionBinding.h"
 #include "mozilla/dom/MediaStreamError.h"
 #include "mozilla/dom/PromiseBinding.h"
 #include "mozilla/dom/ScriptSettings.h"
@@ -52,7 +54,7 @@ using namespace workers;
 
 #ifndef SPIDERMONKEY_PROMISE
 // This class processes the promise's callbacks with promise's result.
-class PromiseReactionJob final : public nsRunnable
+class PromiseReactionJob final : public Runnable
 {
 public:
   PromiseReactionJob(Promise* aPromise,
@@ -178,7 +180,7 @@ GetPromise(JSContext* aCx, JS::Handle<JSObject*> aFunc)
 
 // Runnable to resolve thenables.
 // Equivalent to the specification's ResolvePromiseViaThenableTask.
-class PromiseResolveThenableJob final : public nsRunnable
+class PromiseResolveThenableJob final : public Runnable
 {
 public:
   PromiseResolveThenableJob(Promise* aPromise,
@@ -523,6 +525,10 @@ Promise::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto,
 already_AddRefed<Promise>
 Promise::Create(nsIGlobalObject* aGlobal, ErrorResult& aRv)
 {
+  if (!aGlobal) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
   RefPtr<Promise> p = new Promise(aGlobal);
   p->CreateWrapper(nullptr, aRv);
   if (aRv.Failed()) {
@@ -857,6 +863,10 @@ already_AddRefed<Promise>
 Promise::Create(nsIGlobalObject* aGlobal, ErrorResult& aRv,
                 JS::Handle<JSObject*> aDesiredProto)
 {
+  if (!aGlobal) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
   RefPtr<Promise> p = new Promise(aGlobal);
   p->CreateWrapper(aDesiredProto, aRv);
   if (aRv.Failed()) {
@@ -2523,9 +2533,17 @@ Promise::MaybeReportRejected()
   }
 
   js::ErrorReport report(cx);
-  if (!report.init(cx, val)) {
-    JS_ClearPendingException(cx);
-    return;
+  RefPtr<Exception> exp;
+  bool isObject = val.isObject();
+  if (!isObject || NS_FAILED(UNWRAP_OBJECT(Exception, &val.toObject(), exp))) {
+    if (!isObject ||
+        NS_FAILED(UNWRAP_OBJECT(DOMException, &val.toObject(), exp))) {
+      if (!report.init(cx, val, js::ErrorReport::NoSideEffects)) {
+        NS_WARNING("Couldn't convert the unhandled rejected value to an exception.");
+        JS_ClearPendingException(cx);
+        return;
+      }
+    }
   }
 
   RefPtr<xpc::ErrorReport> xpcReport = new xpc::ErrorReport();
@@ -2533,7 +2551,12 @@ Promise::MaybeReportRejected()
   bool isChrome = isMainThread ? nsContentUtils::IsSystemPrincipal(nsContentUtils::ObjectPrincipal(obj))
                                : GetCurrentThreadWorkerPrivate()->IsChromeWorker();
   nsGlobalWindow* win = isMainThread ? xpc::WindowGlobalOrNull(obj) : nullptr;
-  xpcReport->Init(report.report(), report.message(), isChrome, win ? win->AsInner()->WindowID() : 0);
+  uint64_t windowID = win ? win->AsInner()->WindowID() : 0;
+  if (exp) {
+    xpcReport->Init(cx, exp, isChrome, windowID);
+  } else {
+    xpcReport->Init(report.report(), report.message(), isChrome, windowID);
+  }
 
   // Now post an event to do the real reporting async
   // Since Promises preserve their wrapper, it is essential to RefPtr<> the

@@ -40,6 +40,7 @@ include protocol PGMPService;
 include protocol PPluginModule;
 include protocol PGMP;
 include protocol PPrinting;
+include protocol PSendStream;
 include protocol POfflineCacheUpdate;
 include protocol PRenderFrame;
 include protocol PScreenManager;
@@ -289,14 +290,6 @@ struct DataStorageItem {
   DataStorageType type;
 };
 
-struct DataStoreSetting {
-  nsString name;
-  nsString originURL;
-  nsString manifestURL;
-  bool readOnly;
-  bool enabled;
-};
-
 // Note: Any changes to this structure should also be changed in
 // FileSystemUpdate below.
 struct VolumeInfo {
@@ -426,6 +419,7 @@ prio(normal upto urgent) sync protocol PContent
     manages PNecko;
     manages POfflineCacheUpdate;
     manages PPrinting;
+    manages PSendStream;
     manages PScreenManager;
     manages PSms;
     manages PSpeechSynthesis;
@@ -497,9 +491,6 @@ child:
      * BidiKeyboard hosted by the parent
      */
     async BidiKeyboardNotify(bool isLangRTL);
-
-    async DataStoreNotify(uint32_t aAppId, nsString aName,
-                          nsString aManifestURL);
 
     /**
      * Dump this process's GC and CC logs to the provided files.
@@ -764,6 +755,50 @@ parent:
 
     sync PCrashReporter(NativeThreadId tid, uint32_t processType);
 
+    /**
+     * Is this token compatible with the provided version?
+     *
+     * |version| The offered version to test
+     * Returns |True| if the offered version is compatible
+     */
+    sync NSSU2FTokenIsCompatibleVersion(nsString version)
+        returns (bool result);
+
+    /**
+     * Return whether the provided KeyHandle belongs to this Token
+     *
+     * |keyHandle| Key Handle to evaluate.
+     * Returns |True| if the Key Handle is ours.
+     */
+    sync NSSU2FTokenIsRegistered(uint8_t[] keyHandle)
+        returns (bool isValidKeyHandle);
+
+    /**
+     * Generates a public/private keypair for the provided application
+     * and challenge, returning the pubkey, challenge response, and
+     * key handle in the registration data.
+     *
+     * |application| The FIDO Application data to associate with the key.
+     * |challenge| The Challenge to satisfy in the response.
+     * |registration| An array containing the pubkey, challenge response,
+     *                     and key handle.
+     */
+    sync NSSU2FTokenRegister(uint8_t[] application, uint8_t[] challenge)
+        returns (uint8_t[] registration);
+
+    /**
+     * Creates a signature over the "param" arguments using the private key
+     * provided in the key handle argument.
+     *
+     * |application| The FIDO Application data to associate with the key.
+     * |challenge| The Challenge to satisfy in the response.
+     * |keyHandle| The Key Handle opaque object to use.
+     * |signature| The resulting signature.
+     */
+    sync NSSU2FTokenSign(uint8_t[] application, uint8_t[] challenge,
+                         uint8_t[] keyHandle)
+        returns (uint8_t[] signature);
+
     async GetSystemMemory(uint64_t getterId);
 
     sync IsSecureURI(uint32_t type, URIParams uri, uint32_t flags)
@@ -785,6 +820,8 @@ parent:
     async PNecko();
 
     async PPrinting();
+
+    async PSendStream();
 
     prio(high) sync PScreenManager()
         returns (uint32_t numberOfScreens,
@@ -909,9 +946,6 @@ parent:
 
     async AudioChannelChangeDefVolChannel(int32_t aChannel, bool aHidden);
 
-    sync DataStoreGetStores(nsString aName, nsString aOwner, Principal aPrincipal)
-        returns (DataStoreSetting[] dataStores);
-
     async FilePathUpdateNotify(nsString aType,
                                nsString aStorageName,
                                nsString aFilepath,
@@ -954,7 +988,8 @@ parent:
                                 bool isAudio,
                                 bool isVideo);
 
-    sync GetGraphicsFeatureStatus(int32_t aFeature) returns (int32_t aStatus, bool aSuccess);
+    sync GetGraphicsFeatureStatus(int32_t aFeature) returns (int32_t aStatus, nsCString aFailureCode,
+                                                             bool aSuccess);
 
     // Graphics errors
     async GraphicsError(nsCString aError);
@@ -1106,7 +1141,6 @@ parent:
                       bool aCalledFromJS,
                       bool aPositionSpecified,
                       bool aSizeSpecified,
-                      nsCString aURI,
                       nsString aName,
                       nsCString aFeatures,
                       nsCString aBaseURI,
@@ -1143,6 +1177,30 @@ parent:
      * The result can then be stored in permanent storage.
      */
     async NotifyBenchmarkResult(nsString aCodecName, uint32_t aDecodeFPS);
+
+    /**
+     * Notify `push-message` observers without data in the parent.
+     */
+    async NotifyPushObservers(nsCString scope, Principal principal,
+                              nsString messageId);
+
+    /**
+     * Notify `push-message` observers with data in the parent.
+     */
+    async NotifyPushObserversWithData(nsCString scope, Principal principal,
+                                      nsString messageId, uint8_t[] data);
+
+    /**
+     * Notify `push-subscription-change` observers in the parent.
+     */
+    async NotifyPushSubscriptionChangeObservers(nsCString scope,
+                                                Principal principal);
+
+    /**
+     * Notify `push-subscription-modified` observers in the parent.
+     */
+    async NotifyPushSubscriptionModifiedObservers(nsCString scope,
+                                                  Principal principal);
 
 both:
      async AsyncMessage(nsString aMessage, CpowEntry[] aCpows,

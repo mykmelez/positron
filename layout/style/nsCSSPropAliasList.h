@@ -336,6 +336,14 @@ CSS_PROP_ALIAS(-webkit-box-ordinal-group,
                box_ordinal_group,
                WebkitBoxOrdinalGroup,
                WEBKIT_PREFIX_PREF)
+CSS_PROP_ALIAS(-webkit-box-orient,
+               box_orient,
+               WebkitBoxOrient,
+               WEBKIT_PREFIX_PREF)
+CSS_PROP_ALIAS(-webkit-box-direction,
+               box_direction,
+               WebkitBoxDirection,
+               WEBKIT_PREFIX_PREF)
 CSS_PROP_ALIAS(-webkit-box-align,
                box_align,
                WebkitBoxAlign,
@@ -374,6 +382,14 @@ CSS_PROP_ALIAS(-webkit-mask-origin,
 CSS_PROP_ALIAS(-webkit-mask-position,
                mask_position,
                WebkitMaskPosition,
+               WEBKIT_PREFIX_PREF)
+CSS_PROP_ALIAS(-webkit-mask-position-x,
+               mask_position_x,
+               WebkitMaskPositionX,
+               WEBKIT_PREFIX_PREF)
+CSS_PROP_ALIAS(-webkit-mask-position-y,
+               mask_position_y,
+               WebkitMaskPositionY,
                WEBKIT_PREFIX_PREF)
 CSS_PROP_ALIAS(-webkit-mask-repeat,
                mask_repeat,

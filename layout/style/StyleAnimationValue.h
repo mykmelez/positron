@@ -176,7 +176,7 @@ public:
    * in it.
    */
   static bool ComputeValues(nsCSSProperty aProperty,
-                            nsCSSProps::EnabledState aEnabledState,
+                            mozilla::CSSEnabledState aEnabledState,
                             mozilla::dom::Element* aTargetElement,
                             nsStyleContext* aStyleContext,
                             const nsAString& aSpecifiedValue,
@@ -188,7 +188,7 @@ public:
    * value. Only longhand properties are supported.
    */
   static bool ComputeValues(nsCSSProperty aProperty,
-                            nsCSSProps::EnabledState aEnabledState,
+                            mozilla::CSSEnabledState aEnabledState,
                             mozilla::dom::Element* aTargetElement,
                             nsStyleContext* aStyleContext,
                             const nsCSSValue& aSpecifiedValue,
@@ -271,6 +271,7 @@ public:
     eUnit_Percent,
     eUnit_Float,
     eUnit_Color,
+    eUnit_CurrentColor,
     eUnit_Calc, // nsCSSValue* (never null), always with a single
                 // calc() expression that's either length or length+percent
     eUnit_ObjectPosition, // nsCSSValue* (never null), always with a
@@ -281,9 +282,10 @@ public:
     eUnit_CSSRect, // nsCSSRect* (never null)
     eUnit_Dasharray, // nsCSSValueList* (never null)
     eUnit_Shadow, // nsCSSValueList* (may be null)
+    eUnit_Shape,  // nsCSSValue::Array* (never null)
     eUnit_Filter, // nsCSSValueList* (may be null)
     eUnit_Transform, // nsCSSValueList* (never null)
-    eUnit_BackgroundPosition, // nsCSSValueList* (never null)
+    eUnit_BackgroundPositionCoord, // nsCSSValueList* (never null)
     eUnit_CSSValuePairList, // nsCSSValuePairList* (never null)
     eUnit_UnparsedString // nsStringBuffer* (never null)
   };
@@ -299,6 +301,7 @@ private:
     nsCSSValuePair* mCSSValuePair;
     nsCSSValueTriplet* mCSSValueTriplet;
     nsCSSRect* mCSSRect;
+    nsCSSValue::Array* mCSSValueArray;
     nsCSSValueList* mCSSValueList;
     nsCSSValueSharedList* mCSSValueSharedList;
     nsCSSValuePairList* mCSSValuePairList;
@@ -352,6 +355,10 @@ public:
   nsCSSRect* GetCSSRectValue() const {
     NS_ASSERTION(IsCSSRectUnit(mUnit), "unit mismatch");
     return mValue.mCSSRect;
+  }
+  nsCSSValue::Array* GetCSSValueArrayValue() const {
+    NS_ASSERTION(IsCSSValueArrayUnit(mUnit), "unit mismatch");
+    return mValue.mCSSValueArray;
   }
   nsCSSValueList* GetCSSValueListValue() const {
     NS_ASSERTION(IsCSSValueListUnit(mUnit), "unit mismatch");
@@ -427,7 +434,9 @@ public:
   void SetPercentValue(float aPercent);
   void SetFloatValue(float aFloat);
   void SetColorValue(nscolor aColor);
+  void SetCurrentColorValue();
   void SetUnparsedStringValue(const nsString& aString);
+  void SetCSSValueArrayValue(nsCSSValue::Array* aValue, Unit aUnit);
 
   // These setters take ownership of |aValue|, and are therefore named
   // "SetAndAdopt*".
@@ -471,10 +480,13 @@ private:
   static bool IsCSSRectUnit(Unit aUnit) {
     return aUnit == eUnit_CSSRect;
   }
+  static bool IsCSSValueArrayUnit(Unit aUnit) {
+    return aUnit == eUnit_Shape;
+  }
   static bool IsCSSValueListUnit(Unit aUnit) {
     return aUnit == eUnit_Dasharray || aUnit == eUnit_Filter ||
            aUnit == eUnit_Shadow ||
-           aUnit == eUnit_BackgroundPosition;
+           aUnit == eUnit_BackgroundPositionCoord;
   }
   static bool IsCSSValueSharedListValue(Unit aUnit) {
     return aUnit == eUnit_Transform;

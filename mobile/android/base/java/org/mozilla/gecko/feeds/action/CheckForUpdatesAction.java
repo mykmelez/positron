@@ -7,12 +7,10 @@ package org.mozilla.gecko.feeds.action;
 
 import android.app.Notification;
 import android.app.PendingIntent;
-import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
-import android.net.Uri;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.app.NotificationManagerCompat;
 import android.support.v4.content.ContextCompat;
@@ -25,8 +23,10 @@ import org.mozilla.gecko.GeckoApp;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
+import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.db.UrlAnnotations;
+import org.mozilla.gecko.feeds.ContentNotificationsDelegate;
 import org.mozilla.gecko.feeds.FeedFetcher;
 import org.mozilla.gecko.feeds.FeedService;
 import org.mozilla.gecko.feeds.parser.Feed;
@@ -47,9 +47,7 @@ public class CheckForUpdatesAction extends FeedAction {
      */
     public static final String EXTRA_CONTENT_NOTIFICATION = "content-notification";
 
-    private static final String LOGTAG = "FeedCheckAction";
-
-    private Context context;
+    private final Context context;
 
     public CheckForUpdatesAction(Context context) {
         this.context = context;
@@ -74,7 +72,18 @@ public class CheckForUpdatesAction extends FeedAction {
 
                 FeedFetcher.FeedResponse response = checkFeedForUpdates(subscription);
                 if (response != null) {
-                    updatedFeeds.add(response.feed);
+                    final Feed feed = response.feed;
+
+                    if (!hasBeenVisited(browserDB, feed.getLastItem().getURL())) {
+                        // Only notify about this update if the last item hasn't been visited yet.
+                        updatedFeeds.add(feed);
+                    } else {
+                        Telemetry.startUISession(TelemetryContract.Session.EXPERIMENT, FeedService.getEnabledExperiment(context));
+                        Telemetry.sendUIEvent(TelemetryContract.Event.CANCEL,
+                                TelemetryContract.Method.SERVICE,
+                                "content_update");
+                        Telemetry.stopUISession(TelemetryContract.Session.EXPERIMENT, FeedService.getEnabledExperiment(context));
+                    }
 
                     urlAnnotations.updateFeedSubscription(resolver, subscription);
                 }
@@ -108,6 +117,29 @@ public class CheckForUpdatesAction extends FeedAction {
         return null;
     }
 
+    /**
+     * Returns true if this URL has been visited before.
+     *
+     * We do an exact match. So this can fail if the feed uses a different URL and redirects to
+     * content. But it's better than no checks at all.
+     */
+    private boolean hasBeenVisited(final BrowserDB browserDB, final String url) {
+        final Cursor cursor = browserDB.getHistoryForURL(context.getContentResolver(), url);
+        if (cursor == null) {
+            return false;
+        }
+
+        try {
+            if (cursor.moveToFirst()) {
+                return cursor.getInt(cursor.getColumnIndex(BrowserContract.History.VISITS)) > 0;
+            }
+        } finally {
+            cursor.close();
+        }
+
+        return false;
+    }
+
     private void showNotification(List<Feed> updatedFeeds) {
         final int feedCount = updatedFeeds.size();
         if (feedCount == 0) {
@@ -128,19 +160,14 @@ public class CheckForUpdatesAction extends FeedAction {
     private void showNotificationForSingleUpdate(Feed feed) {
         final String date = DateFormat.getMediumDateFormat(context).format(new Date(feed.getLastItem().getTimestamp()));
 
-        NotificationCompat.BigTextStyle style = new NotificationCompat.BigTextStyle()
+        final NotificationCompat.BigTextStyle style = new NotificationCompat.BigTextStyle()
                 .bigText(feed.getLastItem().getTitle())
                 .setBigContentTitle(feed.getTitle())
                 .setSummaryText(context.getString(R.string.content_notification_updated_on, date));
 
-        Intent intent = new Intent(Intent.ACTION_VIEW);
-        intent.setComponent(new ComponentName(context, BrowserApp.class));
-        intent.setData(Uri.parse(feed.getLastItem().getURL()));
-        intent.putExtra(EXTRA_CONTENT_NOTIFICATION, true);
+        final PendingIntent pendingIntent = PendingIntent.getActivity(context, 0, createOpenIntent(feed), PendingIntent.FLAG_UPDATE_CURRENT);
 
-        PendingIntent pendingIntent = PendingIntent.getActivity(context, 0, intent, 0);
-
-        Notification notification = new NotificationCompat.Builder(context)
+        final Notification notification = new NotificationCompat.Builder(context)
                 .setSmallIcon(R.drawable.ic_status_logo)
                 .setContentTitle(feed.getTitle())
                 .setContentText(feed.getLastItem().getTitle())
@@ -148,6 +175,7 @@ public class CheckForUpdatesAction extends FeedAction {
                 .setColor(ContextCompat.getColor(context, R.color.fennec_ui_orange))
                 .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
+                .addAction(createOpenAction(feed))
                 .addAction(createNotificationSettingsAction())
                 .build();
 
@@ -155,23 +183,13 @@ public class CheckForUpdatesAction extends FeedAction {
     }
 
     private void showNotificationForMultipleUpdates(List<Feed> feeds) {
-        final ArrayList<String> urls = new ArrayList<>();
-
         final NotificationCompat.InboxStyle inboxStyle = new NotificationCompat.InboxStyle();
         for (Feed feed : feeds) {
-            final String url = feed.getLastItem().getURL();
-
-            inboxStyle.addLine(StringUtils.stripScheme(url, StringUtils.UrlFlags.STRIP_HTTPS));
-            urls.add(url);
+            inboxStyle.addLine(StringUtils.stripScheme(feed.getLastItem().getURL(), StringUtils.UrlFlags.STRIP_HTTPS));
         }
         inboxStyle.setSummaryText(context.getString(R.string.content_notification_summary));
 
-        Intent intent = new Intent(context, BrowserApp.class);
-        intent.setAction(BrowserApp.ACTION_VIEW_MULTIPLE);
-        intent.putStringArrayListExtra("urls", urls);
-        intent.putExtra(EXTRA_CONTENT_NOTIFICATION, true);
-
-        PendingIntent pendingIntent = PendingIntent.getActivity(context, 0, intent, 0);
+        final PendingIntent pendingIntent = PendingIntent.getActivity(context, 0, createOpenIntent(feeds), PendingIntent.FLAG_UPDATE_CURRENT);
 
         Notification notification = new NotificationCompat.Builder(context)
                 .setSmallIcon(R.drawable.ic_status_logo)
@@ -181,11 +199,51 @@ public class CheckForUpdatesAction extends FeedAction {
                 .setColor(ContextCompat.getColor(context, R.color.fennec_ui_orange))
                 .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
+                .addAction(createOpenAction(feeds))
                 .setNumber(feeds.size())
                 .addAction(createNotificationSettingsAction())
                 .build();
 
         NotificationManagerCompat.from(context).notify(R.id.websiteContentNotification, notification);
+    }
+
+    private Intent createOpenIntent(Feed feed) {
+        final List<Feed> feeds = new ArrayList<>();
+        feeds.add(feed);
+
+        return createOpenIntent(feeds);
+    }
+
+    private Intent createOpenIntent(List<Feed> feeds) {
+        final ArrayList<String> urls = new ArrayList<>();
+        for (Feed feed : feeds) {
+            urls.add(feed.getLastItem().getURL());
+        }
+
+        final Intent intent = new Intent(context, BrowserApp.class);
+        intent.setAction(ContentNotificationsDelegate.ACTION_CONTENT_NOTIFICATION);
+        intent.putStringArrayListExtra(ContentNotificationsDelegate.EXTRA_URLS, urls);
+
+        return intent;
+    }
+
+    private NotificationCompat.Action createOpenAction(Feed feed) {
+        final List<Feed> feeds = new ArrayList<>();
+        feeds.add(feed);
+
+        return createOpenAction(feeds);
+    }
+
+    private NotificationCompat.Action createOpenAction(List<Feed> feeds) {
+        Intent intent = createOpenIntent(feeds);
+        intent.putExtra(ContentNotificationsDelegate.EXTRA_READ_BUTTON, true);
+
+        PendingIntent pendingIntent = PendingIntent.getActivity(context, 1, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+
+        return new NotificationCompat.Action(
+                R.drawable.open_in_browser,
+                context.getString(R.string.content_notification_action_read_now),
+                pendingIntent);
     }
 
     private NotificationCompat.Action createNotificationSettingsAction() {
@@ -198,7 +256,7 @@ public class CheckForUpdatesAction extends FeedAction {
         PendingIntent settingsIntent = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
 
         return new NotificationCompat.Action(
-                R.drawable.firefox_settings_alert,
+                R.drawable.settings_notifications,
                 context.getString(R.string.content_notification_action_settings),
                 settingsIntent);
     }

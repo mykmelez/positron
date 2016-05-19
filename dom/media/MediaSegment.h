@@ -45,7 +45,7 @@ typedef int64_t MediaTime;
 const int64_t MEDIA_TIME_MAX = TRACK_TICKS_MAX;
 
 /**
- * Media time relative to the start of a StreamBuffer.
+ * Media time relative to the start of a StreamTracks.
  */
 typedef MediaTime StreamTime;
 const StreamTime STREAM_TIME_MAX = MEDIA_TIME_MAX;
@@ -71,7 +71,7 @@ inline PrincipalHandle MakePrincipalHandle(nsIPrincipal* aPrincipal)
   return PrincipalHandle(holder);
 }
 
-const PrincipalHandle PRINCIPAL_HANDLE_NONE(nullptr);
+#define PRINCIPAL_HANDLE_NONE nullptr
 
 inline nsIPrincipal* GetPrincipalFromHandle(PrincipalHandle& aPrincipalHandle)
 {
@@ -416,7 +416,7 @@ protected:
                            StreamTime aStart, StreamTime aEnd)
   {
     MOZ_ASSERT(aStart <= aEnd, "Endpoints inverted");
-    NS_WARN_IF_FALSE(aStart >= 0 && aEnd <= aSource.mDuration, "Slice out of range");
+    NS_ASSERTION(aStart >= 0 && aEnd <= aSource.mDuration, "Slice out of range");
     mDuration += aEnd - aStart;
     StreamTime offset = 0;
     for (uint32_t i = 0; i < aSource.mChunks.Length() && offset < aEnd; ++i) {

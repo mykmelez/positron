@@ -73,7 +73,8 @@ GetFeatureStatus(int32_t aFeature)
 {
   nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
   int32_t status = nsIGfxInfo::FEATURE_STATUS_UNKNOWN;
-  if (!gfxInfo || NS_FAILED(gfxInfo->GetFeatureStatus(aFeature, &status))) {
+  nsCString discardFailureId;
+  if (!gfxInfo || NS_FAILED(gfxInfo->GetFeatureStatus(aFeature, discardFailureId, &status))) {
     return false;
   }
   return status == nsIGfxInfo::FEATURE_STATUS_OK;
@@ -200,6 +201,10 @@ public:
     int32_t numChannels;
     NS_ENSURE_SUCCESS(rv =
         aFormat->GetInteger(NS_LITERAL_STRING("channel-count"), &numChannels), rv);
+    AudioConfig::ChannelLayout layout(numChannels);
+    if (!layout.IsValid()) {
+      return NS_ERROR_FAILURE;
+    }
 
     int32_t sampleRate;
     NS_ENSURE_SUCCESS(rv =
@@ -242,7 +247,8 @@ public:
 };
 
 bool
-AndroidDecoderModule::SupportsMimeType(const nsACString& aMimeType) const
+AndroidDecoderModule::SupportsMimeType(const nsACString& aMimeType,
+                                       DecoderDoctorDiagnostics* aDiagnostics) const
 {
   if (!AndroidBridge::Bridge() ||
       AndroidBridge::Bridge()->GetAPIVersion() < 16) {
@@ -280,7 +286,8 @@ already_AddRefed<MediaDataDecoder>
 AndroidDecoderModule::CreateVideoDecoder(
     const VideoInfo& aConfig, layers::LayersBackend aLayersBackend,
     layers::ImageContainer* aImageContainer, FlushableTaskQueue* aVideoTaskQueue,
-    MediaDataDecoderCallback* aCallback)
+    MediaDataDecoderCallback* aCallback,
+    DecoderDoctorDiagnostics* aDiagnostics)
 {
   MediaFormat::LocalRef format;
 
@@ -299,15 +306,19 @@ AndroidDecoderModule::CreateVideoDecoder(
 already_AddRefed<MediaDataDecoder>
 AndroidDecoderModule::CreateAudioDecoder(
     const AudioInfo& aConfig, FlushableTaskQueue* aAudioTaskQueue,
-    MediaDataDecoderCallback* aCallback)
+    MediaDataDecoderCallback* aCallback,
+    DecoderDoctorDiagnostics* aDiagnostics)
 {
   MOZ_ASSERT(aConfig.mBitDepth == 16, "We only handle 16-bit audio!");
 
   MediaFormat::LocalRef format;
 
+  LOG("CreateAudioFormat with mimeType=%s, mRate=%d, channels=%d",
+      aConfig.mMimeType.Data(), aConfig.mRate, aConfig.mChannels);
+
   NS_ENSURE_SUCCESS(MediaFormat::CreateAudioFormat(
       aConfig.mMimeType,
-      aConfig.mBitDepth,
+      aConfig.mRate,
       aConfig.mChannels,
       &format), nullptr);
 
@@ -378,9 +389,8 @@ MediaCodecDataDecoder::InitDecoder(Surface::Param aSurface)
   NS_ENSURE_SUCCESS(rv = ResetInputBuffers(), rv);
   NS_ENSURE_SUCCESS(rv = ResetOutputBuffers(), rv);
 
-  rv = NS_NewNamedThread(
-      "MC Decoder", getter_AddRefs(mThread),
-      NS_NewRunnableMethod(this, &MediaCodecDataDecoder::DecoderLoop));
+  nsCOMPtr<nsIRunnable> r = NewRunnableMethod(this, &MediaCodecDataDecoder::DecoderLoop);
+  rv = NS_NewNamedThread("MC Decoder", getter_AddRefs(mThread), r);
 
   return rv;
 }
@@ -499,7 +509,7 @@ MediaCodecDataDecoder::QueueSample(const MediaRawData* aSample)
     return res;
   }
 
-  mDurations.push(TimeUnit::FromMicroseconds(aSample->mDuration));
+  mDurations.push_back(TimeUnit::FromMicroseconds(aSample->mDuration));
   return NS_OK;
 }
 
@@ -544,7 +554,7 @@ MediaCodecDataDecoder::GetOutputDuration()
 {
   MOZ_ASSERT(!mDurations.empty(), "Should have had a duration queued");
   const TimeUnit duration = mDurations.front();
-  mDurations.pop();
+  mDurations.pop_front();
   return duration;
 }
 
@@ -597,7 +607,7 @@ MediaCodecDataDecoder::DecoderLoop()
         // We've fed this into the decoder, so remove it from the queue.
         MonitorAutoLock lock(mMonitor);
         MOZ_RELEASE_ASSERT(mQueue.size(), "Queue may not be empty");
-        mQueue.pop();
+        mQueue.pop_front();
         isOutputDone = false;
       }
     }
@@ -695,28 +705,20 @@ MediaCodecDataDecoder::State(ModuleState aState)
   return ok;
 }
 
-template<typename T>
-void
-Clear(T& aCont)
-{
-  T aEmpty = T();
-  swap(aCont, aEmpty);
-}
-
 void
 MediaCodecDataDecoder::ClearQueue()
 {
   mMonitor.AssertCurrentThreadOwns();
 
-  Clear(mQueue);
-  Clear(mDurations);
+  mQueue.clear();
+  mDurations.clear();
 }
 
 nsresult
 MediaCodecDataDecoder::Input(MediaRawData* aSample)
 {
   MonitorAutoLock lock(mMonitor);
-  mQueue.push(aSample);
+  mQueue.push_back(aSample);
   lock.NotifyAll();
 
   return NS_OK;

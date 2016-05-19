@@ -30,18 +30,25 @@ def is_absolute_or_relative(path):
 def normsep(path):
     return mozpath.normsep(path)
 
-
-# This unlocks the sandbox. Do not copy blindly.
-@imports(_import='__builtin__', _as='__builtins__')
-def find_program(file):
+# Locates the given program using which, or returns the given path if it
+# exists.
+# The `paths` parameter may be passed to search the given paths instead of
+# $PATH.
+@imports(_from='which', _import='which')
+@imports(_from='which', _import='WhichError')
+@imports('itertools')
+@imports(_from='os', _import='pathsep')
+def find_program(file, paths=None):
     if is_absolute_or_relative(file):
         return os.path.abspath(file) if os.path.isfile(file) else None
-    # We can't use @imports here because it imports at declaration time,
-    # and the declaration of find_program happens before we ensure the
-    # which module is available in sys.path somehow.
-    from which import which, WhichError
     try:
-        return normsep(which(file))
+        if paths:
+            if not isinstance(paths, (list, tuple)):
+                die("Paths provided to find_program must be a list of strings, "
+                    "not %r", paths)
+            paths = list(itertools.chain(
+                *(p.split(pathsep) for p in paths if p)))
+        return normsep(which(file, path=paths))
     except WhichError:
         return None
 
@@ -100,7 +107,6 @@ def namespace(**kwargs):
 @template
 def delayed_getattr(func, key):
     @depends(func)
-    @imports(_from='__builtin__', _import='getattr')
     def result(value):
         # The @depends function we're being passed may have returned
         # None, or an object that simply doesn't have the wanted key.

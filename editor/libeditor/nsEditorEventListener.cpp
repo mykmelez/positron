@@ -324,7 +324,11 @@ nsEditorEventListener::GetFocusedRootContent()
   nsIDocument* composedDoc = focusedContent->GetComposedDoc();
   NS_ENSURE_TRUE(composedDoc, nullptr);
 
-  return composedDoc->HasFlag(NODE_IS_EDITABLE) ? nullptr : focusedContent;
+  if (composedDoc->HasFlag(NODE_IS_EDITABLE)) {
+    return nullptr;
+  }
+
+  return focusedContent;
 }
 
 bool
@@ -644,7 +648,7 @@ nsEditorEventListener::KeyPress(nsIDOMKeyEvent* aKeyEvent)
     aKeyEvent->AsEvent()->WidgetEventPtr()->AsKeyboardEvent();
   MOZ_ASSERT(keyEvent,
              "DOM key event's internal event must be WidgetKeyboardEvent");
-  nsIWidget* widget = keyEvent->widget;
+  nsIWidget* widget = keyEvent->mWidget;
   // If the event is created by chrome script, the widget is always nullptr.
   if (!widget) {
     nsCOMPtr<nsIPresShell> ps = GetPresShell();

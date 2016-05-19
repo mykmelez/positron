@@ -26,6 +26,7 @@
 #include "js/UniquePtr.h"
 #include "vm/NativeObject.h"
 #include "vm/Shape.h"
+#include "vm/SharedImmutableStringsCache.h"
 
 namespace JS {
 struct ScriptSourceInfo;
@@ -254,6 +255,7 @@ class Bindings
     }
 
   public:
+    static const uint32_t BODY_LEVEL_LEXICAL_LIMIT = UINT16_LIMIT;
 
     Binding* bindingArray() const {
         return reinterpret_cast<Binding*>(bindingArrayAndFlag_ & ~TEMPORARY_STORAGE_BIT);
@@ -284,7 +286,7 @@ class Bindings
                                          bool isModule = false);
 
     // Initialize a trivial Bindings with no slots and an empty callObjShape.
-    bool initTrivial(ExclusiveContext* cx);
+    static bool initTrivialForScript(ExclusiveContext* cx, HandleScript script);
 
     // CompileScript parses and compiles one statement at a time, but the result
     // is one Script object.  There will be no vars or bindings, because those
@@ -434,12 +436,26 @@ class MutableBindingsOperations : public BindingsOperations<Outer>
     void setBindingArray(const Binding* bindingArray, uintptr_t temporaryBit) {
         bindings().bindingArrayAndFlag_ = uintptr_t(bindingArray) | temporaryBit;
     }
-    void setNumArgs(uint16_t num) { bindings().numArgs_ = num; }
-    void setNumVars(uint32_t num) { bindings().numVars_ = num; }
-    void setNumBodyLevelLexicals(uint16_t num) { bindings().numBodyLevelLexicals_ = num; }
-    void setNumBlockScoped(uint16_t num) { bindings().numBlockScoped_ = num; }
-    void setNumUnaliasedVars(uint32_t num) { bindings().numUnaliasedVars_ = num; }
-    void setNumUnaliasedBodyLevelLexicals(uint16_t num) {
+    void setNumArgs(uint32_t num) {
+        MOZ_ASSERT(num <= UINT16_MAX);
+        bindings().numArgs_ = num;
+    }
+    void setNumVars(uint32_t num) {
+        bindings().numVars_ = num;
+    }
+    void setNumBodyLevelLexicals(uint32_t num) {
+        MOZ_ASSERT(num <= UINT16_MAX);
+        bindings().numBodyLevelLexicals_ = num;
+    }
+    void setNumBlockScoped(uint32_t num) {
+        MOZ_ASSERT(num <= UINT16_MAX);
+        bindings().numBlockScoped_ = num;
+    }
+    void setNumUnaliasedVars(uint32_t num) {
+        bindings().numUnaliasedVars_ = num;
+    }
+    void setNumUnaliasedBodyLevelLexicals(uint32_t num) {
+        MOZ_ASSERT(num <= UINT16_MAX);
         bindings().numUnaliasedBodyLevelLexicals_ = num;
     }
     void setAliasedBodyLevelLexicalBegin(uint32_t offset) {
@@ -525,6 +541,7 @@ typedef HashMap<JSScript*,
 class DebugScript
 {
     friend class ::JSScript;
+    friend struct ::JSCompartment;
 
     /*
      * When non-zero, compile script in single-step mode. The top bit is set and
@@ -560,7 +577,7 @@ class ScriptSource;
 class UncompressedSourceCache
 {
     typedef HashMap<ScriptSource*,
-                    const char16_t*,
+                    UniqueTwoByteChars,
                     DefaultHasher<ScriptSource*>,
                     SystemAllocPolicy> Map;
 
@@ -570,26 +587,26 @@ class UncompressedSourceCache
     {
         UncompressedSourceCache* cache_;
         ScriptSource* source_;
-        const char16_t* charsToFree_;
+        UniqueTwoByteChars charsToFree_;
       public:
         explicit AutoHoldEntry();
         ~AutoHoldEntry();
       private:
         void holdEntry(UncompressedSourceCache* cache, ScriptSource* source);
-        void deferDelete(const char16_t* chars);
+        void deferDelete(UniqueTwoByteChars chars);
         ScriptSource* source() const { return source_; }
         friend class UncompressedSourceCache;
     };
 
   private:
-    Map* map_;
+    UniquePtr<Map> map_;
     AutoHoldEntry* holder_;
 
   public:
-    UncompressedSourceCache() : map_(nullptr), holder_(nullptr) {}
+    UncompressedSourceCache() : holder_(nullptr) {}
 
     const char16_t* lookup(ScriptSource* ss, AutoHoldEntry& asp);
-    bool put(ScriptSource* ss, const char16_t* chars, AutoHoldEntry& asp);
+    bool put(ScriptSource* ss, UniqueTwoByteChars chars, AutoHoldEntry& asp);
 
     void purge();
 
@@ -616,41 +633,28 @@ class ScriptSource
 
     struct Uncompressed
     {
-        Uncompressed(const char16_t* chars, bool ownsChars)
-          : chars(chars)
-          , ownsChars(ownsChars)
-        { }
+        SharedImmutableTwoByteString string;
 
-        const char16_t* chars;
-        bool ownsChars;
+        explicit Uncompressed(SharedImmutableTwoByteString&& str)
+          : string(mozilla::Move(str))
+        { }
     };
 
     struct Compressed
     {
-        Compressed(void* raw, size_t nbytes, HashNumber hash)
-          : raw(raw)
-          , nbytes(nbytes)
-          , hash(hash)
+        SharedImmutableString raw;
+        size_t length;
+
+        Compressed(SharedImmutableString&& raw, size_t length)
+          : raw(mozilla::Move(raw))
+          , length(length)
         { }
 
-        void* raw;
-        size_t nbytes;
-        HashNumber hash;
+        size_t nbytes() const { return raw.length(); }
     };
 
-    struct Parent
-    {
-        explicit Parent(ScriptSource* parent)
-          : parent(parent)
-        { }
-
-        ScriptSource* parent;
-    };
-
-    using SourceType = mozilla::Variant<Missing, Uncompressed, Compressed, Parent>;
+    using SourceType = mozilla::Variant<Missing, Uncompressed, Compressed>;
     SourceType data;
-
-    uint32_t length_;
 
     // The filename of this script.
     UniqueChars filename_;
@@ -696,14 +700,10 @@ class ScriptSource
     bool argumentsNotIncluded_:1;
     bool hasIntroductionOffset_:1;
 
-    // Whether this is in the runtime's set of compressed ScriptSources.
-    bool inCompressedSourceSet:1;
-
   public:
     explicit ScriptSource()
       : refs(0),
         data(SourceType(Missing())),
-        length_(0),
         filename_(nullptr),
         displayURL_(nullptr),
         sourceMapURL_(nullptr),
@@ -713,11 +713,14 @@ class ScriptSource
         introductionType_(nullptr),
         sourceRetrievable_(false),
         argumentsNotIncluded_(false),
-        hasIntroductionOffset_(false),
-        inCompressedSourceSet(false)
+        hasIntroductionOffset_(false)
     {
     }
-    ~ScriptSource();
+
+    ~ScriptSource() {
+        MOZ_ASSERT(refs == 0);
+    }
+
     void incref() { refs++; }
     void decref() {
         MOZ_ASSERT(refs != 0);
@@ -733,10 +736,30 @@ class ScriptSource
     bool sourceRetrievable() const { return sourceRetrievable_; }
     bool hasSourceData() const { return !data.is<Missing>(); }
     bool hasCompressedSource() const { return data.is<Compressed>(); }
+
     size_t length() const {
+        struct LengthMatcher
+        {
+            using ReturnType = size_t;
+
+            ReturnType match(const Uncompressed& u) {
+                return u.string.length();
+            }
+
+            ReturnType match(const Compressed& c) {
+                return c.length;
+            }
+
+            ReturnType match(const Missing& m) {
+                MOZ_CRASH("ScriptSource::length on a missing source");
+                return 0;
+            }
+        };
+
         MOZ_ASSERT(hasSourceData());
-        return length_;
+        return data.match(LengthMatcher());
     }
+
     bool argumentsNotIncluded() const {
         MOZ_ASSERT(hasSourceData());
         return argumentsNotIncluded_;
@@ -748,33 +771,28 @@ class ScriptSource
                                 JS::ScriptSourceInfo* info) const;
 
     const char16_t* uncompressedChars() const {
-        return data.as<Uncompressed>().chars;
+        return data.as<Uncompressed>().string.chars();
     }
 
-    bool ownsUncompressedChars() const {
-        return data.as<Uncompressed>().ownsChars;
-    }
-
-    void* compressedData() const {
-        return data.as<Compressed>().raw;
+    const void* compressedData() const {
+        return static_cast<const void*>(data.as<Compressed>().raw.chars());
     }
 
     size_t compressedBytes() const {
-        return data.as<Compressed>().nbytes;
+        return data.as<Compressed>().nbytes();
     }
 
-    HashNumber compressedHash() const {
-        return data.as<Compressed>().hash;
-    }
+    MOZ_MUST_USE bool setSource(ExclusiveContext* cx,
+                                mozilla::UniquePtr<char16_t[], JS::FreePolicy>&& source,
+                                size_t length);
+    void setSource(SharedImmutableTwoByteString&& string);
 
-    ScriptSource* parent() const {
-        return data.as<Parent>().parent;
-    }
-
-    void setSource(const char16_t* chars, size_t length, bool ownsChars = true);
-    void setCompressedSource(JSRuntime* maybert, void* raw, size_t nbytes, HashNumber hash);
-    void updateCompressedSourceSet(JSRuntime* rt);
-    bool ensureOwnsSource(ExclusiveContext* cx);
+    MOZ_MUST_USE bool setCompressedSource(
+        ExclusiveContext* cx,
+        mozilla::UniquePtr<char[], JS::FreePolicy>&& raw,
+        size_t rawLength,
+        size_t sourceLength);
+    void setCompressedSource(SharedImmutableString&& raw, size_t length);
 
     // XDR handling
     template <XDRMode mode>
@@ -824,9 +842,6 @@ class ScriptSource
         introductionOffset_ = offset;
         hasIntroductionOffset_ = true;
     }
-
-  private:
-    size_t computedSizeOfData() const;
 };
 
 class ScriptSourceHolder
@@ -856,27 +871,6 @@ class ScriptSourceHolder
         return ss;
     }
 };
-
-struct CompressedSourceHasher
-{
-    typedef ScriptSource* Lookup;
-
-    static HashNumber computeHash(const void* data, size_t nbytes) {
-        return mozilla::HashBytes(data, nbytes);
-    }
-
-    static HashNumber hash(const ScriptSource* ss) {
-        return ss->compressedHash();
-    }
-
-    static bool match(const ScriptSource* a, const ScriptSource* b) {
-        return a->compressedBytes() == b->compressedBytes() &&
-               a->compressedHash() == b->compressedHash() &&
-               !memcmp(a->compressedData(), b->compressedData(), a->compressedBytes());
-    }
-};
-
-typedef HashSet<ScriptSource*, CompressedSourceHasher, SystemAllocPolicy> CompressedSourceSet;
 
 class ScriptSourceObject : public NativeObject
 {
@@ -2011,24 +2005,37 @@ namespace js {
  */
 class BindingIter
 {
-    Handle<Bindings> bindings_;
+    Binding* bindingArray_;
+    uint32_t numArgs_;
+    uint32_t count_;
     uint32_t i_;
     uint32_t unaliasedLocal_;
 
     friend class ::JSScript;
     friend class Bindings;
 
+    void init(const Bindings& bindings) {
+        // Bindings contained in a JSScript may be moved by the GC.  Copy the
+        // necessary fields into this object.
+        bindingArray_ = bindings.bindingArray();
+        numArgs_ = bindings.numArgs();
+        count_ = bindings.count();
+    }
+
   public:
     explicit BindingIter(Handle<Bindings> bindings)
-      : bindings_(bindings), i_(0), unaliasedLocal_(0)
-    {}
+      : i_(0), unaliasedLocal_(0)
+    {
+        init(bindings);
+    }
 
-    explicit BindingIter(const HandleScript& script)
-      : bindings_(Handle<Bindings>::fromMarkedLocation(&script->bindings)),
-        i_(0), unaliasedLocal_(0)
-    {}
+    explicit BindingIter(HandleScript script)
+      : i_(0), unaliasedLocal_(0)
+    {
+        init(script->bindings);
+    }
 
-    bool done() const { return i_ == bindings_.count(); }
+    bool done() const { return i_ == count_; }
     explicit operator bool() const { return !done(); }
     BindingIter& operator++() { (*this)++; return *this; }
 
@@ -2046,7 +2053,7 @@ class BindingIter
     // has no stack slot.
     uint32_t frameIndex() const {
         MOZ_ASSERT(!done());
-        if (i_ < bindings_.numArgs())
+        if (i_ < numArgs_)
             return i_;
         MOZ_ASSERT(!(*this)->aliased());
         return unaliasedLocal_;
@@ -2057,17 +2064,17 @@ class BindingIter
     // both unaliased and aliased arguments.
     uint32_t argIndex() const {
         MOZ_ASSERT(!done());
-        MOZ_ASSERT(i_ < bindings_.numArgs());
+        MOZ_ASSERT(i_ < numArgs_);
         return i_;
     }
     uint32_t argOrLocalIndex() const {
         MOZ_ASSERT(!done());
-        return i_ < bindings_.numArgs() ? i_ : i_ - bindings_.numArgs();
+        return i_ < numArgs_ ? i_ : i_ - numArgs_;
     }
     uint32_t localIndex() const {
         MOZ_ASSERT(!done());
-        MOZ_ASSERT(i_ >= bindings_.numArgs());
-        return i_ - bindings_.numArgs();
+        MOZ_ASSERT(i_ >= numArgs_);
+        return i_ - numArgs_;
     }
     bool isBodyLevelLexical() const {
         MOZ_ASSERT(!done());
@@ -2075,8 +2082,8 @@ class BindingIter
         return binding.kind() != Binding::ARGUMENT;
     }
 
-    const Binding& operator*() const { MOZ_ASSERT(!done()); return bindings_.bindingArray()[i_]; }
-    const Binding* operator->() const { MOZ_ASSERT(!done()); return &bindings_.bindingArray()[i_]; }
+    const Binding& operator*() const { MOZ_ASSERT(!done()); return bindingArray_[i_]; }
+    const Binding* operator->() const { MOZ_ASSERT(!done()); return &bindingArray_[i_]; }
 };
 
 /*

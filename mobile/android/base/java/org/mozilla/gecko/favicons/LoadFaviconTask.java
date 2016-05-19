@@ -381,7 +381,7 @@ public class LoadFaviconTask {
         Bitmap image;
         // Determine if there is already an ongoing task to fetch the Favicon we desire.
         // If there is, just join the queue and wait for it to finish. If not, we carry on.
-        synchronized(loadsInFlight) {
+        synchronized (loadsInFlight) {
             // Another load of the current Favicon is already underway
             LoadFaviconTask existingTask = loadsInFlight.get(faviconURL);
             if (existingTask != null && !existingTask.isCancelled()) {
@@ -445,11 +445,23 @@ public class LoadFaviconTask {
 
                 while (loadedBitmaps.getBitmaps().hasNext()) {
                     final Bitmap b = loadedBitmaps.getBitmaps().next();
-                    iconMap.put(b.getWidth(), b);
-                    sizes.add(b.getWidth());
+
+                    // It's possible to receive null, most likely due to OOM or a zero-sized image,
+                    // from BitmapUtils.decodeByteArray(byte[], int, int, BitmapFactory.Options)
+                    if (b != null) {
+                        iconMap.put(b.getWidth(), b);
+                        sizes.add(b.getWidth());
+                    }
                 }
 
                 int bestSize = Favicons.selectBestSizeFromList(sizes, targetWidthAndHeight);
+
+                if (bestSize == -1) {
+                    // No icons found: this could occur if we weren't able to process any of the
+                    // supplied icons.
+                    return null;
+                }
+
                 return iconMap.get(bestSize);
             }
         }
@@ -565,7 +577,7 @@ public class LoadFaviconTask {
     void onCancelled() {
         Favicons.removeLoadTask(id);
 
-        synchronized(loadsInFlight) {
+        synchronized (loadsInFlight) {
             // Only remove from the hashmap if the task there is the one that's being canceled.
             // Cancellation of a task that would have chained is not interesting to the hashmap.
             final LoadFaviconTask primary = loadsInFlight.get(faviconURL);

@@ -171,15 +171,31 @@ public:
                      mozilla::NonOwningStyleContextSource aSource,
                      mozilla::NonOwningStyleContextSource aSourceIfVisited,
                      bool aRelevantLinkVisited);
+  /**
+   * Get the color property that should be used to fill text.
+   */
+  nsCSSProperty GetTextFillColorProp() {
+    return StyleText()->mWebkitTextFillColorForeground
+           ? eCSSProperty_color : eCSSProperty__webkit_text_fill_color;
+  }
 
   /**
    * Get the color that should be used to fill text: either
    * the current foreground color, or a separately-specified text fill color.
    */
   nscolor GetTextFillColor() {
+    return (GetTextFillColorProp() == eCSSProperty_color)
+           ? StyleColor()->mColor : StyleText()->mWebkitTextFillColor;
+  }
+
+  /**
+   * Get the color that should be used to stroke text: either
+   * the current foreground color, or a separately-specified text stroke color.
+   */
+  nscolor GetTextStrokeColor() {
     const nsStyleText* textStyle = StyleText();
-    return textStyle->mWebkitTextFillColorForeground
-           ? StyleColor()->mColor : textStyle->mWebkitTextFillColor;
+    return textStyle->mWebkitTextStrokeColorForeground
+           ? StyleColor()->mColor : textStyle->mWebkitTextStrokeColor;
   }
 
   // Does this style context or any of its ancestors have text
@@ -202,6 +218,11 @@ public:
   // Does this style context or any of its ancestors have display:none set?
   bool IsInDisplayNoneSubtree() const
     { return !!(mBits & NS_STYLE_IN_DISPLAY_NONE_SUBTREE); }
+
+  // Is this horizontal-in-vertical (tate-chu-yoko) text? This flag is
+  // only set on style contexts whose pseudo is nsCSSAnonBoxes::mozText.
+  bool IsTextCombined() const
+    { return !!(mBits & NS_STYLE_IS_TEXT_COMBINED); }
 
   // Does this style context represent the style for a pseudo-element or
   // inherit data from such a style context?  Whether this returns true
@@ -509,7 +530,16 @@ private:
   void ApplyStyleFixups(bool aSkipParentDisplayBasedStyleFixup);
 
   const void* StyleStructFromServoComputedValues(nsStyleStructID aSID) {
-    MOZ_CRASH("stylo: not implemented");
+    switch (aSID) {
+#define STYLE_STRUCT(name_, checkdata_cb_)                                    \
+      case eStyleStruct_##name_:                                              \
+        return Servo_GetStyle##name_(mSource.AsServoComputedValues());
+#include "nsStyleStructList.h"
+#undef STYLE_STRUCT
+      default:
+        MOZ_ASSERT_UNREACHABLE("unexpected nsStyleStructID value");
+        return nullptr;
+    }
   }
 
 #ifdef DEBUG
@@ -557,8 +587,16 @@ private:
       }                                                                 \
       /* Have the rulenode deal */                                      \
       AUTO_CHECK_DEPENDENCY(eStyleStruct_##name_);                      \
-      const nsStyle##name_ * newData =                                  \
-        mSource.AsGeckoRuleNode()->GetStyle##name_<aComputeData>(this, mBits); \
+      const nsStyle##name_ * newData;                                   \
+      if (mSource.IsGeckoRuleNode()) {                                  \
+        newData = mSource.AsGeckoRuleNode()->                           \
+          GetStyle##name_<aComputeData>(this, mBits);                   \
+      } else {                                                          \
+        newData =                                                       \
+          Servo_GetStyle##name_(mSource.AsServoComputedValues());       \
+        /* the Servo-backed StyleContextSource owns the struct */       \
+        AddStyleBit(NS_STYLE_INHERIT_BIT(name_));                       \
+      }                                                                 \
       /* always cache inherited data on the style context; the rule */  \
       /* node set the bit in mBits for us if needed. */                 \
       mCachedInheritedData.mStyleStructs[eStyleStruct_##name_] =        \
@@ -577,7 +615,17 @@ private:
       }                                                                 \
       /* Have the rulenode deal */                                      \
       AUTO_CHECK_DEPENDENCY(eStyleStruct_##name_);                      \
-      return mSource.AsGeckoRuleNode()->GetStyle##name_<aComputeData>(this); \
+      const nsStyle##name_ * newData;                                   \
+      if (mSource.IsGeckoRuleNode()) {                                  \
+        newData = mSource.AsGeckoRuleNode()->                           \
+          GetStyle##name_<aComputeData>(this);                          \
+      } else {                                                          \
+        newData =                                                       \
+          Servo_GetStyle##name_(mSource.AsServoComputedValues());       \
+        /* the Servo-backed StyleContextSource owns the struct */       \
+        AddStyleBit(NS_STYLE_INHERIT_BIT(name_));                       \
+      }                                                                 \
+      return newData;                                                   \
     }
   #include "nsStyleStructList.h"
   #undef STYLE_STRUCT_RESET

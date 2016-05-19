@@ -242,6 +242,14 @@ auto GeckoAppShell::GamepadAdded(int32_t a0, int32_t a1) -> void
     return mozilla::jni::Method<GamepadAdded_t>::Call(GeckoAppShell::Context(), nullptr, a0, a1);
 }
 
+constexpr char GeckoAppShell::GetApplicationContext_t::name[];
+constexpr char GeckoAppShell::GetApplicationContext_t::signature[];
+
+auto GeckoAppShell::GetApplicationContext() -> mozilla::jni::Object::LocalRef
+{
+    return mozilla::jni::Method<GetApplicationContext_t>::Call(GeckoAppShell::Context(), nullptr);
+}
+
 constexpr char GeckoAppShell::GetConnection_t::name[];
 constexpr char GeckoAppShell::GetConnection_t::signature[];
 
@@ -937,6 +945,9 @@ auto GeckoThread::CheckAndSetState(mozilla::jni::Object::Param a0, mozilla::jni:
     return mozilla::jni::Method<CheckAndSetState_t>::Call(GeckoThread::Context(), nullptr, a0, a1);
 }
 
+constexpr char GeckoThread::CreateServices_t::name[];
+constexpr char GeckoThread::CreateServices_t::signature[];
+
 constexpr char GeckoThread::OnPause_t::name[];
 constexpr char GeckoThread::OnPause_t::signature[];
 
@@ -1303,14 +1314,6 @@ constexpr char GLController::AttachToJava_t::signature[];
 constexpr char GLController::CreateCompositor_t::name[];
 constexpr char GLController::CreateCompositor_t::signature[];
 
-constexpr char GLController::CreateEGLSurface_t::name[];
-constexpr char GLController::CreateEGLSurface_t::signature[];
-
-auto GLController::CreateEGLSurface() const -> mozilla::jni::Object::LocalRef
-{
-    return mozilla::jni::Method<CreateEGLSurface_t>::Call(GLController::mCtx, nullptr);
-}
-
 constexpr char GLController::Destroy_t::name[];
 constexpr char GLController::Destroy_t::signature[];
 
@@ -1321,6 +1324,14 @@ auto GLController::Destroy() const -> void
 
 constexpr char GLController::DisposeNative_t::name[];
 constexpr char GLController::DisposeNative_t::signature[];
+
+constexpr char GLController::GetSurface_t::name[];
+constexpr char GLController::GetSurface_t::signature[];
+
+auto GLController::GetSurface() const -> mozilla::jni::Object::LocalRef
+{
+    return mozilla::jni::Method<GetSurface_t>::Call(GLController::mCtx, nullptr);
+}
 
 constexpr char GLController::OnSizeChanged_t::name[];
 constexpr char GLController::OnSizeChanged_t::signature[];
@@ -1773,6 +1784,25 @@ auto ViewTransform::Y() const -> float
 auto ViewTransform::Y(float a0) const -> void
 {
     return mozilla::jni::Field<Y_t>::Set(ViewTransform::mCtx, nullptr, a0);
+}
+
+template<> const char mozilla::jni::Context<AudioFocusAgent, jobject>::name[] =
+        "org/mozilla/gecko/media/AudioFocusAgent";
+
+constexpr char AudioFocusAgent::NotifyStartedPlaying_t::name[];
+constexpr char AudioFocusAgent::NotifyStartedPlaying_t::signature[];
+
+auto AudioFocusAgent::NotifyStartedPlaying() -> void
+{
+    return mozilla::jni::Method<NotifyStartedPlaying_t>::Call(AudioFocusAgent::Context(), nullptr);
+}
+
+constexpr char AudioFocusAgent::NotifyStoppedPlaying_t::name[];
+constexpr char AudioFocusAgent::NotifyStoppedPlaying_t::signature[];
+
+auto AudioFocusAgent::NotifyStoppedPlaying() -> void
+{
+    return mozilla::jni::Method<NotifyStoppedPlaying_t>::Call(AudioFocusAgent::Context(), nullptr);
 }
 
 template<> const char mozilla::jni::Context<Restrictions, jobject>::name[] =

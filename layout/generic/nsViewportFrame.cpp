@@ -36,7 +36,7 @@ ViewportFrame::Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow)
 {
-  Super::Init(aContent, aParent, aPrevInFlow);
+  nsContainerFrame::Init(aContent, aParent, aPrevInFlow);
 
   nsIFrame* parent = nsLayoutUtils::GetCrossDocParentFrame(this);
   if (parent) {
@@ -389,7 +389,7 @@ ViewportFrame::Reflow(nsPresContext*           aPresContext,
 }
 
 bool
-ViewportFrame::UpdateOverflow()
+ViewportFrame::ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas)
 {
   nsIScrollableFrame* rootScrollFrame =
     PresContext()->PresShell()->GetRootScrollFrameAsScrollable();
@@ -397,7 +397,7 @@ ViewportFrame::UpdateOverflow()
     return false;
   }
 
-  return nsFrame::UpdateOverflow();
+  return nsContainerFrame::ComputeCustomOverflow(aOverflowAreas);
 }
 
 nsIAtom*

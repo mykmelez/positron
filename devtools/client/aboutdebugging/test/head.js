@@ -4,8 +4,9 @@
 /* eslint-env browser */
 /* eslint-disable mozilla/no-cpows-in-tests */
 /* exported openAboutDebugging, closeAboutDebugging, installAddon,
-   uninstallAddon, waitForMutation, assertHasTarget,
-   waitForServiceWorkerRegistered, unregisterServiceWorker */
+   uninstallAddon, waitForMutation, assertHasTarget, getServiceWorkerList,
+   getTabList, waitForInitialAddonList, waitForServiceWorkerRegistered,
+   unregisterServiceWorker */
 /* global sendAsyncMessage */
 
 "use strict";
@@ -47,7 +48,7 @@ function closeAboutDebugging(tab) {
   return removeTab(tab);
 }
 
-function addTab(url, win) {
+function addTab(url, win, backgroundTab = false) {
   info("Adding tab: " + url);
 
   return new Promise(done => {
@@ -55,7 +56,10 @@ function addTab(url, win) {
     let targetBrowser = targetWindow.gBrowser;
 
     targetWindow.focus();
-    let tab = targetBrowser.selectedTab = targetBrowser.addTab(url);
+    let tab = targetBrowser.addTab(url);
+    if (!backgroundTab) {
+      targetBrowser.selectedTab = tab;
+    }
     let linkedBrowser = tab.linkedBrowser;
 
     linkedBrowser.addEventListener("load", function onLoad() {
@@ -92,6 +96,39 @@ function getSupportsFile(path) {
   return fileurl.QueryInterface(Ci.nsIFileURL);
 }
 
+/**
+ * Depending on whether there are addons installed, return either a target list
+ * element or its container.
+ * @param  {DOMDocument}  document   #addons section container document
+ * @return {DOMNode}                 target list or container element
+ */
+function getAddonList(document) {
+  return document.querySelector("#addons .target-list") ||
+    document.querySelector("#addons .targets");
+}
+
+/**
+ * Depending on whether there are service workers installed, return either a
+ * target list element or its container.
+ * @param  {DOMDocument}  document   #service-workers section container document
+ * @return {DOMNode}                 target list or container element
+ */
+function getServiceWorkerList(document) {
+  return document.querySelector("#service-workers .target-list") ||
+    document.querySelector("#service-workers.targets");
+}
+
+/**
+ * Depending on whether there are tabs opened, return either a
+ * target list element or its container.
+ * @param  {DOMDocument}  document   #tabs section container document
+ * @return {DOMNode}                 target list or container element
+ */
+function getTabList(document) {
+  return document.querySelector("#tabs .target-list") ||
+    document.querySelector("#tabs.targets");
+}
+
 function* installAddon(document, path, name, evt) {
   // Mock the file picker to select a test addon
   let MockFilePicker = SpecialPowers.MockFilePicker;
@@ -99,7 +136,7 @@ function* installAddon(document, path, name, evt) {
   let file = getSupportsFile(path);
   MockFilePicker.returnFiles = [file.file];
 
-  let addonList = document.querySelector("#addons .targets");
+  let addonList = getAddonList(document);
   let addonListMutation = waitForMutation(addonList, { childList: true });
 
   // Wait for a message sent by the addon's bootstrap.js file
@@ -125,14 +162,14 @@ function* installAddon(document, path, name, evt) {
 }
 
 function* uninstallAddon(document, addonId, addonName) {
-  let addonList = document.querySelector("#addons .targets");
+  let addonList = getAddonList(document);
   let addonListMutation = waitForMutation(addonList, { childList: true });
 
   // Now uninstall this addon
   yield new Promise(done => {
     AddonManager.getAddonByID(addonId, addon => {
       let listener = {
-        onUninstalled: function(uninstalledAddon) {
+        onUninstalled: function (uninstalledAddon) {
           if (uninstalledAddon != addon) {
             return;
           }
@@ -153,6 +190,30 @@ function* uninstallAddon(document, addonId, addonName) {
   ok(!names.includes(addonName),
     "After uninstall, the addon name disappears from the list of addons: "
     + names);
+}
+
+/**
+ * Returns a promise that will resolve when the add-on list has been updated.
+ *
+ * @param {Node} document
+ * @return {Promise}
+ */
+function waitForInitialAddonList(document) {
+  const addonListContainer = getAddonList(document);
+  let addonCount = addonListContainer.querySelectorAll(".target");
+  addonCount = addonCount ? [...addonCount].length : -1;
+  info("Waiting for add-ons to load. Current add-on count: " + addonCount);
+
+  // This relies on the network speed of the actor responding to the
+  // listAddons() request and also the speed of openAboutDebugging().
+  let result;
+  if (addonCount > 0) {
+    info("Actually, the add-ons have already loaded");
+    result = Promise.resolve();
+  } else {
+    result = waitForMutation(addonListContainer, { childList: true });
+  }
+  return result;
 }
 
 /**
@@ -194,10 +255,10 @@ function assertHasTarget(expected, document, type, name) {
  */
 function waitForServiceWorkerRegistered(tab) {
   // Make the test page notify us when the service worker is registered.
-  let frameScript = function() {
+  let frameScript = function () {
     // Retrieve the `sw` promise created in the html page.
     let { sw } = content.wrappedJSObject;
-    sw.then(function(registration) {
+    sw.then(function (registration) {
       sendAsyncMessage("sw-registered");
     });
   };
@@ -219,14 +280,14 @@ function waitForServiceWorkerRegistered(tab) {
  */
 function unregisterServiceWorker(tab) {
   // Use message manager to work with e10s.
-  let frameScript = function() {
+  let frameScript = function () {
     // Retrieve the `sw` promise created in the html page.
     let { sw } = content.wrappedJSObject;
-    sw.then(function(registration) {
-      registration.unregister().then(function() {
+    sw.then(function (registration) {
+      registration.unregister().then(function () {
         sendAsyncMessage("sw-unregistered");
       },
-      function(e) {
+      function (e) {
         dump("SW not unregistered; " + e + "\n");
       });
     });

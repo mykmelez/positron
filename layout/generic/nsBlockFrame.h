@@ -68,14 +68,12 @@ class nsBulletFrame;
  * prepended to the overflow lines.
  */
 
-typedef nsContainerFrame nsBlockFrameSuper;
-
 /*
  * Base class for block and inline frames.
  * The block frame has an additional child list, kAbsoluteList, which
  * contains the absolutely positioned frames.
- */ 
-class nsBlockFrame : public nsBlockFrameSuper
+ */
+class nsBlockFrame : public nsContainerFrame
 {
 public:
   NS_DECL_QUERYFRAME_TARGET(nsBlockFrame)
@@ -172,8 +170,9 @@ public:
   // to be before any line which does contain 'y'.
   nsLineBox* GetFirstLineContaining(nscoord y);
   // Set the line cursor to our first line. Only call this if you
-  // guarantee that the lines' combinedArea.ys and combinedArea.yMosts
-  // are non-decreasing.
+  // guarantee that either the lines' combinedArea.ys and combinedArea.
+  // yMosts are non-decreasing, or the line cursor is cleared before
+  // building the display list of this frame.
   void SetupLineCursor();
 
   virtual void ChildIsDirty(nsIFrame* aChild) override;
@@ -476,7 +475,9 @@ public:
   void ReparentFloats(nsIFrame* aFirstFrame, nsBlockFrame* aOldParent,
                       bool aReparentSiblings);
 
-  virtual bool UpdateOverflow() override;
+  virtual bool ComputeCustomOverflow(nsOverflowAreas& aOverflowAreas) override;
+
+  virtual void UnionChildOverflow(nsOverflowAreas& aOverflowAreas) override;
 
   /** Load all of aFrame's floats into the float manager iff aFrame is not a
    *  block formatting context. Handles all necessary float manager translations;

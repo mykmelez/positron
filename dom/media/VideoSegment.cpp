@@ -46,7 +46,8 @@ VideoFrame::TakeFrom(VideoFrame* aFrame)
 /* static */ already_AddRefed<Image>
 VideoFrame::CreateBlackImage(const gfx::IntSize& aSize)
 {
-  RefPtr<ImageContainer> container = LayerManager::CreateImageContainer();
+  RefPtr<ImageContainer> container =
+    LayerManager::CreateImageContainer(ImageContainer::ASYNCHRONOUS);
   RefPtr<PlanarYCbCrImage> image = container->CreatePlanarYCbCrImage();
   if (!image) {
     MOZ_ASSERT(false);
@@ -79,8 +80,8 @@ VideoFrame::CreateBlackImage(const gfx::IntSize& aSize)
   data.mPicSize = gfx::IntSize(aSize.width, aSize.height);
   data.mStereoMode = StereoMode::MONO;
 
-  // SetData copies data, so we can free data.
-  if (!image->SetData(data)) {
+  // Copies data, so we can free data.
+  if (!image->CopyData(data)) {
     MOZ_ASSERT(false);
     return nullptr;
   }

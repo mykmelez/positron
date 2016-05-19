@@ -165,10 +165,13 @@ WidgetEvent::HasKeyEventMessage() const
     case eKeyDown:
     case eKeyPress:
     case eKeyUp:
+    case eKeyDownOnPlugin:
+    case eKeyUpOnPlugin:
     case eBeforeKeyDown:
     case eBeforeKeyUp:
     case eAfterKeyDown:
     case eAfterKeyUp:
+    case eAccessKeyNotFound:
       return true;
     default:
       return false;
@@ -270,8 +273,8 @@ WidgetEvent::IsAllowedToDispatchDOMEvent() const
       // DOM events (EventStateManager::PreHandleEvent), but not mousemove
       // DOM events.
       // Synthesized button up events also do not cause DOM events because they
-      // do not have a reliable refPoint.
-      return AsMouseEvent()->reason == WidgetMouseEvent::eReal;
+      // do not have a reliable mRefPoint.
+      return AsMouseEvent()->mReason == WidgetMouseEvent::eReal;
 
     case eWheelEventClass: {
       // wheel event whose all delta values are zero by user pref applied, it

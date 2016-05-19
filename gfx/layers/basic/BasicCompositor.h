@@ -42,12 +42,15 @@ public:
 class BasicCompositor : public Compositor
 {
 public:
-  explicit BasicCompositor(CompositorBridgeParent* aParent, nsIWidget *aWidget);
+  explicit BasicCompositor(CompositorBridgeParent* aParent, widget::CompositorWidgetProxy *aWidget);
 
 protected:
   virtual ~BasicCompositor();
 
 public:
+
+  virtual BasicCompositor* AsBasicCompositor() override { return this; }
+
   virtual bool Initialize() override;
 
   virtual void Destroy() override {}
@@ -88,7 +91,7 @@ public:
   }
 
   virtual void DrawQuad(const gfx::Rect& aRect,
-                        const gfx::Rect& aClipRect,
+                        const gfx::IntRect& aClipRect,
                         const EffectChain &aEffectChain,
                         gfx::Float aOpacity,
                         const gfx::Matrix4x4& aTransform,
@@ -97,11 +100,11 @@ public:
   virtual void ClearRect(const gfx::Rect& aRect) override;
 
   virtual void BeginFrame(const nsIntRegion& aInvalidRegion,
-                          const gfx::Rect *aClipRectIn,
-                          const gfx::Rect& aRenderBounds,
+                          const gfx::IntRect *aClipRectIn,
+                          const gfx::IntRect& aRenderBounds,
                           const nsIntRegion& aOpaqueRegion,
-                          gfx::Rect *aClipRectOut = nullptr,
-                          gfx::Rect *aRenderBoundsOut = nullptr) override;
+                          gfx::IntRect *aClipRectOut = nullptr,
+                          gfx::IntRect *aRenderBoundsOut = nullptr) override;
   virtual void EndFrame() override;
   virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) override;
 
@@ -123,14 +126,9 @@ public:
     return LayersBackend::LAYERS_BASIC;
   }
 
-  virtual nsIWidget* GetWidget() const override { return mWidget; }
-
   gfx::DrawTarget *GetDrawTarget() { return mDrawTarget; }
 
 private:
-
-  // Widget associated with this compositor
-  nsIWidget *mWidget;
 
   // The final destination surface
   RefPtr<gfx::DrawTarget> mDrawTarget;
@@ -143,6 +141,8 @@ private:
 
   uint32_t mMaxTextureSize;
 };
+
+BasicCompositor* AssertBasicCompositor(Compositor* aCompositor);
 
 } // namespace layers
 } // namespace mozilla

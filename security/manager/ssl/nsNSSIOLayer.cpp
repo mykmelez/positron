@@ -18,6 +18,7 @@
 #include "mozilla/Casting.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Logging.h"
+#include "mozilla/Move.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "nsCharSeparatedTokenizer.h"
@@ -64,9 +65,6 @@ getSiteKey(const nsACString& hostName, uint16_t port,
   key.AppendASCII(":");
   key.AppendInt(port);
 }
-
-// SSM_UserCertChoice: enum for cert choice info
-typedef enum {ASK, AUTO} SSM_UserCertChoice;
 
 // Historically, we have required that the server negotiate ALPN or NPN in
 // order to false start, as a compatibility hack to work around
@@ -339,14 +337,14 @@ nsNSSSocketInfo::IsAcceptableForHost(const nsACString& hostname, bool* _retval)
   // Ensure that the server certificate covers the hostname that would
   // like to join this connection
 
-  ScopedCERTCertificate nssCert;
+  UniqueCERTCertificate nssCert;
 
   nsCOMPtr<nsIX509Cert> cert;
   if (NS_FAILED(SSLStatus()->GetServerCert(getter_AddRefs(cert)))) {
     return NS_OK;
   }
   if (cert) {
-    nssCert = cert->GetCert();
+    nssCert.reset(cert->GetCert());
   }
 
   if (!nssCert) {
@@ -375,7 +373,7 @@ nsNSSSocketInfo::IsAcceptableForHost(const nsACString& hostname, bool* _retval)
   }
   nsAutoCString hostnameFlat(PromiseFlatCString(hostname));
   CertVerifier::Flags flags = CertVerifier::FLAG_LOCAL_ONLY;
-  ScopedCERTCertList unusedBuiltChain;
+  UniqueCERTCertList unusedBuiltChain;
   SECStatus rv = certVerifier->VerifySSLServerCert(nssCert, nullptr,
                                                    mozilla::pkix::Now(),
                                                    nullptr, hostnameFlat.get(),
@@ -1736,7 +1734,7 @@ nsSSLIOLayerHelpers::addInsecureFallbackSite(const nsCString& hostname,
   Preferences::SetCString("security.tls.insecure_fallback_hosts", value);
 }
 
-class FallbackPrefRemover final : public nsRunnable
+class FallbackPrefRemover final : public Runnable
 {
 public:
   explicit FallbackPrefRemover(const nsACString& aHost)
@@ -1784,7 +1782,7 @@ nsSSLIOLayerHelpers::removeInsecureFallbackSite(const nsACString& hostname,
   if (!isPublic()) {
     return;
   }
-  RefPtr<nsRunnable> runnable = new FallbackPrefRemover(hostname);
+  RefPtr<Runnable> runnable = new FallbackPrefRemover(hostname);
   if (NS_IsMainThread()) {
     runnable->Run();
   } else {
@@ -1937,43 +1935,32 @@ loser:
     return SECFailure;
 }
 
-// Sets certChoice by reading the preference
-//
-// If done properly, this function will read the identifier strings for ASK and
-// AUTO modes read the selected strings from the preference, compare the
-// strings, and determine in which mode it is in. We currently use ASK mode for
-// UI apps and AUTO mode for UI-less apps without really asking for
-// preferences.
-nsresult
-nsGetUserCertChoice(SSM_UserCertChoice* certChoice)
+// Possible behaviors for choosing a cert for client auth.
+enum class UserCertChoice {
+  // Ask the user to choose a cert.
+  Ask = 0,
+  // Automatically choose a cert.
+  Auto = 1,
+};
+
+// Returns the most appropriate user cert choice based on the value of the
+// security.default_personal_cert preference.
+UserCertChoice
+nsGetUserCertChoice()
 {
-  char* mode = nullptr;
-  nsresult ret;
-
-  NS_ENSURE_ARG_POINTER(certChoice);
-
-  nsCOMPtr<nsIPrefBranch> pref = do_GetService(NS_PREFSERVICE_CONTRACTID);
-
-  ret = pref->GetCharPref("security.default_personal_cert", &mode);
-  if (NS_FAILED(ret)) {
-    goto loser;
+  nsAutoCString value;
+  nsresult rv = Preferences::GetCString("security.default_personal_cert", &value);
+  if (NS_FAILED(rv)) {
+    return UserCertChoice::Ask;
   }
 
-  if (PL_strcmp(mode, "Select Automatically") == 0) {
-    *certChoice = AUTO;
-  } else if (PL_strcmp(mode, "Ask Every Time") == 0) {
-    *certChoice = ASK;
-  } else {
-    // Most likely we see a nickname from a migrated cert.
-    // We do not currently support that, ask the user which cert to use.
-    *certChoice = ASK;
-  }
-
-loser:
-  if (mode) {
-    free(mode);
-  }
-  return ret;
+  // There are three cases for what the preference could be set to:
+  //   1. "Select Automatically" -> Auto.
+  //   2. "Ask Every Time" -> Ask.
+  //   3. Something else -> Ask. This might be a nickname from a migrated cert,
+  //      but we no longer support this case.
+  return value.EqualsLiteral("Select Automatically") ? UserCertChoice::Auto
+                                                     : UserCertChoice::Ask;
 }
 
 static bool
@@ -2004,14 +1991,14 @@ public:
                          CERTCertificate** pRetCert,
                          SECKEYPrivateKey** pRetKey,
                          nsNSSSocketInfo* info,
-                         CERTCertificate* serverCert)
+                         const UniqueCERTCertificate& serverCert)
     : mRV(SECFailure)
     , mErrorCodeToReport(SEC_ERROR_NO_MEMORY)
     , mPRetCert(pRetCert)
     , mPRetKey(pRetKey)
     , mCANames(caNames)
     , mSocketInfo(info)
-    , mServerCert(serverCert)
+    , mServerCert(serverCert.get())
   {
   }
 
@@ -2052,7 +2039,7 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
   RefPtr<nsNSSSocketInfo> info(
     reinterpret_cast<nsNSSSocketInfo*>(socket->higher->secret));
 
-  ScopedCERTCertificate serverCert(SSL_PeerCertificate(socket));
+  UniqueCERTCertificate serverCert(SSL_PeerCertificate(socket));
   if (!serverCert) {
     NS_NOTREACHED("Missing server certificate should have been detected during "
                   "server cert authentication.");
@@ -2094,15 +2081,18 @@ nsNSS_SSLGetClientAuthData(void* arg, PRFileDesc* socket,
 void
 ClientAuthDataRunnable::RunOnTargetThread()
 {
+  // We check the value of a pref in this runnable, so this runnable should only
+  // be run on the main thread.
+  MOZ_ASSERT(NS_IsMainThread());
+
   UniquePLArenaPool arena;
   char** caNameStrings;
-  ScopedCERTCertificate cert;
+  UniqueCERTCertificate cert;
   UniqueSECKEYPrivateKey privKey;
-  ScopedCERTCertList certList;
+  UniqueCERTCertList certList;
   CERTCertListNode* node;
   UniqueCERTCertNicknames nicknames;
   int keyError = 0; // used for private key retrieval error
-  SSM_UserCertChoice certChoice;
   int32_t NumberOfCerts = 0;
   void* wincx = mSocketInfo;
   nsresult rv;
@@ -2113,7 +2103,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
   // If a client cert preference was set on the socket info, use that and skip
   // the client cert UI and/or search of the user's past cert decisions.
   if (socketClientCert) {
-    cert = socketClientCert->GetCert();
+    cert.reset(socketClientCert->GetCert());
     if (!cert) {
       goto loser;
     }
@@ -2124,7 +2114,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
       goto loser;
     }
 
-    *mPRetCert = cert.forget();
+    *mPRetCert = cert.release();
     *mPRetKey = privKey.release();
     mRV = SECSuccess;
     return;
@@ -2147,19 +2137,14 @@ ClientAuthDataRunnable::RunOnTargetThread()
     goto loser;
   }
 
-  // get the preference
-  if (NS_FAILED(nsGetUserCertChoice(&certChoice))) {
-    goto loser;
-  }
-
   // find valid user cert and key pair
-  if (certChoice == AUTO) {
+  if (nsGetUserCertChoice() == UserCertChoice::Auto) {
     // automatically find the right cert
 
     // find all user certs that are valid and for SSL
-    certList = CERT_FindUserCertsByUsage(CERT_GetDefaultCertDB(),
-                                         certUsageSSLClient, false,
-                                         true, wincx);
+    certList.reset(CERT_FindUserCertsByUsage(CERT_GetDefaultCertDB(),
+                                             certUsageSSLClient, false, true,
+                                             wincx));
     if (!certList) {
       goto noCert;
     }
@@ -2177,7 +2162,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
       goto noCert;
     }
 
-    ScopedCERTCertificate low_prio_nonrep_cert;
+    UniqueCERTCertificate lowPrioNonrepCert;
 
     // loop through the list until we find a cert with a key
     while (!CERT_LIST_END(node, certList)) {
@@ -2187,13 +2172,13 @@ ClientAuthDataRunnable::RunOnTargetThread()
       if (privKey) {
         if (hasExplicitKeyUsageNonRepudiation(node->cert)) {
           privKey = nullptr;
-          // Not a prefered cert
-          if (!low_prio_nonrep_cert) { // did not yet find a low prio cert
-            low_prio_nonrep_cert = CERT_DupCertificate(node->cert);
+          // Not a preferred cert
+          if (!lowPrioNonrepCert) { // did not yet find a low prio cert
+            lowPrioNonrepCert.reset(CERT_DupCertificate(node->cert));
           }
         } else {
           // this is a good cert to present
-          cert = CERT_DupCertificate(node->cert);
+          cert.reset(CERT_DupCertificate(node->cert));
           break;
         }
       }
@@ -2206,8 +2191,8 @@ ClientAuthDataRunnable::RunOnTargetThread()
       node = CERT_LIST_NEXT(node);
     }
 
-    if (!cert && low_prio_nonrep_cert) {
-      cert = low_prio_nonrep_cert.forget();
+    if (!cert && lowPrioNonrepCert) {
+      cert = Move(lowPrioNonrepCert);
       privKey.reset(PK11_FindKeyByAnyCert(cert.get(), wincx));
     }
 
@@ -2251,7 +2236,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
             nsNSSCertificate* obj_cert =
               reinterpret_cast<nsNSSCertificate*>(found_cert.get());
             if (obj_cert) {
-              cert = obj_cert->GetCert();
+              cert.reset(obj_cert->GetCert());
             }
           }
 
@@ -2264,16 +2249,16 @@ ClientAuthDataRunnable::RunOnTargetThread()
 
     if (!hasRemembered) {
       // user selects a cert to present
-      nsIClientAuthDialogs* dialogs = nullptr;
+      nsCOMPtr<nsIClientAuthDialogs> dialogs;
       int32_t selectedIndex = -1;
       char16_t** certNicknameList = nullptr;
       char16_t** certDetailsList = nullptr;
 
       // find all user certs that are for SSL
       // note that we are allowing expired certs in this list
-      certList = CERT_FindUserCertsByUsage(CERT_GetDefaultCertDB(),
-        certUsageSSLClient, false,
-        false, wincx);
+      certList.reset(CERT_FindUserCertsByUsage(CERT_GetDefaultCertDB(),
+                                               certUsageSSLClient, false,
+                                               false, wincx));
       if (!certList) {
         goto noCert;
       }
@@ -2304,7 +2289,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
         goto noCert;
       }
 
-      nicknames.reset(getNSSCertNicknamesFromCertList(certList.get()));
+      nicknames.reset(getNSSCertNicknamesFromCertList(certList));
 
       if (!nicknames) {
         goto loser;
@@ -2378,9 +2363,9 @@ ClientAuthDataRunnable::RunOnTargetThread()
       }
 
       // Throw up the client auth dialog and get back the index of the selected cert
-      nsresult rv = getNSSDialogs((void**)&dialogs,
-        NS_GET_IID(nsIClientAuthDialogs),
-        NS_CLIENTAUTHDIALOGS_CONTRACTID);
+      nsresult rv = getNSSDialogs(getter_AddRefs(dialogs),
+                                  NS_GET_IID(nsIClientAuthDialogs),
+                                  NS_CLIENTAUTHDIALOGS_CONTRACTID);
 
       if (NS_FAILED(rv)) {
         NS_FREE_XPCOM_ALLOCATED_POINTER_ARRAY(CertsToUse, certNicknameList);
@@ -2394,7 +2379,6 @@ ClientAuthDataRunnable::RunOnTargetThread()
                                       (const char16_t**)certDetailsList,
                                       CertsToUse, &selectedIndex, &canceled);
 
-      NS_RELEASE(dialogs);
       NS_FREE_XPCOM_ALLOCATED_POINTER_ARRAY(CertsToUse, certNicknameList);
       NS_FREE_XPCOM_ALLOCATED_POINTER_ARRAY(CertsToUse, certDetailsList);
 
@@ -2411,7 +2395,7 @@ ClientAuthDataRunnable::RunOnTargetThread()
         ++i, node = CERT_LIST_NEXT(node)) {
 
         if (i == selectedIndex) {
-          cert = CERT_DupCertificate(node->cert);
+          cert.reset(CERT_DupCertificate(node->cert));
           break;
         }
       }
@@ -2450,7 +2434,7 @@ loser:
 done:
   int error = PR_GetError();
 
-  *mPRetCert = cert.forget();
+  *mPRetCert = cert.release();
   *mPRetKey = privKey.release();
 
   if (mRV == SECFailure) {

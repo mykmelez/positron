@@ -42,7 +42,7 @@ NS_NewHTMLVideoFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 NS_IMPL_FRAMEARENA_HELPERS(nsVideoFrame)
 
 nsVideoFrame::nsVideoFrame(nsStyleContext* aContext)
-  : nsVideoFrameBase(aContext)
+  : nsContainerFrame(aContext)
 {
   EnableVisibilityTracking();
 }
@@ -54,7 +54,7 @@ nsVideoFrame::~nsVideoFrame()
 NS_QUERYFRAME_HEAD(nsVideoFrame)
   NS_QUERYFRAME_ENTRY(nsVideoFrame)
   NS_QUERYFRAME_ENTRY(nsIAnonymousContentCreator)
-NS_QUERYFRAME_TAIL_INHERITING(nsVideoFrameBase)
+NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 nsresult
 nsVideoFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
@@ -145,7 +145,7 @@ nsVideoFrame::DestroyFrom(nsIFrame* aDestructRoot)
   nsContentUtils::DestroyAnonymousContent(&mCaptionDiv);
   nsContentUtils::DestroyAnonymousContent(&mVideoControls);
   nsContentUtils::DestroyAnonymousContent(&mPosterImage);
-  nsVideoFrameBase::DestroyFrom(aDestructRoot);
+  nsContainerFrame::DestroyFrom(aDestructRoot);
 }
 
 bool
@@ -223,7 +223,7 @@ nsVideoFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   return result.forget();
 }
 
-class DispatchResizeToControls : public nsRunnable
+class DispatchResizeToControls : public Runnable
 {
 public:
   explicit DispatchResizeToControls(nsIContent* aContent)
@@ -305,7 +305,7 @@ nsVideoFrame::Reflow(nsPresContext*           aPresContext,
                                        aReflowState.ComputedWidth(),
                                        aReflowState.ComputedHeight()));
       if (child->GetSize() != size) {
-        RefPtr<nsRunnable> event = new DispatchResizeToControls(child->GetContent());
+        RefPtr<Runnable> event = new DispatchResizeToControls(child->GetContent());
         nsContentUtils::AddScriptRunner(event);
       }
     } else if (child->GetContent() == mCaptionDiv) {
@@ -567,7 +567,7 @@ nsVideoFrame::GetVideoIntrinsicSize(nsRenderingContext *aRenderingContext)
 
     // Ask the controls frame what its preferred height is
     nsBoxLayoutState boxState(PresContext(), aRenderingContext, 0);
-    nscoord prefHeight = mFrames.LastChild()->GetPrefSize(boxState).height;
+    nscoord prefHeight = mFrames.LastChild()->GetXULPrefSize(boxState).height;
     return nsSize(nsPresContext::CSSPixelsToAppUnits(size.width), prefHeight);
   }
 
@@ -612,24 +612,28 @@ nsVideoFrame::AttributeChanged(int32_t aNameSpaceID,
   if (aAttribute == nsGkAtoms::poster && HasVideoElement()) {
     UpdatePosterSource(true);
   }
-  return nsVideoFrameBase::AttributeChanged(aNameSpaceID,
+  return nsContainerFrame::AttributeChanged(aNameSpaceID,
                                             aAttribute,
                                             aModType);
 }
 
 void
-nsVideoFrame::OnVisibilityChange(Visibility aNewVisibility,
+nsVideoFrame::OnVisibilityChange(Visibility aOldVisibility,
+                                 Visibility aNewVisibility,
                                  Maybe<OnNonvisible> aNonvisibleAction)
 {
   nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mPosterImage);
   if (!imageLoader) {
-    nsVideoFrameBase::OnVisibilityChange(aNewVisibility, aNonvisibleAction);
+    nsContainerFrame::OnVisibilityChange(aOldVisibility, aNewVisibility,
+                                         aNonvisibleAction);
     return;
   }
 
-  imageLoader->OnVisibilityChange(aNewVisibility, aNonvisibleAction);
+  imageLoader->OnVisibilityChange(aOldVisibility, aNewVisibility,
+                                  aNonvisibleAction);
 
-  nsVideoFrameBase::OnVisibilityChange(aNewVisibility, aNonvisibleAction);
+  nsContainerFrame::OnVisibilityChange(aOldVisibility, aNewVisibility,
+                                       aNonvisibleAction);
 }
 
 bool nsVideoFrame::HasVideoElement() {

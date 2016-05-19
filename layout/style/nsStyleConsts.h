@@ -267,10 +267,12 @@ enum class FillMode : uint32_t;
 #define NS_STYLE_IMAGELAYER_ATTACHMENT_LOCAL         2
 
 // See nsStyleImageLayers
-// Code depends on these constants having the same values as BG_ORIGIN_*
+// Code depends on these constants having the same values as IMAGELAYER_ORIGIN_*
 #define NS_STYLE_IMAGELAYER_CLIP_BORDER              0
 #define NS_STYLE_IMAGELAYER_CLIP_PADDING             1
 #define NS_STYLE_IMAGELAYER_CLIP_CONTENT             2
+// One extra constant which does not exist in IMAGELAYER_ORIGIN_*
+#define NS_STYLE_IMAGELAYER_CLIP_TEXT                3
 
 // A magic value that we use for our "pretend that background-clip is
 // 'padding' when we have a solid border" optimization.  This isn't
@@ -797,7 +799,7 @@ enum class FillMode : uint32_t;
 #define NS_STYLE_RESIZE_VERTICAL                3
 
 // See nsStyleText
-#define NS_STYLE_TEXT_ALIGN_DEFAULT               0
+#define NS_STYLE_TEXT_ALIGN_START                 0
 #define NS_STYLE_TEXT_ALIGN_LEFT                  1
 #define NS_STYLE_TEXT_ALIGN_RIGHT                 2
 #define NS_STYLE_TEXT_ALIGN_CENTER                3
@@ -847,7 +849,7 @@ enum class FillMode : uint32_t;
 #define NS_STYLE_TEXT_TRANSFORM_CAPITALIZE      1
 #define NS_STYLE_TEXT_TRANSFORM_LOWERCASE       2
 #define NS_STYLE_TEXT_TRANSFORM_UPPERCASE       3
-#define NS_STYLE_TEXT_TRANSFORM_FULLWIDTH       4
+#define NS_STYLE_TEXT_TRANSFORM_FULL_WIDTH      4
 
 // See nsStyleDisplay
 #define NS_STYLE_TOUCH_ACTION_NONE            (1 << 0)
@@ -952,7 +954,7 @@ enum class FillMode : uint32_t;
 #define NS_STYLE_UNICODE_BIDI_NORMAL            0x0
 #define NS_STYLE_UNICODE_BIDI_EMBED             0x1
 #define NS_STYLE_UNICODE_BIDI_ISOLATE           0x2
-#define NS_STYLE_UNICODE_BIDI_OVERRIDE          0x4
+#define NS_STYLE_UNICODE_BIDI_BIDI_OVERRIDE     0x4
 #define NS_STYLE_UNICODE_BIDI_ISOLATE_OVERRIDE  0x6
 #define NS_STYLE_UNICODE_BIDI_PLAINTEXT         0x8
 

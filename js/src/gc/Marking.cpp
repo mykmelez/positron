@@ -126,10 +126,10 @@ IsThingPoisoned(T* thing)
         JS_SWEPT_NURSERY_PATTERN,
         JS_ALLOCATED_NURSERY_PATTERN,
         JS_FRESH_TENURED_PATTERN,
+        JS_MOVED_TENURED_PATTERN,
         JS_SWEPT_TENURED_PATTERN,
         JS_ALLOCATED_TENURED_PATTERN,
-        JS_SWEPT_CODE_PATTERN,
-        JS_SWEPT_FRAME_PATTERN
+        JS_SWEPT_CODE_PATTERN
     };
     const int numPoisonBytes = sizeof(poisonBytes) / sizeof(poisonBytes[0]);
     uint32_t* p = reinterpret_cast<uint32_t*>(reinterpret_cast<FreeSpan*>(thing) + 1);
@@ -2021,7 +2021,7 @@ template <typename S>
 struct TenuringTraversalFunctor : public IdentityDefaultAdaptor<S> {
     template <typename T> S operator()(T* t, TenuringTracer* trc) {
         trc->traverse(&t);
-        return js::gc::RewrapTaggedPointer<S, T*>::wrap(t);
+        return js::gc::RewrapTaggedPointer<S, T>::wrap(t);
     }
 };
 
@@ -2091,6 +2091,9 @@ js::gc::StoreBuffer::WholeCellEdges::trace(TenuringTracer& mover) const
     JS::TraceKind kind = edge->getTraceKind();
     if (kind == JS::TraceKind::Object) {
         JSObject *object = static_cast<JSObject*>(edge);
+        if (object->is<NativeObject>())
+            object->as<NativeObject>().clearInWholeCellBuffer();
+
         mover.traceObject(object);
 
         // Additionally trace the expando object attached to any unboxed plain
@@ -2155,7 +2158,7 @@ js::TenuringTracer::moveToTenured(JSObject* src)
         AutoEnterOOMUnsafeRegion oomUnsafe;
         t = zone->arenas.allocateFromArena(zone, dstKind, maybeStartBackgroundAllocation);
         if (!t)
-            oomUnsafe.crash("Failed to allocate object while tenuring.");
+            oomUnsafe.crash(ChunkSize, "Failed to allocate object while tenuring.");
     }
     JSObject* dst = reinterpret_cast<JSObject*>(t);
     tenuredSize += moveObjectToTenured(dst, src, dstKind);
@@ -2276,20 +2279,18 @@ js::TenuringTracer::moveObjectToTenured(JSObject* dst, JSObject* src, AllocKind 
         }
     }
 
-    if (src->getClass()->flags & JSCLASS_SKIP_NURSERY_FINALIZE) {
-        if (src->is<InlineTypedObject>()) {
-            InlineTypedObject::objectMovedDuringMinorGC(this, dst, src);
-        } else if (src->is<UnboxedArrayObject>()) {
-            tenuredSize += UnboxedArrayObject::objectMovedDuringMinorGC(this, dst, src, dstKind);
-        } else if (src->is<ArgumentsObject>()) {
-            tenuredSize += ArgumentsObject::objectMovedDuringMinorGC(this, dst, src);
-        } else if (JSObjectMovedOp op = dst->getClass()->extObjectMovedOp()) {
-            op(dst, src);
-        } else {
-            // Objects with JSCLASS_SKIP_NURSERY_FINALIZE need to be handled above
-            // to ensure any additional nursery buffers they hold are moved.
-            MOZ_CRASH("Unhandled JSCLASS_SKIP_NURSERY_FINALIZE Class");
-        }
+    if (src->is<InlineTypedObject>()) {
+        InlineTypedObject::objectMovedDuringMinorGC(this, dst, src);
+    } else if (src->is<UnboxedArrayObject>()) {
+        tenuredSize += UnboxedArrayObject::objectMovedDuringMinorGC(this, dst, src, dstKind);
+    } else if (src->is<ArgumentsObject>()) {
+        tenuredSize += ArgumentsObject::objectMovedDuringMinorGC(this, dst, src);
+    } else if (JSObjectMovedOp op = dst->getClass()->extObjectMovedOp()) {
+        op(dst, src);
+    } else if (src->getClass()->flags & JSCLASS_SKIP_NURSERY_FINALIZE) {
+        // Objects with JSCLASS_SKIP_NURSERY_FINALIZE need to be handled above
+        // to ensure any additional nursery buffers they hold are moved.
+        MOZ_CRASH("Unhandled JSCLASS_SKIP_NURSERY_FINALIZE Class");
     }
 
     return tenuredSize;
@@ -2314,7 +2315,7 @@ js::TenuringTracer::moveSlotsToTenured(NativeObject* dst, NativeObject* src, All
         AutoEnterOOMUnsafeRegion oomUnsafe;
         dst->slots_ = zone->pod_malloc<HeapSlot>(count);
         if (!dst->slots_)
-            oomUnsafe.crash("Failed to allocate slots while tenuring.");
+            oomUnsafe.crash(sizeof(HeapSlot) * count, "Failed to allocate slots while tenuring.");
     }
 
     PodCopy(dst->slots_, src->slots_, count);
@@ -2355,8 +2356,10 @@ js::TenuringTracer::moveElementsToTenured(NativeObject* dst, NativeObject* src, 
     {
         AutoEnterOOMUnsafeRegion oomUnsafe;
         dstHeader = reinterpret_cast<ObjectElements*>(zone->pod_malloc<HeapSlot>(nslots));
-        if (!dstHeader)
-            oomUnsafe.crash("Failed to allocate elements while tenuring.");
+        if (!dstHeader) {
+            oomUnsafe.crash(sizeof(HeapSlot) * nslots,
+                            "Failed to allocate elements while tenuring.");
+        }
     }
 
     js_memcpy(dstHeader, srcHeader, nslots * sizeof(HeapSlot));
@@ -2426,7 +2429,7 @@ template <typename S>
 struct IsMarkedFunctor : public IdentityDefaultAdaptor<S> {
     template <typename T> S operator()(T* t, bool* rv) {
         *rv = IsMarkedInternal(&t);
-        return js::gc::RewrapTaggedPointer<S, T*>::wrap(t);
+        return js::gc::RewrapTaggedPointer<S, T>::wrap(t);
     }
 };
 
@@ -2485,7 +2488,7 @@ template <typename S>
 struct IsAboutToBeFinalizedFunctor : public IdentityDefaultAdaptor<S> {
     template <typename T> S operator()(T* t, bool* rv) {
         *rv = IsAboutToBeFinalizedInternal(&t);
-        return js::gc::RewrapTaggedPointer<S, T*>::wrap(t);
+        return js::gc::RewrapTaggedPointer<S, T>::wrap(t);
     }
 };
 

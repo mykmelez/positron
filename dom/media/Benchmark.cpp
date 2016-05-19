@@ -7,33 +7,45 @@
 #include "Benchmark.h"
 #include "BufferMediaResource.h"
 #include "MediaData.h"
+#include "MediaPrefs.h"
 #include "PDMFactory.h"
 #include "WebMDemuxer.h"
-#include "WebMSample.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/dom/ContentChild.h"
 
+#ifndef MOZ_WIDGET_ANDROID
+#include "WebMSample.h"
+#endif
+
 namespace mozilla {
 
+// Update this version number to force re-running the benchmark. Such as when
+// an improvement to FFVP9 or LIBVPX is deemed worthwhile.
+const uint32_t VP9Benchmark::sBenchmarkVersionID = 1;
+
 const char* VP9Benchmark::sBenchmarkFpsPref = "media.benchmark.vp9.fps";
+const char* VP9Benchmark::sBenchmarkFpsVersionCheck = "media.benchmark.vp9.versioncheck";
 bool VP9Benchmark::sHasRunTest = false;
 
+// static
 bool
 VP9Benchmark::IsVP9DecodeFast()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
+#ifdef MOZ_WIDGET_ANDROID
+  return true;
+#else
   bool hasPref = Preferences::HasUserValue(sBenchmarkFpsPref);
+  uint32_t hadRecentUpdate = Preferences::GetUint(sBenchmarkFpsVersionCheck, 0U);
 
-  if (!sHasRunTest && !hasPref) {
+  if (!sHasRunTest && (!hasPref || hadRecentUpdate != sBenchmarkVersionID)) {
     sHasRunTest = true;
 
     RefPtr<WebMDemuxer> demuxer =
       new WebMDemuxer(new BufferMediaResource(sWebMSample, sizeof(sWebMSample), nullptr,
                                               NS_LITERAL_CSTRING("video/webm")));
-    PDMFactory::Init();
-
     RefPtr<Benchmark> estimiser =
       new Benchmark(demuxer,
                     {
@@ -54,6 +66,7 @@ VP9Benchmark::IsVP9DecodeFast()
           }
         } else {
           Preferences::SetUint(sBenchmarkFpsPref, aDecodeFps);
+          Preferences::SetUint(sBenchmarkFpsVersionCheck, sBenchmarkVersionID);
         }
         Telemetry::Accumulate(Telemetry::ID::VIDEO_VP9_BENCHMARK_FPS, aDecodeFps);
       },
@@ -69,6 +82,7 @@ VP9Benchmark::IsVP9DecodeFast()
     Preferences::GetUint("media.benchmark.vp9.threshold", 150);
 
   return decodeFps >= threshold;
+#endif
 }
 
 Benchmark::Benchmark(MediaDataDemuxer* aDemuxer, const Parameters& aParameters)
@@ -120,7 +134,7 @@ Benchmark::Init()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  PDMFactory::Init();
+  MediaPrefs::GetSingleton();
 }
 
 BenchmarkPlayback::BenchmarkPlayback(Benchmark* aMainThreadState,
@@ -193,7 +207,8 @@ BenchmarkPlayback::InitDecoder(TrackInfo&& aInfo)
   MOZ_ASSERT(OnThread());
 
   RefPtr<PDMFactory> platform = new PDMFactory();
-  mDecoder = platform->CreateDecoder(aInfo, mDecoderTaskQueue, this);
+  mDecoder = platform->CreateDecoder(aInfo, mDecoderTaskQueue, this,
+     /* DecoderDoctorDiagnostics* */ nullptr);
   if (!mDecoder) {
     MainThreadShutdown();
     return;

@@ -6,6 +6,8 @@
 
 #include "ServiceWorkerInfo.h"
 
+#include "ServiceWorkerScriptCache.h"
+
 BEGIN_WORKERS_NAMESPACE
 
 NS_IMPL_ISUPPORTS(ServiceWorkerInfo, nsIServiceWorkerInfo)
@@ -79,7 +81,7 @@ ServiceWorkerInfo::RemoveWorker(ServiceWorker* aWorker)
 
 namespace {
 
-class ChangeStateUpdater final : public nsRunnable
+class ChangeStateUpdater final : public Runnable
 {
 public:
   ChangeStateUpdater(const nsTArray<ServiceWorker*>& aInstances,
@@ -139,6 +141,9 @@ ServiceWorkerInfo::UpdateState(ServiceWorkerState aState)
   mState = aState;
   nsCOMPtr<nsIRunnable> r = new ChangeStateUpdater(mInstances, mState);
   MOZ_ALWAYS_SUCCEEDS(NS_DispatchToMainThread(r.forget()));
+  if (mState == ServiceWorkerState::Redundant) {
+    serviceWorkerScriptCache::PurgeCache(mPrincipal, mCacheName);
+  }
 }
 
 ServiceWorkerInfo::ServiceWorkerInfo(nsIPrincipal* aPrincipal,

@@ -9,10 +9,9 @@ Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/UpdateUtils.jsm");
 
- // The amount of people to be part of e10s, in %
+ // The amount of people to be part of e10s
 const TEST_THRESHOLD = {
-  "beta"    : 50,
-  "release" : 0,
+  "beta"    : 0.5,  // 50%
 };
 
 const PREF_COHORT_SAMPLE       = "e10s.rollout.cohortSample";
@@ -56,21 +55,18 @@ function defineCohort() {
 
   let userOptedOut = optedOut();
   let userOptedIn = optedIn();
-  let disqualified = (Services.appinfo.multiprocessBlockPolicy != 0) ||
-                     isThereAnActiveExperiment();
+  let disqualified = (Services.appinfo.multiprocessBlockPolicy != 0);
   let testGroup = (getUserSample() < TEST_THRESHOLD[updateChannel]);
 
   if (userOptedOut) {
     setCohort("optedOut");
   } else if (userOptedIn) {
     setCohort("optedIn");
-  } else if (disqualified) {
-    setCohort("disqualified");
   } else if (testGroup) {
-    setCohort("test");
+    setCohort(disqualified ? "disqualified-test" : "test");
     Preferences.set(PREF_TOGGLE_E10S, true);
   } else {
-    setCohort("control");
+    setCohort(disqualified ? "disqualified-control" : "control");
     Preferences.reset(PREF_TOGGLE_E10S);
   }
 }
@@ -82,14 +78,23 @@ function uninstall() {
 }
 
 function getUserSample() {
-  let existingVal = Preferences.get(PREF_COHORT_SAMPLE, undefined);
-  if (typeof(existingVal) == "number") {
-    return existingVal;
+  let prefValue = Preferences.get(PREF_COHORT_SAMPLE, undefined);
+  let value = 0.0;
+
+  if (typeof(prefValue) == "string") {
+    value = parseFloat(prefValue, 10);
+    return value;
   }
 
-  let val = Math.floor(Math.random() * 100);
-  Preferences.set(PREF_COHORT_SAMPLE, val);
-  return val;
+  if (typeof(prefValue) == "number") {
+    // convert old integer value
+    value = prefValue / 100;
+  } else {
+    value = Math.random();
+  }
+
+  Preferences.set(PREF_COHORT_SAMPLE, value.toString().substr(0, 8));
+  return value;
 }
 
 function setCohort(cohortName) {
@@ -113,9 +118,4 @@ function optedOut() {
   return Preferences.get(PREF_E10S_FORCE_DISABLED, false) ||
          (Preferences.isSet(PREF_TOGGLE_E10S) &&
           Preferences.get(PREF_TOGGLE_E10S) == false);
-}
-
-function isThereAnActiveExperiment() {
-  let { Experiments } = Cu.import("resource:///modules/experiments/Experiments.jsm", {});
-  return (Experiments.instance().getActiveExperimentID() !== null);
 }

@@ -109,6 +109,8 @@ protected:
     , isChar(false)
     , mIsRepeat(false)
     , mIsComposing(false)
+    , mIsReserved(false)
+    , mAccessKeyForwardedToChild(false)
     , mKeyNameIndex(mozilla::KEY_NAME_INDEX_Unidentified)
     , mCodeNameIndex(CODE_NAME_INDEX_UNKNOWN)
     , mNativeKeyEvent(nullptr)
@@ -136,6 +138,8 @@ public:
     , isChar(false)
     , mIsRepeat(false)
     , mIsComposing(false)
+    , mIsReserved(false)
+    , mAccessKeyForwardedToChild(false)
     , mKeyNameIndex(mozilla::KEY_NAME_INDEX_Unidentified)
     , mCodeNameIndex(CODE_NAME_INDEX_UNKNOWN)
     , mNativeKeyEvent(nullptr)
@@ -147,6 +151,34 @@ public:
     , mInputMethodAppState(eNotHandled)
     , mIsSynthesizedByTIP(false)
   {
+    // If this is a keyboard event on a plugin, it shouldn't fired on content.
+    mFlags.mOnlySystemGroupDispatchInContent =
+      mFlags.mNoCrossProcessBoundaryForwarding = IsKeyEventOnPlugin();
+  }
+
+  static bool IsKeyDownOrKeyDownOnPlugin(EventMessage aMessage)
+  {
+    return aMessage == eKeyDown || aMessage == eKeyDownOnPlugin;
+  }
+  bool IsKeyDownOrKeyDownOnPlugin() const
+  {
+    return IsKeyDownOrKeyDownOnPlugin(mMessage);
+  }
+  static bool IsKeyUpOrKeyUpOnPlugin(EventMessage aMessage)
+  {
+    return aMessage == eKeyUp || aMessage == eKeyUpOnPlugin;
+  }
+  bool IsKeyUpOrKeyUpOnPlugin() const
+  {
+    return IsKeyUpOrKeyUpOnPlugin(mMessage);
+  }
+  static bool IsKeyEventOnPlugin(EventMessage aMessage)
+  {
+    return aMessage == eKeyDownOnPlugin || aMessage == eKeyUpOnPlugin;
+  }
+  bool IsKeyEventOnPlugin() const
+  {
+    return IsKeyEventOnPlugin(mMessage);
   }
 
   virtual WidgetEvent* Duplicate() const override
@@ -187,6 +219,14 @@ public:
   // composition.  This is initialized by EventStateManager.  So, key event
   // dispatchers don't need to initialize this.
   bool mIsComposing;
+  // Indicates if the key combination is reserved by chrome.  This is set by
+  // nsXBLWindowKeyHandler at capturing phase of the default event group.
+  bool mIsReserved;
+  // True if accesskey handling was forwarded to the child via
+  // TabParent::HandleAccessKey. In this case, parent process menu access key
+  // handling should be delayed until it is determined that there exists no
+  // overriding access key in the content process.
+  bool mAccessKeyForwardedToChild;
   // DOM KeyboardEvent.key
   KeyNameIndex mKeyNameIndex;
   // DOM KeyboardEvent.code
@@ -340,6 +380,8 @@ public:
     isChar = aEvent.isChar;
     mIsRepeat = aEvent.mIsRepeat;
     mIsComposing = aEvent.mIsComposing;
+    mIsReserved = aEvent.mIsReserved;
+    mAccessKeyForwardedToChild = aEvent.mAccessKeyForwardedToChild;
     mKeyNameIndex = aEvent.mKeyNameIndex;
     mCodeNameIndex = aEvent.mCodeNameIndex;
     mKeyValue = aEvent.mKeyValue;
@@ -464,10 +506,6 @@ public:
     , mNativeIMEContext(aWidget)
     , mOriginalMessage(eVoidEvent)
   {
-    // XXX compositionstart is cancelable in draft of DOM3 Events.
-    //     However, it doesn't make sense for us, we cannot cancel composition
-    //     when we send compositionstart event.
-    mFlags.mCancelable = false;
   }
 
   virtual WidgetEvent* Duplicate() const override
@@ -628,7 +666,7 @@ public:
   {
     NS_ASSERTION(mMessage == eQueryDOMWidgetHittest,
                  "wrong initializer is called");
-    refPoint = aPoint;
+    mRefPoint = aPoint;
   }
 
   void RequestFontRanges()
@@ -682,7 +720,7 @@ public:
     void* mContentsRoot;
     uint32_t mOffset;
     // mTentativeCaretOffset is used by only eQueryCharacterAtPoint.
-    // This is the offset where caret would be if user clicked at the refPoint.
+    // This is the offset where caret would be if user clicked at the mRefPoint.
     uint32_t mTentativeCaretOffset;
     nsString mString;
     // mRect is used by eQueryTextRect, eQueryCaretRect, eQueryCharacterAtPoint
@@ -820,14 +858,6 @@ public:
     : InternalUIEvent(aIsTrusted, aMessage, aWidget, eEditorInputEventClass)
     , mIsComposing(false)
   {
-    if (!aIsTrusted) {
-      mFlags.mBubbles = false;
-      mFlags.mCancelable = false;
-      return;
-    }
-
-    mFlags.mBubbles = true;
-    mFlags.mCancelable = false;
   }
 
   virtual WidgetEvent* Duplicate() const override

@@ -185,7 +185,6 @@ var dataProviders = {
     let data = {
       name: Services.appinfo.name,
       osVersion: sysInfo.getProperty("name") + " " + sysInfo.getProperty("version"),
-      arch: sysInfo.getProperty("arch"),
       version: AppConstants.MOZ_APP_VERSION_DISPLAY,
       buildID: Services.appinfo.appBuildID,
       userAgent: Cc["@mozilla.org/network/protocol;1?name=http"].
@@ -243,7 +242,11 @@ var dataProviders = {
       extensions.sort(function (a, b) {
         if (a.isActive != b.isActive)
           return b.isActive ? 1 : -1;
-        let lc = a.name.localeCompare(b.name);
+
+        // In some unfortunate cases addon names can be null.
+        let aname = a.name || null;
+        let bname = b.name || null;
+        let lc = aname.localeCompare(bname);
         if (lc != 0)
           return lc;
         if (a.version != b.version)
@@ -469,6 +472,9 @@ var dataProviders = {
         data.indices = failureIndices.value;
       }
     }
+
+    data.featureLog = gfxInfo.getFeatureLog();
+    data.crashGuards = gfxInfo.getActiveCrashGuards();
 
     completed();
   },

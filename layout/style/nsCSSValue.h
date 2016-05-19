@@ -11,6 +11,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/SheetType.h"
+#include "mozilla/UniquePtr.h"
 
 #include "nsIPrincipal.h"
 #include "nsIURI.h"
@@ -331,13 +332,15 @@ enum nsCSSUnit {
   eCSSUnit_RGBAColor           = 82,   // (nscolor) an RGBA value specified as rgba()
   eCSSUnit_HexColor            = 83,   // (nscolor) an opaque RGBA value specified as #rrggbb
   eCSSUnit_ShortHexColor       = 84,   // (nscolor) an opaque RGBA value specified as #rgb
-  eCSSUnit_PercentageRGBColor  = 85,   // (nsCSSValueFloatColor*)
-  eCSSUnit_PercentageRGBAColor = 86,   // (nsCSSValueFloatColor*)
-  eCSSUnit_HSLColor            = 87,   // (nsCSSValueFloatColor*)
-  eCSSUnit_HSLAColor           = 88,   // (nsCSSValueFloatColor*)
+  eCSSUnit_HexColorAlpha       = 85,   // (nscolor) an opaque RGBA value specified as #rrggbbaa
+  eCSSUnit_ShortHexColorAlpha  = 86,   // (nscolor) an opaque RGBA value specified as #rgba
+  eCSSUnit_PercentageRGBColor  = 87,   // (nsCSSValueFloatColor*)
+  eCSSUnit_PercentageRGBAColor = 88,   // (nsCSSValueFloatColor*)
+  eCSSUnit_HSLColor            = 89,   // (nsCSSValueFloatColor*)
+  eCSSUnit_HSLAColor           = 90,   // (nsCSSValueFloatColor*)
 
-  eCSSUnit_Percent      = 90,     // (float) 1.0 == 100%) value is percentage of something
-  eCSSUnit_Number       = 91,     // (float) value is numeric (usually multiplier, different behavior that percent)
+  eCSSUnit_Percent      = 100,     // (float) 1.0 == 100%) value is percentage of something
+  eCSSUnit_Number       = 101,     // (float) value is numeric (usually multiplier, different behavior than percent)
 
   // Physical length units
   eCSSUnit_PhysicalMillimeter = 200,   // (float) 1/25.4 inch
@@ -494,8 +497,10 @@ public:
   //       eCSSUnit_RGBAColor            -- rgba(int,int,int,float)
   //       eCSSUnit_HexColor             -- #rrggbb
   //       eCSSUnit_ShortHexColor        -- #rgb
+  //       eCSSUnit_HexColorAlpha        -- #rrggbbaa
+  //       eCSSUnit_ShortHexColorAlpha   -- #rgba
   //
-  //   - IsFLoatColorUnit returns true for:
+  //   - IsFloatColorUnit returns true for:
   //       eCSSUnit_PercentageRGBColor   -- rgb(%,%,%)
   //       eCSSUnit_PercentageRGBAColor  -- rgba(%,%,%,float)
   //       eCSSUnit_HSLColor             -- hsl(float,%,%)
@@ -509,7 +514,7 @@ public:
   bool IsFloatColorUnit() const { return IsFloatColorUnit(mUnit); }
   bool IsNumericColorUnit() const { return IsNumericColorUnit(mUnit); }
   static bool IsIntegerColorUnit(nsCSSUnit aUnit)
-  { return eCSSUnit_RGBColor <= aUnit && aUnit <= eCSSUnit_ShortHexColor; }
+  { return eCSSUnit_RGBColor <= aUnit && aUnit <= eCSSUnit_ShortHexColorAlpha; }
   static bool IsFloatColorUnit(nsCSSUnit aUnit)
   { return eCSSUnit_PercentageRGBColor <= aUnit &&
            aUnit <= eCSSUnit_HSLAColor; }
@@ -719,8 +724,8 @@ public:
   nsCSSValuePairList* SetPairListValue();
 
   // These take ownership of the passed-in resource.
-  void AdoptListValue(nsCSSValueList*&& aValue);
-  void AdoptPairListValue(nsCSSValuePairList*&& aValue);
+  void AdoptListValue(mozilla::UniquePtr<nsCSSValueList> aValue);
+  void AdoptPairListValue(mozilla::UniquePtr<nsCSSValuePairList> aValue);
 
   void StartImageLoad(nsIDocument* aDocument) const;  // Only pretend const
 

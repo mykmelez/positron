@@ -3139,7 +3139,7 @@ nsLineLayout::TextAlignLine(nsLineBox* aLine,
     textAlignTrue = mStyleText->mTextAlignLastTrue;
     if (mStyleText->mTextAlignLast == NS_STYLE_TEXT_ALIGN_AUTO) {
       if (textAlign == NS_STYLE_TEXT_ALIGN_JUSTIFY) {
-        textAlign = NS_STYLE_TEXT_ALIGN_DEFAULT;
+        textAlign = NS_STYLE_TEXT_ALIGN_START;
       }
     } else {
       textAlign = mStyleText->mTextAlignLast;
@@ -3201,7 +3201,7 @@ nsLineLayout::TextAlignLine(nsLineBox* aLine,
         MOZ_FALLTHROUGH;
       }
 
-      case NS_STYLE_TEXT_ALIGN_DEFAULT:
+      case NS_STYLE_TEXT_ALIGN_START:
         // default alignment is to start edge so do nothing
         break;
 
@@ -3351,15 +3351,17 @@ nsLineLayout::RelativePositionFrames(PerSpanData* psd, nsOverflowAreas& aOverflo
     } else {
       r = pfd->mOverflowAreas;
       if (pfd->mIsTextFrame) {
-        // We need to recompute overflow areas in two cases:
+        // We need to recompute overflow areas in four cases:
         // (1) When PFD_RECOMPUTEOVERFLOW is set due to trimming
         // (2) When there are text decorations, since we can't recompute the
         //     overflow area until Reflow and VerticalAlignLine have finished
         // (3) When there are text emphasis marks, since the marks may be
         //     put further away if the text is inside ruby.
+        // (4) When there are text strokes
         if (pfd->mRecomputeOverflow ||
             frame->StyleContext()->HasTextDecorationLines() ||
-            frame->StyleText()->HasTextEmphasis()) {
+            frame->StyleText()->HasTextEmphasis() ||
+            frame->StyleText()->HasWebkitTextStroke()) {
           nsTextFrame* f = static_cast<nsTextFrame*>(frame);
           r = f->RecomputeOverflow(mBlockReflowState->frame);
         }

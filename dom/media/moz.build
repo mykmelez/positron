@@ -98,6 +98,7 @@ EXPORTS += [
     'Benchmark.h',
     'BufferMediaResource.h',
     'CubebUtils.h',
+    'DecoderDoctorDiagnostics.h',
     'DecoderTraits.h',
     'DOMMediaStream.h',
     'EncodedBufferCache.h',
@@ -107,6 +108,7 @@ EXPORTS += [
     'Intervals.h',
     'Latency.h',
     'MediaCache.h',
+    'MediaCallbackID.h',
     'MediaData.h',
     'MediaDataDemuxer.h',
     'MediaDecoder.h',
@@ -117,6 +119,7 @@ EXPORTS += [
     'MediaFormatReader.h',
     'MediaInfo.h',
     'MediaMetadataManager.h',
+    'MediaPrefs.h',
     'MediaQueue.h',
     'MediaRecorder.h',
     'MediaResource.h',
@@ -134,10 +137,12 @@ EXPORTS += [
     'PrincipalChangeObserver.h',
     'QueueObject.h',
     'RtspMediaResource.h',
+    'SeekJob.h',
     'SeekTarget.h',
+    'SeekTask.h',
     'SelfRef.h',
     'SharedBuffer.h',
-    'StreamBuffer.h',
+    'StreamTracks.h',
     'ThreadPoolCOMListener.h',
     'TimeUnits.h',
     'TrackUnionStream.h',
@@ -206,6 +211,7 @@ UNIFIED_SOURCES += [
     'Benchmark.cpp',
     'CanvasCaptureMediaStream.cpp',
     'CubebUtils.cpp',
+    'DecoderDoctorDiagnostics.cpp',
     'DOMMediaStream.cpp',
     'EncodedBufferCache.cpp',
     'FileBlockCache.cpp',
@@ -214,6 +220,7 @@ UNIFIED_SOURCES += [
     'GraphDriver.cpp',
     'Latency.cpp',
     'MediaCache.cpp',
+    'MediaCallbackID.cpp',
     'MediaData.cpp',
     'MediaDecoder.cpp',
     'MediaDecoderReader.cpp',
@@ -224,6 +231,7 @@ UNIFIED_SOURCES += [
     'MediaFormatReader.cpp',
     'MediaInfo.cpp',
     'MediaManager.cpp',
+    'MediaPrefs.cpp',
     'MediaRecorder.cpp',
     'MediaResource.cpp',
     'MediaShutdownManager.cpp',
@@ -238,7 +246,9 @@ UNIFIED_SOURCES += [
     'MP3FrameParser.cpp',
     'QueueObject.cpp',
     'RtspMediaResource.cpp',
-    'StreamBuffer.cpp',
+    'SeekJob.cpp',
+    'SeekTask.cpp',
+    'StreamTracks.cpp',
     'TextTrack.cpp',
     'TextTrackCue.cpp',
     'TextTrackCueList.cpp',
@@ -327,7 +337,10 @@ include('/ipc/chromium/chromium-config.mozbuild')
 #  - about attributes on forward declarations for types that are already
 #    defined, which complains about an important MOZ_EXPORT for android::AString
 if CONFIG['GNU_CC']:
-  CXXFLAGS += ['-Wno-error=attributes']
+    CXXFLAGS += [
+        '-Wno-error=attributes',
+        '-Wno-error=shadow',
+    ]
 
 if CONFIG['_MSC_VER']:
     # This is intended as a temporary workaround to unblock compilation

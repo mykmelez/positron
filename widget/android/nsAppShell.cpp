@@ -78,7 +78,7 @@ StaticAutoPtr<Mutex> nsAppShell::sAppShellLock;
 
 NS_IMPL_ISUPPORTS_INHERITED(nsAppShell, nsBaseAppShell, nsIObserver)
 
-class ThumbnailRunnable : public nsRunnable {
+class ThumbnailRunnable : public Runnable {
 public:
     ThumbnailRunnable(nsIAndroidBrowserApp* aBrowserApp, int aTabId,
                        const nsTArray<nsIntPoint>& aPoints, RefCountedJavaObject* aBuffer):
@@ -233,12 +233,6 @@ public:
         // of flushing data
         nsIPrefService* prefs = Preferences::GetService();
         if (prefs) {
-            // reset the crash loop state
-            nsCOMPtr<nsIPrefBranch> prefBranch;
-            prefs->GetBranch("browser.sessionstore.", getter_AddRefs(prefBranch));
-            if (prefBranch)
-                prefBranch->SetIntPref("recent_crashes", 0);
-
             prefs->SavePrefFile(nullptr);
         }
     }
@@ -264,6 +258,14 @@ public:
         nsCOMPtr<nsIObserverService> obsServ =
             mozilla::services::GetObserverService();
         obsServ->NotifyObservers(nullptr, "application-foreground", nullptr);
+    }
+
+    static void CreateServices(jni::String::Param aCategory)
+    {
+        nsCString category(aCategory->ToCString());
+
+        NS_CreateServicesFromCategory(
+                category.get(), /* aOrigin */ nullptr, category.get());
     }
 };
 
@@ -683,7 +685,7 @@ nsAppShell::LegacyGeckoEvent::Run()
         const nsTArray<nsIntPoint>& points = curEvent->Points();
         RefCountedJavaObject* buffer = curEvent->ByteBuffer();
         RefPtr<ThumbnailRunnable> sr = new ThumbnailRunnable(nsAppShell::Get()->mBrowserApp, tabId, points, buffer);
-        MessageLoop::current()->PostIdleTask(FROM_HERE, NewRunnableMethod(sr.get(), &ThumbnailRunnable::Run));
+        MessageLoop::current()->PostIdleTask(NewRunnableMethod(sr.get(), &ThumbnailRunnable::Run));
         break;
     }
 
@@ -722,9 +724,8 @@ nsAppShell::LegacyGeckoEvent::Run()
             mozilla::services::GetObserverService();
 
         const NS_ConvertUTF16toUTF8 topic(curEvent->Characters());
-        const nsPromiseFlatString& data = PromiseFlatString(curEvent->CharactersExtra());
 
-        obsServ->NotifyObservers(nullptr, topic.get(), data.get());
+        obsServ->NotifyObservers(nullptr, topic.get(), curEvent->CharactersExtra().get());
         break;
     }
 
@@ -740,8 +741,8 @@ nsAppShell::LegacyGeckoEvent::Run()
             break;
 
         obs->StopSession(
-                nsString(curEvent->Characters()).get(),
-                nsString(curEvent->CharactersExtra()).get(),
+                curEvent->Characters().get(),
+                curEvent->CharactersExtra().get(),
                 curEvent->Time()
                 );
         break;
@@ -759,7 +760,7 @@ nsAppShell::LegacyGeckoEvent::Run()
             break;
 
         obs->StartSession(
-                nsString(curEvent->Characters()).get(),
+                curEvent->Characters().get(),
                 curEvent->Time()
                 );
         break;
@@ -777,10 +778,10 @@ nsAppShell::LegacyGeckoEvent::Run()
             break;
 
         obs->AddEvent(
-                nsString(curEvent->Data()).get(),
-                nsString(curEvent->Characters()).get(),
+                curEvent->Data().get(),
+                curEvent->Characters().get(),
                 curEvent->Time(),
-                nsString(curEvent->CharactersExtra()).get()
+                curEvent->CharactersExtra().get()
                 );
         break;
     }
@@ -821,7 +822,7 @@ nsAppShell::LegacyGeckoEvent::Run()
         nsCOMPtr<nsIURI> visitedURI;
         if (history &&
             NS_SUCCEEDED(NS_NewURI(getter_AddRefs(visitedURI),
-                                   nsString(curEvent->Characters())))) {
+                                   curEvent->Characters()))) {
             history->NotifyVisited(visitedURI);
         }
 #endif
@@ -832,6 +833,12 @@ nsAppShell::LegacyGeckoEvent::Run()
         hal::NotifyNetworkChange(hal::NetworkInformation(curEvent->ConnectionType(),
                                                          curEvent->IsWifi(),
                                                          curEvent->DHCPGateway()));
+        nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
+        if (os) {
+            os->NotifyObservers(nullptr,
+                                NS_NETWORK_LINK_TYPE_TOPIC,
+                                nsString(curEvent->Characters()).get());
+        }
         break;
     }
 
@@ -870,7 +877,7 @@ nsAppShell::LegacyGeckoEvent::Run()
 
         if (observer) {
             observer->Observe(nullptr, NS_ConvertUTF16toUTF8(curEvent->CharactersExtra()).get(),
-                              nsString(curEvent->Data()).get());
+                              curEvent->Data().get());
         } else {
             ALOG("Call_Observer event: Observer was not found!");
         }
@@ -904,7 +911,7 @@ nsAppShell::LegacyGeckoEvent::Run()
         if (os) {
             os->NotifyObservers(nullptr,
                                 NS_NETWORK_LINK_TOPIC,
-                                nsString(curEvent->Characters()).get());
+                                curEvent->Characters().get());
         }
         break;
     }

@@ -401,8 +401,7 @@ static CompositionOp
 OptimalFillOp()
 {
 #ifdef XP_WIN
-    if (gfxWindowsPlatform::GetPlatform()->GetRenderMode() ==
-        gfxWindowsPlatform::RENDER_DIRECT2D) {
+    if (gfxWindowsPlatform::GetPlatform()->IsDirect2DBackend()) {
         // D2D -really- hates operator source.
         return CompositionOp::OP_OVER;
     }
@@ -552,7 +551,8 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
                         Rect aImageRect,
                         const Filter& aFilter,
                         const SurfaceFormat aFormat,
-                        gfxFloat aOpacity)
+                        gfxFloat aOpacity,
+                        ExtendMode aExtendMode)
 {
   gfxSize scaleFactor = aContext->CurrentMatrix().ScaleFactors(true);
   gfxMatrix scaleMatrix = gfxMatrix::Scaling(scaleFactor.width, scaleFactor.height);
@@ -603,7 +603,7 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
 
   scaledDT->SetTransform(ToMatrix(scaleMatrix));
   gfxRect gfxImageRect(aImageRect.x, aImageRect.y, aImageRect.width, aImageRect.height);
-  aDrawable->Draw(tmpCtx, gfxImageRect, ExtendMode::REPEAT, aFilter, 1.0, gfxMatrix());
+  aDrawable->Draw(tmpCtx, gfxImageRect, aExtendMode, aFilter, 1.0, gfxMatrix());
 
   RefPtr<SourceSurface> scaledImage = scaledDT->Snapshot();
 
@@ -619,7 +619,7 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
     DrawOptions drawOptions(aOpacity, aContext->CurrentOp(),
                             aContext->CurrentAntialiasMode());
 
-    SurfacePattern scaledImagePattern(scaledImage, ExtendMode::REPEAT,
+    SurfacePattern scaledImagePattern(scaledImage, aExtendMode,
                                       Matrix(), aFilter);
     destDrawTarget->FillRect(scaledNeededRect, scaledImagePattern, drawOptions);
   }
@@ -670,7 +670,7 @@ gfxUtils::DrawPixelSnapped(gfxContext*         aContext,
 #ifdef MOZ_WIDGET_COCOA
             if (PrescaleAndTileDrawable(aDrawable, aContext, aRegion,
                                         ToRect(imageRect), aFilter,
-                                        aFormat, aOpacity)) {
+                                        aFormat, aOpacity, extendMode)) {
               return;
             }
 #endif
@@ -1500,11 +1500,14 @@ public:
     GetFeatureStatusRunnable(dom::workers::WorkerPrivate* workerPrivate,
                              const nsCOMPtr<nsIGfxInfo>& gfxInfo,
                              int32_t feature,
+                             nsACString& failureId,
                              int32_t* status)
-      : WorkerMainThreadRunnable(workerPrivate)
+      : WorkerMainThreadRunnable(workerPrivate,
+                                 NS_LITERAL_CSTRING("GFX :: GetFeatureStatus"))
       , mGfxInfo(gfxInfo)
       , mFeature(feature)
       , mStatus(status)
+      , mFailureId(failureId)
       , mNSResult(NS_OK)
     {
     }
@@ -1512,7 +1515,7 @@ public:
     bool MainThreadRun() override
     {
       if (mGfxInfo) {
-        mNSResult = mGfxInfo->GetFeatureStatus(mFeature, mStatus);
+        mNSResult = mGfxInfo->GetFeatureStatus(mFeature, mFailureId, mStatus);
       }
       return true;
     }
@@ -1529,18 +1532,22 @@ private:
     nsCOMPtr<nsIGfxInfo> mGfxInfo;
     int32_t mFeature;
     int32_t* mStatus;
+    nsACString& mFailureId;
     nsresult mNSResult;
 };
 
 /* static */ nsresult
 gfxUtils::ThreadSafeGetFeatureStatus(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
-                                     int32_t feature, int32_t* status)
+                                     int32_t feature, nsACString& failureId,
+                                     int32_t* status)
 {
   if (!NS_IsMainThread()) {
     dom::workers::WorkerPrivate* workerPrivate =
       dom::workers::GetCurrentThreadWorkerPrivate();
+
     RefPtr<GetFeatureStatusRunnable> runnable =
-      new GetFeatureStatusRunnable(workerPrivate, gfxInfo, feature, status);
+      new GetFeatureStatusRunnable(workerPrivate, gfxInfo, feature, failureId,
+                                   status);
 
     ErrorResult rv;
     runnable->Dispatch(rv);
@@ -1554,7 +1561,7 @@ gfxUtils::ThreadSafeGetFeatureStatus(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
     return runnable->GetNSResult();
   }
 
-  return gfxInfo->GetFeatureStatus(feature, status);
+  return gfxInfo->GetFeatureStatus(feature, failureId, status);
 }
 
 /* static */ bool

@@ -5,3 +5,6 @@
 pref("browser.dom.window.dump.enabled", true);
 pref("dom.webcomponents.enabled", true);
 pref("javascript.options.showInConsole", true);
+pref("devtools.selfxss.count", 5);
+pref("devtools.debugger.remote-enabled", true);
+pref("devtools.chrome.enabled", true);

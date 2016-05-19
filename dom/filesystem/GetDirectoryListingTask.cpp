@@ -18,8 +18,6 @@
 #include "nsIFile.h"
 #include "nsStringGlue.h"
 
-#define GET_DIRECTORY_LISTING_PERMISSION "read"
-
 namespace mozilla {
 namespace dom {
 
@@ -29,16 +27,18 @@ namespace dom {
 
 /* static */ already_AddRefed<GetDirectoryListingTaskChild>
 GetDirectoryListingTaskChild::Create(FileSystemBase* aFileSystem,
+                                     Directory* aDirectory,
                                      nsIFile* aTargetPath,
-                                     Directory::DirectoryType aType,
                                      const nsAString& aFilters,
                                      ErrorResult& aRv)
 {
   MOZ_ASSERT(aFileSystem);
+  MOZ_ASSERT(aDirectory);
   aFileSystem->AssertIsOnOwningThread();
 
   RefPtr<GetDirectoryListingTaskChild> task =
-    new GetDirectoryListingTaskChild(aFileSystem, aTargetPath, aType, aFilters);
+    new GetDirectoryListingTaskChild(aFileSystem, aDirectory, aTargetPath,
+                                     aFilters);
 
   // aTargetPath can be null. In this case SetError will be called.
 
@@ -58,13 +58,13 @@ GetDirectoryListingTaskChild::Create(FileSystemBase* aFileSystem,
 }
 
 GetDirectoryListingTaskChild::GetDirectoryListingTaskChild(FileSystemBase* aFileSystem,
+                                                           Directory* aDirectory,
                                                            nsIFile* aTargetPath,
-                                                           Directory::DirectoryType aType,
                                                            const nsAString& aFilters)
   : FileSystemTaskChildBase(aFileSystem)
+  , mDirectory(aDirectory)
   , mTargetPath(aTargetPath)
   , mFilters(aFilters)
-  , mType(aType)
 {
   MOZ_ASSERT(aFileSystem);
   aFileSystem->AssertIsOnOwningThread();
@@ -95,7 +95,6 @@ GetDirectoryListingTaskChild::GetRequestParams(const nsString& aSerializedDOMPat
   }
 
   return FileSystemGetDirectoryListingParams(aSerializedDOMPath, path,
-                                             mType == Directory::eDOMRootDirectory,
                                              mFilters);
 }
 
@@ -148,6 +147,15 @@ GetDirectoryListingTaskChild::HandlerCallback()
 
   size_t count = mTargetData.Length();
 
+  nsAutoString directoryPath;
+  ErrorResult error;
+  mDirectory->GetPath(directoryPath, error);
+  if (NS_WARN_IF(error.Failed())) {
+    mPromise->MaybeReject(error.StealNSResult());
+    mPromise = nullptr;
+    return;
+  }
+
   Sequence<OwningFileOrDirectory> listing;
 
   if (!listing.SetLength(count, mozilla::fallible_t())) {
@@ -181,8 +189,7 @@ GetDirectoryListingTaskChild::HandlerCallback()
 
     if (mTargetData[i].mType == Directory::FileOrDirectoryPath::eDirectoryPath) {
       RefPtr<Directory> directory =
-        Directory::Create(mFileSystem->GetParentObject(), path,
-                          Directory::eNotDOMRootDirectory, mFileSystem);
+        Directory::Create(mFileSystem->GetParentObject(), path, mFileSystem);
       MOZ_ASSERT(directory);
 
       // Propogate mFilter onto sub-Directory object:
@@ -195,6 +202,19 @@ GetDirectoryListingTaskChild::HandlerCallback()
         File::CreateFromFile(mFileSystem->GetParentObject(), path);
       MOZ_ASSERT(file);
 
+      nsAutoString filePath;
+      filePath.Assign(directoryPath);
+
+      // This is specific for unix root filesystem.
+      if (!directoryPath.EqualsLiteral(FILESYSTEM_DOM_PATH_SEPARATOR_LITERAL)) {
+        filePath.AppendLiteral(FILESYSTEM_DOM_PATH_SEPARATOR_LITERAL);
+      }
+
+      nsAutoString name;
+      file->GetName(name);
+      filePath.Append(name);
+      file->SetPath(filePath);
+
       listing[i].SetAsFile() = file;
     }
   }
@@ -206,7 +226,7 @@ GetDirectoryListingTaskChild::HandlerCallback()
 void
 GetDirectoryListingTaskChild::GetPermissionAccessType(nsCString& aAccess) const
 {
-  aAccess.AssignLiteral(GET_DIRECTORY_LISTING_PERMISSION);
+  aAccess.AssignLiteral(DIRECTORY_READ_PERMISSION);
 }
 
 /**
@@ -232,8 +252,6 @@ GetDirectoryListingTaskParent::Create(FileSystemBase* aFileSystem,
     return nullptr;
   }
 
-  task->mType = aParam.isRoot()
-                  ? Directory::eDOMRootDirectory : Directory::eNotDOMRootDirectory;
   return task.forget();
 }
 
@@ -293,11 +311,10 @@ GetDirectoryListingTaskParent::IOWork()
   }
 
   if (!exists) {
-    if (mType == Directory::eNotDOMRootDirectory) {
+    if (!mFileSystem->ShouldCreateDirectory()) {
       return NS_ERROR_DOM_FILE_NOT_FOUND_ERR;
     }
 
-    // If the root directory doesn't exit, create it.
     rv = mTargetPath->Create(nsIFile::DIRECTORY_TYPE, 0777);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
@@ -394,7 +411,7 @@ GetDirectoryListingTaskParent::IOWork()
 void
 GetDirectoryListingTaskParent::GetPermissionAccessType(nsCString& aAccess) const
 {
-  aAccess.AssignLiteral(GET_DIRECTORY_LISTING_PERMISSION);
+  aAccess.AssignLiteral(DIRECTORY_READ_PERMISSION);
 }
 
 } // namespace dom

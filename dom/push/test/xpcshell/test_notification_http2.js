@@ -6,12 +6,9 @@
 Cu.import("resource://gre/modules/Services.jsm");
 
 const {PushDB, PushService, PushServiceHttp2} = serviceExports;
-const {base64UrlDecode} = Cu.import('resource://gre/modules/PushCrypto.jsm', {});
 
 var prefs;
 var tlsProfile;
-var pushEnabled;
-var pushConnectionEnabled;
 
 var serverPort = -1;
 
@@ -22,12 +19,12 @@ function run_test() {
   dump("using port " + serverPort + "\n");
 
   do_get_profile();
-  setPrefs();
+  setPrefs({
+    'testing.allowInsecureServerURL': true,
+  });
   prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
 
   tlsProfile = prefs.getBoolPref("network.http.spdy.enforce-tls-profile");
-  pushEnabled = prefs.getBoolPref("dom.push.enabled");
-  pushConnectionEnabled = prefs.getBoolPref("dom.push.connection.enabled");
 
   // Set to allow the cert presented by our H2 server
   var oldPref = prefs.getIntPref("network.http.speculative-parallel-limit");
@@ -42,9 +39,6 @@ function run_test() {
                   Ci.nsICertOverrideService.ERROR_TIME);
 
   prefs.setIntPref("network.http.speculative-parallel-limit", oldPref);
-
-  servicePrefs.set('testing.notifyWorkers', false);
-  servicePrefs.set('testing.notifyAllObservers', true);
 
   run_next_test();
 }
@@ -129,7 +123,9 @@ add_task(function* test_pushNotifications() {
     pushEndpoint: serverURL + '/pushEndpoint4',
     pushReceiptEndpoint: serverURL + '/pushReceiptEndpoint4',
     scope: 'https://example.com/page/4',
-    p256dhPublicKey: base64UrlDecode('BEcvDzkWCrUtjU_wygL98sbQCQrW1lY9irtgGnlCc4B0JJXLCHB9MTM73qD6GZYfL0YOvKo8XLOflh-J4dMGklU'),
+    p256dhPublicKey: ChromeUtils.base64URLDecode('BEcvDzkWCrUtjU_wygL98sbQCQrW1lY9irtgGnlCc4B0JJXLCHB9MTM73qD6GZYfL0YOvKo8XLOflh-J4dMGklU', {
+      padding: "reject",
+    }),
     p256dhPrivateKey: {
       crv: 'P-256',
       d: 'fWi7tZaX0Pk6WnLrjQ3kiRq_g5XStL5pdH4pllNCqXw',
@@ -139,7 +135,9 @@ add_task(function* test_pushNotifications() {
       x: 'Ry8PORYKtS2NT_DKAv3yxtAJCtbWVj2Ku2AaeUJzgHQ',
       y: 'JJXLCHB9MTM73qD6GZYfL0YOvKo8XLOflh-J4dMGklU'
     },
-    authenticationSecret: base64UrlDecode('cwDVC1iwAn8E37mkR3tMSg'),
+    authenticationSecret: ChromeUtils.base64URLDecode('cwDVC1iwAn8E37mkR3tMSg', {
+      padding: "reject",
+    }),
     originAttributes: ChromeUtils.originAttributesToSuffix(
       { appId: Ci.nsIScriptSecurityManager.NO_APP_ID, inIsolatedMozBrowser: false }),
     quota: Infinity,
@@ -152,28 +150,28 @@ add_task(function* test_pushNotifications() {
 
   let notifyPromise = Promise.all([
     promiseObserverNotification(PushServiceComponent.pushTopic, function(subject, data) {
-      var message = subject.QueryInterface(Ci.nsIPushMessage);
+      var message = subject.QueryInterface(Ci.nsIPushMessage).data;
       if (message && (data == "https://example.com/page/1")){
         equal(message.text(), "Some message", "decoded message is incorrect");
         return true;
       }
     }),
     promiseObserverNotification(PushServiceComponent.pushTopic, function(subject, data) {
-      var message = subject.QueryInterface(Ci.nsIPushMessage);
+      var message = subject.QueryInterface(Ci.nsIPushMessage).data;
       if (message && (data == "https://example.com/page/2")){
         equal(message.text(), "Some message", "decoded message is incorrect");
         return true;
       }
     }),
     promiseObserverNotification(PushServiceComponent.pushTopic, function(subject, data) {
-      var message = subject.QueryInterface(Ci.nsIPushMessage);
+      var message = subject.QueryInterface(Ci.nsIPushMessage).data;
       if (message && (data == "https://example.com/page/3")){
         equal(message.text(), "Some message", "decoded message is incorrect");
         return true;
       }
     }),
     promiseObserverNotification(PushServiceComponent.pushTopic, function(subject, data) {
-      var message = subject.QueryInterface(Ci.nsIPushMessage);
+      var message = subject.QueryInterface(Ci.nsIPushMessage).data;
       if (message && (data == "https://example.com/page/4")){
         equal(message.text(), "Yet another message", "decoded message is incorrect");
         return true;
@@ -191,6 +189,4 @@ add_task(function* test_pushNotifications() {
 
 add_task(function* test_complete() {
   prefs.setBoolPref("network.http.spdy.enforce-tls-profile", tlsProfile);
-  prefs.setBoolPref("dom.push.enabled", pushEnabled);
-  prefs.setBoolPref("dom.push.connection.enabled", pushConnectionEnabled);
 });

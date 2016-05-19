@@ -4,6 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 /* eslint no-unused-vars: [2, {"vars": "local"}] */
 /* import-globals-from ../../framework/test/shared-head.js */
+/* import-globals-from ../../commandline/test/helpers.js */
+/* import-globals-from ../../shared/test/test-actor-registry.js */
 "use strict";
 
 // Load the shared-head file first.
@@ -138,6 +140,20 @@ var selectNode = Task.async(function*(selector, inspector, reason="test") {
 });
 
 /**
+ * Set the inspector's current selection to null so that no node is selected
+ *
+ * @param {InspectorPanel} inspector
+ *        The instance of InspectorPanel currently loaded in the toolbox
+ * @return a promise that resolves when the inspector is updated
+ */
+function clearCurrentNodeSelection(inspector) {
+  info("Clearing the current selection");
+  let updated = inspector.once("inspector-updated");
+  inspector.selection.setNodeFront(null);
+  return updated;
+}
+
+/**
  * Open the inspector in a tab with given URL.
  * @param {string} url  The URL to open.
  * @param {String} hostType Optional hostType, as defined in Toolbox.HostType
@@ -210,12 +226,13 @@ var clickOnInspectMenuItem = Task.async(function*(testActor, selector) {
 /**
  * Open the toolbox, with the inspector tool visible, and the one of the sidebar
  * tabs selected.
- * @param {String} id The ID of the sidebar tab to be opened
- * @param {String} hostType Optional hostType, as defined in Toolbox.HostType
+ *
+ * @param {String} id
+ *        The ID of the sidebar tab to be opened
  * @return a promise that resolves when the inspector is ready and the tab is
  * visible and ready
  */
-var openInspectorSidebarTab = Task.async(function*(id, hostType) {
+var openInspectorSidebarTab = Task.async(function* (id) {
   let {toolbox, inspector, testActor} = yield openInspector();
 
   info("Selecting the " + id + " sidebar");
@@ -227,6 +244,66 @@ var openInspectorSidebarTab = Task.async(function*(id, hostType) {
     testActor
   };
 });
+
+/**
+ * Open the toolbox, with the inspector tool visible, and the rule-view
+ * sidebar tab selected.
+ *
+ * @return a promise that resolves when the inspector is ready and the rule view
+ * is visible and ready
+ */
+function openRuleView() {
+  return openInspectorSidebarTab("ruleview").then(data => {
+    return {
+      toolbox: data.toolbox,
+      inspector: data.inspector,
+      testActor: data.testActor,
+      view: data.inspector.ruleview.view
+    };
+  });
+}
+
+/**
+ * Open the toolbox, with the inspector tool visible, and the computed-view
+ * sidebar tab selected.
+ *
+ * @return a promise that resolves when the inspector is ready and the computed
+ * view is visible and ready
+ */
+function openComputedView() {
+  return openInspectorSidebarTab("computedview").then(data => {
+    return {
+      toolbox: data.toolbox,
+      inspector: data.inspector,
+      testActor: data.testActor,
+      view: data.inspector.computedview.view
+    };
+  });
+}
+
+/**
+ * Select the rule view sidebar tab on an already opened inspector panel.
+ *
+ * @param {InspectorPanel} inspector
+ *        The opened inspector panel
+ * @return {CssRuleView} the rule view
+ */
+function selectRuleView(inspector) {
+  inspector.sidebar.select("ruleview");
+  return inspector.ruleview.view;
+}
+
+/**
+ * Select the computed view sidebar tab on an already opened inspector panel.
+ *
+ * @param {InspectorPanel} inspector
+ *        The opened inspector panel
+ * @return {CssComputedView} the computed view
+ */
+function selectComputedView(inspector) {
+  inspector.sidebar.select("computedview");
+  return inspector.computedview.view;
+}
 
 /**
  * Get the NodeFront for a node that matches a given css selector, via the
@@ -268,7 +345,9 @@ var focusSearchBoxUsingShortcut = Task.async(function* (panelWin, callback) {
   let focused = once(searchBox, "focus");
 
   panelWin.focus();
-  synthesizeKeyFromKeyTag(panelWin.document.getElementById("nodeSearchKey"));
+  let strings = Services.strings.createBundle(
+    "chrome://devtools/locale/inspector.properties");
+  synthesizeKeyShortcut(strings.GetStringFromName("inspector.searchHTML.key"));
 
   yield focused;
 
@@ -361,7 +440,7 @@ function mouseLeaveMarkupView(inspector) {
   let btn = inspector.toolbox.doc.querySelector("#toolbox-controls");
 
   EventUtils.synthesizeMouseAtCenter(btn, {type: "mousemove"},
-    inspector.toolbox.doc.defaultView);
+    inspector.toolbox.win);
   executeSoon(def.resolve);
 
   return def.promise;
@@ -654,4 +733,81 @@ function waitForClipboard(setup, expected) {
   let def = promise.defer();
   SimpleTest.waitForClipboard(expected, setup, def.resolve, def.reject);
   return def.promise;
+}
+
+/**
+ * Checks if document's active element is within the given element.
+ * @param  {HTMLDocument}  doc document with active element in question
+ * @param  {DOMNode}       container element tested on focus containment
+ * @return {Boolean}
+ */
+function containsFocus(doc, container) {
+  let elm = doc.activeElement;
+  while (elm) {
+    if (elm === container) {
+      return true;
+    }
+    elm = elm.parentNode;
+  }
+  return false;
+}
+
+/**
+ * Listen for a new tab to open and return a promise that resolves when one
+ * does and completes the load event.
+ *
+ * @return a promise that resolves to the tab object
+ */
+var waitForTab = Task.async(function*() {
+  info("Waiting for a tab to open");
+  yield once(gBrowser.tabContainer, "TabOpen");
+  let tab = gBrowser.selectedTab;
+  let browser = tab.linkedBrowser;
+  yield once(browser, "load", true);
+  info("The tab load completed");
+  return tab;
+});
+
+/**
+ * Simulate the key input for the given input in the window.
+ *
+ * @param {String} input
+ *        The string value to input
+ * @param {Window} win
+ *        The window containing the panel
+ */
+function synthesizeKeys(input, win) {
+  for (let key of input.split("")) {
+    EventUtils.synthesizeKey(key, {}, win);
+  }
+}
+
+/**
+ * Given a tooltip object instance (see Tooltip.js), checks if it is set to
+ * toggle and hover and if so, checks if the given target is a valid hover
+ * target. This won't actually show the tooltip (the less we interact with XUL
+ * panels during test runs, the better).
+ *
+ * @return a promise that resolves when the answer is known
+ */
+function isHoverTooltipTarget(tooltip, target) {
+  if (!tooltip._toggle._baseNode || !tooltip.panel) {
+    return promise.reject(new Error(
+      "The tooltip passed isn't set to toggle on hover or is not a tooltip"));
+  }
+  return tooltip._toggle.isValidHoverTarget(target);
+}
+
+/**
+ * Same as isHoverTooltipTarget except that it will fail the test if there is no
+ * tooltip defined on hover of the given element
+ *
+ * @return a promise
+ */
+function assertHoverTooltipOn(tooltip, element) {
+  return isHoverTooltipTarget(tooltip, element).then(() => {
+    ok(true, "A tooltip is defined on hover of the given element");
+  }, () => {
+    ok(false, "No tooltip is defined on hover of the given element");
+  });
 }

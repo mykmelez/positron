@@ -185,12 +185,13 @@ EventSource::Init(nsISupports* aOwner,
                   const nsAString& aURL,
                   bool aWithCredentials)
 {
-  if (mReadyState != CONNECTING || !PrefEnabled()) {
+  if (mReadyState != CONNECTING) {
     return NS_ERROR_DOM_SECURITY_ERR;
   }
 
   nsCOMPtr<nsIScriptGlobalObject> sgo = do_QueryInterface(aOwner);
   NS_ENSURE_STATE(sgo);
+  // XXXbz why are we checking this?  This doesn't match anything in the spec.
   nsCOMPtr<nsIScriptContext> scriptContext = sgo->GetContext();
   NS_ENSURE_STATE(scriptContext);
 
@@ -213,19 +214,13 @@ EventSource::Init(nsISupports* aOwner,
   // Get the load group for the page. When requesting we'll add ourselves to it.
   // This way any pending requests will be automatically aborted if the user
   // leaves the page.
-  nsresult rv;
-  nsIScriptContext* sc = GetContextForEventHandlers(&rv);
-  if (sc) {
-    nsCOMPtr<nsIDocument> doc =
-      nsContentUtils::GetDocumentFromScriptContext(sc);
-    if (doc) {
-      mLoadGroup = doc->GetDocumentLoadGroup();
-    }
+  nsCOMPtr<nsIDocument> doc = GetDocumentIfCurrent();
+  if (doc) {
+    mLoadGroup = doc->GetDocumentLoadGroup();
   }
-
   // get the src
   nsCOMPtr<nsIURI> baseURI;
-  rv = GetBaseURI(getter_AddRefs(baseURI));
+  nsresult rv = GetBaseURI(getter_AddRefs(baseURI));
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIURI> srcURI;
@@ -369,11 +364,7 @@ EventSource::OnStartRequest(nsIRequest *aRequest,
     return NS_ERROR_ABORT;
   }
 
-  nsCOMPtr<nsIRunnable> event =
-    NS_NewRunnableMethod(this, &EventSource::AnnounceConnection);
-  NS_ENSURE_STATE(event);
-
-  rv = NS_DispatchToMainThread(event);
+  rv = NS_DispatchToMainThread(NewRunnableMethod(this, &EventSource::AnnounceConnection));
   NS_ENSURE_SUCCESS(rv, rv);
 
   mStatus = PARSE_STATE_BEGIN_OF_STREAM;
@@ -479,11 +470,7 @@ EventSource::OnStopRequest(nsIRequest *aRequest,
 
   ClearFields();
 
-  nsCOMPtr<nsIRunnable> event =
-    NS_NewRunnableMethod(this, &EventSource::ReestablishConnection);
-  NS_ENSURE_STATE(event);
-
-  rv = NS_DispatchToMainThread(event);
+  rv = NS_DispatchToMainThread(NewRunnableMethod(this, &EventSource::ReestablishConnection));
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -526,8 +513,9 @@ EventSource::AsyncOnChannelRedirect(nsIChannel *aOldChannel,
   mHttpChannel = do_QueryInterface(aNewChannel);
   NS_ENSURE_STATE(mHttpChannel);
 
-  rv = SetupHttpChannel();
-  NS_ENSURE_SUCCESS(rv, rv);
+  SetupHttpChannel();
+  // The HTTP impl already copies over the referrer and referrer policy on
+  // redirects, so we don't need to SetupReferrerPolicy().
 
   if ((aFlags & nsIChannelEventSink::REDIRECT_PERMANENT) != 0) {
     rv = NS_GetFinalChannelURI(mHttpChannel, getter_AddRefs(mSrc));
@@ -576,13 +564,6 @@ EventSource::GetInterface(const nsIID & aIID,
   return QueryInterface(aIID, aResult);
 }
 
-// static
-bool
-EventSource::PrefEnabled(JSContext* aCx, JSObject* aGlobal)
-{
-  return Preferences::GetBool("dom.server-events.enabled", false);
-}
-
 nsresult
 EventSource::GetBaseURI(nsIURI **aBaseURI)
 {
@@ -593,17 +574,14 @@ EventSource::GetBaseURI(nsIURI **aBaseURI)
   nsCOMPtr<nsIURI> baseURI;
 
   // first we try from document->GetBaseURI()
-  nsresult rv;
-  nsIScriptContext* sc = GetContextForEventHandlers(&rv);
-  nsCOMPtr<nsIDocument> doc =
-    nsContentUtils::GetDocumentFromScriptContext(sc);
+  nsCOMPtr<nsIDocument> doc = GetDocumentIfCurrent();
   if (doc) {
     baseURI = doc->GetBaseURI();
   }
 
   // otherwise we get from the doc's principal
   if (!baseURI) {
-    rv = mPrincipal->GetURI(getter_AddRefs(baseURI));
+    nsresult rv = mPrincipal->GetURI(getter_AddRefs(baseURI));
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -613,18 +591,7 @@ EventSource::GetBaseURI(nsIURI **aBaseURI)
   return NS_OK;
 }
 
-net::ReferrerPolicy
-EventSource::GetReferrerPolicy()
-{
-  nsresult rv;
-  nsIScriptContext* sc = GetContextForEventHandlers(&rv);
-  NS_ENSURE_SUCCESS(rv, mozilla::net::RP_Default);
-
-  nsCOMPtr<nsIDocument> doc = nsContentUtils::GetDocumentFromScriptContext(sc);
-  return doc ? doc->GetReferrerPolicy() : mozilla::net::RP_Default;
-}
-
-nsresult
+void
 EventSource::SetupHttpChannel()
 {
   mHttpChannel->SetRequestMethod(NS_LITERAL_CSTRING("GET"));
@@ -640,11 +607,15 @@ EventSource::SetupHttpChannel()
     mHttpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Last-Event-ID"),
       NS_ConvertUTF16toUTF8(mLastEventID), false);
   }
+}
 
-  nsCOMPtr<nsIURI> codebase;
-  nsresult rv = GetBaseURI(getter_AddRefs(codebase));
-  if (NS_SUCCEEDED(rv)) {
-    rv = mHttpChannel->SetReferrerWithPolicy(codebase, this->GetReferrerPolicy());
+nsresult
+EventSource::SetupReferrerPolicy()
+{
+  nsCOMPtr<nsIDocument> doc = GetDocumentIfCurrent();
+  if (doc) {
+    nsresult rv = mHttpChannel->SetReferrerWithPolicy(doc->GetDocumentURI(),
+                                                      doc->GetReferrerPolicy());
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
@@ -671,9 +642,7 @@ EventSource::InitChannelAndRequestEventSource()
   nsLoadFlags loadFlags;
   loadFlags = nsIRequest::LOAD_BACKGROUND | nsIRequest::LOAD_BYPASS_CACHE;
 
-  nsIScriptContext* sc = GetContextForEventHandlers(&rv);
-  nsCOMPtr<nsIDocument> doc =
-    nsContentUtils::GetDocumentFromScriptContext(sc);
+  nsCOMPtr<nsIDocument> doc = GetDocumentIfCurrent();
 
   nsSecurityFlags securityFlags =
     nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS;
@@ -710,7 +679,8 @@ EventSource::InitChannelAndRequestEventSource()
   mHttpChannel = do_QueryInterface(channel);
   NS_ENSURE_TRUE(mHttpChannel, NS_ERROR_NO_INTERFACE);
 
-  rv = SetupHttpChannel();
+  SetupHttpChannel();
+  rv = SetupReferrerPolicy();
   NS_ENSURE_SUCCESS(rv, rv);
 
 #ifdef DEBUG
@@ -922,11 +892,8 @@ EventSource::ConsoleError()
 nsresult
 EventSource::DispatchFailConnection()
 {
-  nsCOMPtr<nsIRunnable> event =
-    NS_NewRunnableMethod(this, &EventSource::FailConnection);
-  NS_ENSURE_STATE(event);
 
-  return NS_DispatchToMainThread(event);
+  return NS_DispatchToMainThread(NewRunnableMethod(this, &EventSource::FailConnection));
 }
 
 void
@@ -1000,7 +967,7 @@ EventSource::Thaw()
   nsresult rv;
   if (!mGoingToDispatchAllMessages && mMessagesToDispatch.GetSize() > 0) {
     nsCOMPtr<nsIRunnable> event =
-      NS_NewRunnableMethod(this, &EventSource::DispatchAllMessageEvents);
+      NewRunnableMethod(this, &EventSource::DispatchAllMessageEvents);
     NS_ENSURE_STATE(event);
 
     mGoingToDispatchAllMessages = true;
@@ -1060,7 +1027,7 @@ EventSource::DispatchCurrentMessageEvent()
 
   if (!mGoingToDispatchAllMessages) {
     nsCOMPtr<nsIRunnable> event =
-      NS_NewRunnableMethod(this, &EventSource::DispatchAllMessageEvents);
+      NewRunnableMethod(this, &EventSource::DispatchAllMessageEvents);
     NS_ENSURE_STATE(event);
 
     mGoingToDispatchAllMessages = true;

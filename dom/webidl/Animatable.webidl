@@ -20,8 +20,8 @@ dictionary AnimationFilter {
 
 [NoInterfaceObject]
 interface Animatable {
-  [Func="nsDocument::IsWebAnimationsEnabled", Throws]
-  Animation animate(object? frames,
+  [Func="nsDocument::IsElementAnimateEnabled", Throws]
+  Animation animate(object? keyframes,
                     optional (unrestricted double or KeyframeAnimationOptions)
                       options);
   [Func="nsDocument::IsWebAnimationsEnabled"]

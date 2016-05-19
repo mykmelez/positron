@@ -9,6 +9,7 @@ import static org.mozilla.gecko.db.URLMetadataTable.TILE_COLOR_COLUMN;
 import static org.mozilla.gecko.db.URLMetadataTable.TILE_IMAGE_URL_COLUMN;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -215,7 +216,13 @@ public class TopSitesPanel extends HomeFragment {
                         } else {
                             method = TelemetryContract.Method.GRID_ITEM;
                         }
-                        Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, method, Integer.toString(position));
+
+                        String extra = Integer.toString(position);
+                        if (type == TopSites.TYPE_PINNED) {
+                            extra += "-pinned";
+                        }
+
+                        Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, method, extra);
 
                         mUrlOpenListener.onUrlOpen(url, EnumSet.noneOf(OnUrlOpenListener.Flags.class));
                     }
@@ -635,9 +642,6 @@ public class TopSitesPanel extends HomeFragment {
                 return;
             }
 
-            // Otherwise, do this until the async lookup returns.
-            view.displayThumbnail(R.drawable.favicon_globe);
-
             // Give each side enough information to shake hands later.
             listener.setLoadId(loadId);
             view.setLoadId(loadId);
@@ -782,16 +786,18 @@ public class TopSitesPanel extends HomeFragment {
     /**
      * An AsyncTaskLoader to load the thumbnails from a cursor.
      */
-    @SuppressWarnings("serial")
     static class ThumbnailsLoader extends AsyncTaskLoader<Map<String, ThumbnailInfo>> {
         private final BrowserDB mDB;
         private Map<String, ThumbnailInfo> mThumbnailInfos;
         private final ArrayList<String> mUrls;
 
-        private static final ArrayList<String> COLUMNS = new ArrayList<String>() {{
-            add(TILE_IMAGE_URL_COLUMN);
-            add(TILE_COLOR_COLUMN);
-        }};
+        private static final List<String> COLUMNS;
+        static {
+            final ArrayList<String> tempColumns = new ArrayList<>(2);
+            tempColumns.add(TILE_IMAGE_URL_COLUMN);
+            tempColumns.add(TILE_COLOR_COLUMN);
+            COLUMNS = Collections.unmodifiableList(tempColumns);
+        }
 
         public ThumbnailsLoader(Context context, ArrayList<String> urls) {
             super(context);

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include "WMFVideoMFTManager.h"
 #include "MediaDecoderReader.h"
+#include "MediaPrefs.h"
 #include "WMFUtils.h"
 #include "ImageContainer.h"
 #include "VideoUtils.h"
@@ -15,12 +16,12 @@
 #include "Layers.h"
 #include "mozilla/layers/LayersTypes.h"
 #include "MediaInfo.h"
+#include "MediaPrefs.h"
 #include "mozilla/Logging.h"
 #include "gfx2DGlue.h"
 #include "gfxWindowsPlatform.h"
 #include "IMFYCbCrImage.h"
 #include "mozilla/WindowsVersion.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "nsPrintfCString.h"
 #include "MediaTelemetryConstants.h"
@@ -77,6 +78,7 @@ WMFVideoMFTManager::WMFVideoMFTManager(
                             bool aDXVAEnabled)
   : mVideoInfo(aConfig)
   , mVideoStride(0)
+  , mImageSize(aConfig.mImage)
   , mImageContainer(aImageContainer)
   , mDXVAEnabled(aDXVAEnabled)
   , mLayersBackend(aLayersBackend)
@@ -148,7 +150,7 @@ WMFVideoMFTManager::GetMediaSubtypeGUID()
   };
 }
 
-class CreateDXVAManagerEvent : public nsRunnable {
+class CreateDXVAManagerEvent : public Runnable {
 public:
   CreateDXVAManagerEvent(LayersBackend aBackend, nsCString& aFailureReason)
     : mBackend(aBackend)
@@ -160,8 +162,7 @@ public:
     nsACString* failureReason = &mFailureReason;
     nsCString secondFailureReason;
     if (mBackend == LayersBackend::LAYERS_D3D11 &&
-        Preferences::GetBool("media.windows-media-foundation.allow-d3d11-dxva", true) &&
-        IsWin8OrLater()) {
+        MediaPrefs::PDMWMFAllowD3D11() && IsWin8OrLater()) {
       mDXVA2Manager = DXVA2Manager::CreateD3D11DXVA(*failureReason);
       if (mDXVA2Manager) {
         return NS_OK;
@@ -234,7 +235,8 @@ bool
 WMFVideoMFTManager::InitInternal(bool aForceD3D9)
 {
   mUseHwAccel = false; // default value; changed if D3D setup succeeds.
-  bool useDxva = InitializeDXVA(aForceD3D9);
+  bool useDxva = InitializeDXVA(aForceD3D9 ||
+                                mStreamType == VP8 || mStreamType == VP9);
 
   RefPtr<MFTDecoder> decoder(new MFTDecoder());
 
@@ -247,7 +249,7 @@ WMFVideoMFTManager::InitInternal(bool aForceD3D9)
     attr->GetUINT32(MF_SA_D3D_AWARE, &aware);
     attr->SetUINT32(CODECAPI_AVDecNumWorkerThreads,
       WMFDecoderModule::GetNumDecoderThreads());
-    if (WMFDecoderModule::LowLatencyMFTEnabled()) {
+    if (MediaPrefs::PDMWMFLowLatencyEnabled()) {
       hr = attr->SetUINT32(CODECAPI_AVLowLatencyMode, TRUE);
       if (SUCCEEDED(hr)) {
         LOG("Enabling Low Latency Mode");
@@ -401,14 +403,17 @@ WMFVideoMFTManager::ConfigureVideoFrameGeometry()
   NS_ENSURE_TRUE(videoFormat == MFVideoFormat_NV12 || !mUseHwAccel, E_FAIL);
   NS_ENSURE_TRUE(videoFormat == MFVideoFormat_YV12 || mUseHwAccel, E_FAIL);
 
-  UINT32 width = mVideoInfo.mImage.width;
-  UINT32 height = mVideoInfo.mImage.height;
-  nsIntRect pictureRegion = mVideoInfo.mImage;
+  nsIntRect pictureRegion;
+  hr = GetPictureRegion(mediaType, pictureRegion);
+  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+
+  UINT32 width = pictureRegion.width;
+  UINT32 height = pictureRegion.height;
+  mImageSize = nsIntSize(width, height);
   // Calculate and validate the picture region and frame dimensions after
   // scaling by the pixel aspect ratio.
-  nsIntSize frameSize = nsIntSize(width, height);
-  nsIntSize displaySize = nsIntSize(mVideoInfo.mDisplay.width, mVideoInfo.mDisplay.height);
-  if (!IsValidVideoRegion(frameSize, pictureRegion, displaySize)) {
+  pictureRegion = mVideoInfo.ScaledImageRect(width, height);
+  if (!IsValidVideoRegion(mImageSize, pictureRegion, mVideoInfo.mDisplay)) {
     // Video track's frame sizes will overflow. Ignore the video track.
     return E_FAIL;
   }
@@ -467,8 +472,8 @@ WMFVideoMFTManager::CreateBasicVideoFrame(IMFSample* aSample,
   // i.e., Y, then V, then U.
   VideoData::YCbCrBuffer b;
 
-  uint32_t videoWidth = mVideoInfo.mImage.width;
-  uint32_t videoHeight = mVideoInfo.mImage.height;
+  uint32_t videoWidth = mImageSize.width;
+  uint32_t videoHeight = mImageSize.height;
 
   // Y (Y') plane
   b.mPlanes[0].mData = data;
@@ -514,10 +519,11 @@ WMFVideoMFTManager::CreateBasicVideoFrame(IMFSample* aSample,
   RefPtr<layers::PlanarYCbCrImage> image =
     new IMFYCbCrImage(buffer, twoDBuffer);
 
+  nsIntRect pictureRegion = mVideoInfo.ScaledImageRect(videoWidth, videoHeight);
   VideoData::SetVideoDataToImage(image,
                                  mVideoInfo,
                                  b,
-                                 mVideoInfo.mImage,
+                                 pictureRegion,
                                  false);
 
   RefPtr<VideoData> v =
@@ -529,7 +535,7 @@ WMFVideoMFTManager::CreateBasicVideoFrame(IMFSample* aSample,
                                image.forget(),
                                false,
                                -1,
-                               mVideoInfo.mImage);
+                               pictureRegion);
 
   v.forget(aOutVideoData);
   return S_OK;
@@ -548,9 +554,11 @@ WMFVideoMFTManager::CreateD3DVideoFrame(IMFSample* aSample,
   *aOutVideoData = nullptr;
   HRESULT hr;
 
+  nsIntRect pictureRegion =
+    mVideoInfo.ScaledImageRect(mImageSize.width, mImageSize.height);
   RefPtr<Image> image;
   hr = mDXVA2Manager->CopyToImage(aSample,
-                                  mVideoInfo.mImage,
+                                  pictureRegion,
                                   mImageContainer,
                                   getter_AddRefs(image));
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
@@ -561,14 +569,14 @@ WMFVideoMFTManager::CreateD3DVideoFrame(IMFSample* aSample,
   media::TimeUnit duration = GetSampleDuration(aSample);
   NS_ENSURE_TRUE(duration.IsValid(), E_FAIL);
   RefPtr<VideoData> v = VideoData::CreateFromImage(mVideoInfo,
-                                                     mImageContainer,
-                                                     aStreamOffset,
-                                                     pts.ToMicroseconds(),
-                                                     duration.ToMicroseconds(),
-                                                     image.forget(),
-                                                     false,
-                                                     -1,
-                                                     mVideoInfo.mImage);
+                                                   mImageContainer,
+                                                   aStreamOffset,
+                                                   pts.ToMicroseconds(),
+                                                   duration.ToMicroseconds(),
+                                                   image.forget(),
+                                                   false,
+                                                   -1,
+                                                   pictureRegion);
 
   NS_ENSURE_TRUE(v, E_FAIL);
   v.forget(aOutVideoData);
@@ -683,6 +691,7 @@ WMFVideoMFTManager::ConfigurationChanged(const TrackInfo& aConfig)
 {
   MOZ_ASSERT(aConfig.GetAsVideoInfo());
   mVideoInfo = *aConfig.GetAsVideoInfo();
+  mImageSize = mVideoInfo.mImage;
 }
 
 } // namespace mozilla

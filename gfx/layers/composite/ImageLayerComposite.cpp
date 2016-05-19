@@ -106,7 +106,7 @@ ImageLayerComposite::RenderLayer(const IntRect& aClipRect)
   mCompositor->MakeCurrent();
 
   RenderWithAllMasks(this, mCompositor, aClipRect,
-                     [&](EffectChain& effectChain, const Rect& clipRect) {
+                     [&](EffectChain& effectChain, const IntRect& clipRect) {
     mImageHost->SetCompositor(mCompositor);
     mImageHost->Composite(this, effectChain,
                           GetEffectiveOpacity(),
@@ -166,6 +166,23 @@ ImageLayerComposite::IsOpaque()
     return mImageHost->IsOpaque();
   }
   return false;
+}
+
+nsIntRegion
+ImageLayerComposite::GetFullyRenderedRegion()
+{
+  if (!mImageHost ||
+      !mImageHost->IsAttached()) {
+    return GetShadowVisibleRegion().ToUnknownRegion();
+  }
+
+  if (mScaleMode == ScaleMode::STRETCH) {
+    nsIntRegion shadowVisibleRegion;
+    shadowVisibleRegion.And(GetShadowVisibleRegion().ToUnknownRegion(), nsIntRegion(gfx::IntRect(0, 0, mScaleToSize.width, mScaleToSize.height)));
+    return shadowVisibleRegion;
+  }
+
+  return GetShadowVisibleRegion().ToUnknownRegion();
 }
 
 CompositableHost*

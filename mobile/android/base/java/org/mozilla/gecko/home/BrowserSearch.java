@@ -736,7 +736,8 @@ public class BrowserSearch extends HomeFragment
     }
 
     private void ensureSuggestClientIsSet(final String suggestTemplate) {
-        if (mSuggestClient != null) {
+        // Don't update the suggestClient if we already have a client with the correct template
+        if (mSuggestClient != null && suggestTemplate.equals(mSuggestClient.getSuggestTemplate())) {
             return;
         }
 
@@ -990,7 +991,7 @@ public class BrowserSearch extends HomeFragment
             // search term  can occur if the user has previously searched for the same thing.
             final int maxSavedSuggestions = NETWORK_SUGGESTION_MAX + 1 + getContext().getResources().getInteger(R.integer.max_saved_suggestions);
 
-            final String sortOrderAndLimit = BrowserContract.SearchHistory.DATE +" DESC LIMIT " + maxSavedSuggestions;
+            final String sortOrderAndLimit = BrowserContract.SearchHistory.DATE + " DESC LIMIT " + maxSavedSuggestions;
             final Cursor result =  cr.query(BrowserContract.SearchHistory.CONTENT_URI, columns, actualQuery, queryArgs, sortOrderAndLimit);
 
             if (result == null) {

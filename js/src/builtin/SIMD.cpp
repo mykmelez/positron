@@ -173,12 +173,16 @@ js::ToSimdConstant(JSContext* cx, HandleValue v, jit::SimdConstant* out)
         return ErrorWrongTypeArg(cx, 1, typeDescr);
 
     Elem* mem = reinterpret_cast<Elem*>(v.toObject().as<TypedObject>().typedMem());
-    *out = jit::SimdConstant::CreateX4(mem);
+    *out = jit::SimdConstant::CreateSimd128(mem);
     return true;
 }
 
+template bool js::ToSimdConstant<Int8x16>(JSContext* cx, HandleValue v, jit::SimdConstant* out);
+template bool js::ToSimdConstant<Int16x8>(JSContext* cx, HandleValue v, jit::SimdConstant* out);
 template bool js::ToSimdConstant<Int32x4>(JSContext* cx, HandleValue v, jit::SimdConstant* out);
 template bool js::ToSimdConstant<Float32x4>(JSContext* cx, HandleValue v, jit::SimdConstant* out);
+template bool js::ToSimdConstant<Bool8x16>(JSContext* cx, HandleValue v, jit::SimdConstant* out);
+template bool js::ToSimdConstant<Bool16x8>(JSContext* cx, HandleValue v, jit::SimdConstant* out);
 template bool js::ToSimdConstant<Bool32x4>(JSContext* cx, HandleValue v, jit::SimdConstant* out);
 
 template<typename Elem>
@@ -405,9 +409,6 @@ SimdTypeDescr::call(JSContext* cx, unsigned argc, Value* vp)
     CallArgs args = CallArgsFromVp(argc, vp);
 
     Rooted<SimdTypeDescr*> descr(cx, &args.callee().as<SimdTypeDescr>());
-    MOZ_ASSERT(size_t(static_cast<TypeDescr*>(descr)->size()) <= InlineTypedObject::MaximumSize,
-               "inline storage is needed for using InternalHandle belows");
-
     Rooted<TypedObject*> result(cx, TypedObject::createZeroed(cx, descr, 0));
     if (!result)
         return false;

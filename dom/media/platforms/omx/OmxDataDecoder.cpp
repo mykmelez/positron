@@ -114,9 +114,7 @@ OmxDataDecoder::OmxDataDecoder(const TrackInfo& aTrackInfo,
   LOG("");
   mOmxLayer = new OmxPromiseLayer(mOmxTaskQueue, this, aImageContainer);
 
-  nsCOMPtr<nsIRunnable> r =
-    NS_NewRunnableMethod(this, &OmxDataDecoder::InitializationTask);
-  mOmxTaskQueue->Dispatch(r.forget());
+  mOmxTaskQueue->Dispatch(NewRunnableMethod(this, &OmxDataDecoder::InitializationTask));
 }
 
 OmxDataDecoder::~OmxDataDecoder()
@@ -209,9 +207,7 @@ OmxDataDecoder::Flush()
 
   mFlushing = true;
 
-  nsCOMPtr<nsIRunnable> r =
-    NS_NewRunnableMethod(this, &OmxDataDecoder::DoFlush);
-  mOmxTaskQueue->Dispatch(r.forget());
+  mOmxTaskQueue->Dispatch(NewRunnableMethod(this, &OmxDataDecoder::DoFlush));
 
   // According to the definition of Flush() in PDM:
   // "the decoder must be ready to accept new input for decoding".
@@ -229,9 +225,7 @@ OmxDataDecoder::Drain()
 {
   LOG("");
 
-  nsCOMPtr<nsIRunnable> r =
-    NS_NewRunnableMethod(this, &OmxDataDecoder::SendEosBuffer);
-  mOmxTaskQueue->Dispatch(r.forget());
+  mOmxTaskQueue->Dispatch(NewRunnableMethod(this, &OmxDataDecoder::SendEosBuffer));
 
   return NS_OK;
 }
@@ -243,9 +237,7 @@ OmxDataDecoder::Shutdown()
 
   mShuttingDown = true;
 
-  nsCOMPtr<nsIRunnable> r =
-    NS_NewRunnableMethod(this, &OmxDataDecoder::DoAsyncShutdown);
-  mOmxTaskQueue->Dispatch(r.forget());
+  mOmxTaskQueue->Dispatch(NewRunnableMethod(this, &OmxDataDecoder::DoAsyncShutdown));
 
   {
     // DoAsyncShutdown() will be running for a while, it could be still running
@@ -1027,9 +1019,7 @@ MediaDataHelper::CreateYUV420VideoData(BufferData* aBufferData)
   b.mPlanes[2].mOffset = 0;
   b.mPlanes[2].mSkip = 0;
 
-  VideoInfo info;
-  info.mDisplay = mTrackInfo->GetAsVideoInfo()->mDisplay;
-  info.mImage = mTrackInfo->GetAsVideoInfo()->mImage;
+  VideoInfo info(*mTrackInfo->GetAsVideoInfo());
   RefPtr<VideoData> data = VideoData::Create(info,
                                              mImageContainer,
                                              0, // Filled later by caller.
@@ -1038,7 +1028,7 @@ MediaDataHelper::CreateYUV420VideoData(BufferData* aBufferData)
                                              b,
                                              0, // Filled later by caller.
                                              -1,
-                                             info.mImage);
+                                             info.ImageRect());
 
   LOG("YUV420 VideoData: disp width %d, height %d, pic width %d, height %d, time %ld",
       info.mDisplay.width, info.mDisplay.height, info.mImage.width,

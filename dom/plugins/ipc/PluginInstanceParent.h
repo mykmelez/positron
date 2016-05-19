@@ -25,6 +25,7 @@
 #include "PluginDataResolver.h"
 
 #include "mozilla/unused.h"
+#include "mozilla/EventForwards.h"
 
 class gfxASurface;
 class gfxContext;
@@ -356,6 +357,14 @@ public:
     virtual bool
     RecvRequestCommitOrCancel(const bool& aCommitted) override;
 
+    // for reserved shortcut key handling with windowed plugin on Windows
+    nsresult HandledWindowedPluginKeyEvent(
+      const mozilla::NativeEventData& aKeyEventData,
+      bool aIsConsumed);
+    virtual bool
+    RecvOnWindowedPluginKeyEvent(
+      const mozilla::NativeEventData& aKeyEventData) override;
+
 private:
     // Create an appropriate platform surface for a background of size
     // |aSize|.  Return true if successful.
@@ -465,7 +474,7 @@ private:
     void CancelScheduledScrollCapture();
 
     RefPtr<gfxASurface> mScrollCapture;
-    CancelableTask* mCaptureRefreshTask;
+    RefPtr<CancelableRunnable> mCaptureRefreshTask;
     bool mValidFirstCapture;
     bool mIsScrolling;
 #endif

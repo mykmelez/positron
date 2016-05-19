@@ -18,9 +18,6 @@ const VIEWPORT_MIN_WIDTH = Constants.MIN_VIEWPORT_DIMENSION;
 const VIEWPORT_MIN_HEIGHT = Constants.MIN_VIEWPORT_DIMENSION;
 
 module.exports = createClass({
-
-  displayName: "ResizableViewport",
-
   propTypes: {
     devices: PropTypes.shape(Types.devices).isRequired,
     location: Types.location.isRequired,
@@ -31,7 +28,10 @@ module.exports = createClass({
     onContentResize: PropTypes.func.isRequired,
     onResizeViewport: PropTypes.func.isRequired,
     onRotateViewport: PropTypes.func.isRequired,
+    onUpdateDeviceModalOpen: PropTypes.func.isRequired,
   },
+
+  displayName: "ResizableViewport",
 
   getInitialState() {
     return {
@@ -75,8 +75,10 @@ module.exports = createClass({
     }
 
     let { lastClientX, lastClientY, ignoreX, ignoreY } = this.state;
-    let deltaX = clientX - lastClientX;
-    let deltaY = clientY - lastClientY;
+    // the viewport is centered horizontally, so horizontal resize resizes
+    // by twice the distance the mouse was dragged - on left and right side.
+    let deltaX = 2 * (clientX - lastClientX);
+    let deltaY = (clientY - lastClientY);
 
     if (ignoreX) {
       deltaX = 0;
@@ -122,6 +124,7 @@ module.exports = createClass({
       onContentResize,
       onResizeViewport,
       onRotateViewport,
+      onUpdateDeviceModalOpen,
     } = this.props;
 
     let resizeHandleClass = "viewport-resize-handle";
@@ -144,6 +147,7 @@ module.exports = createClass({
         onChangeViewportDevice,
         onResizeViewport,
         onRotateViewport,
+        onUpdateDeviceModalOpen,
       }),
       dom.div(
         {

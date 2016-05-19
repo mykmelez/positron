@@ -93,10 +93,6 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CustomEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "DataStore", b2g: true },
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "DataStoreCursor", b2g: true },
-// IMPORTANT: Do not change this list without review from a DOM peer!
     "Directory",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DOMCursor",
@@ -186,6 +182,8 @@ var interfaceNamesInGlobalScope =
     { name: "PushMessageData", b2g: false, android: false, nightlyAndroid: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     { name: "PushSubscription", b2g: false, android: false, nightlyAndroid: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "PushSubscriptionOptions", b2g: false, android: false, nightlyAndroid: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Request",
 // IMPORTANT: Do not change this list without review from a DOM peer!

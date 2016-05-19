@@ -4,4 +4,4 @@
 
 'use strict';
 
-exports.webFrame = {};
+exports.webFrame = { /* stub */ };

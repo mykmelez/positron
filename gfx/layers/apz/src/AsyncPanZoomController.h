@@ -27,7 +27,11 @@
 #include "mozilla/gfx/Matrix.h"
 #include "nsIScrollableFrame.h"
 #include "nsRegion.h"
+#include "nsTArray.h"
 #include "PotentialCheckerboardDurationTracker.h"
+#if defined(MOZ_ANDROID_APZ)
+#include "OverScroller.h"
+#endif // defined(MOZ_ANDROID_APZ)
 
 #include "base/message_loop.h"
 
@@ -48,7 +52,11 @@ class GestureEventListener;
 class PCompositorBridgeParent;
 struct AsyncTransform;
 class AsyncPanZoomAnimation;
+#if defined(MOZ_ANDROID_APZ)
+class FlingOverScrollerAnimation;
+#else
 class FlingAnimation;
+#endif
 class InputBlockState;
 class TouchBlockState;
 class PanGestureBlockState;
@@ -145,7 +153,7 @@ public:
    * Schedules a runnable to run on the controller/UI thread at some time
    * in the future.
    */
-  void PostDelayedTask(Task* aTask, int aDelayMs);
+  void PostDelayedTask(already_AddRefed<Runnable> aTask, int aDelayMs);
 
   // --------------------------------------------------------------------------
   // These methods must only be called on the compositor thread.
@@ -161,7 +169,7 @@ public:
   bool AdvanceAnimations(const TimeStamp& aSampleTime);
 
   bool UpdateAnimation(const TimeStamp& aSampleTime,
-                       Vector<Task*>* aOutDeferredTasks);
+                       nsTArray<RefPtr<Runnable>>* aOutDeferredTasks);
 
   /**
    * A shadow layer update has arrived. |aScrollMetdata| is the new ScrollMetadata
@@ -172,13 +180,6 @@ public:
    */
   void NotifyLayersUpdated(const ScrollMetadata& aScrollMetadata, bool aIsFirstPaint,
                            bool aThisLayerTreeUpdated);
-
-  /**
-   * A lightweight version of NotifyLayersUpdated that allows just the scroll
-   * offset and scroll generation from the main thread to be propagated to APZ.
-   */
-  void NotifyScrollUpdated(uint32_t aScrollGeneration,
-                           const CSSPoint& aScrollOffset);
 
   /**
    * The platform implementation must set the compositor parent so that we can
@@ -320,7 +321,7 @@ public:
    * Returns whether this APZC is for an element marked with the 'scrollgrab'
    * attribute.
    */
-  bool HasScrollgrab() const { return mFrameMetrics.GetHasScrollgrab(); }
+  bool HasScrollgrab() const { return mScrollMetadata.GetHasScrollgrab(); }
 
   /**
    * Returns whether this APZC has room to be panned (in any direction).
@@ -666,13 +667,14 @@ protected:
   mutable ReentrantMonitor mMonitor;
 
 private:
-  // Metrics of the container layer corresponding to this APZC. This is
+  // Metadata of the container layer corresponding to this APZC. This is
   // stored here so that it is accessible from the UI/controller thread.
   // These are the metrics at last content paint, the most recent
   // values we were notified of in NotifyLayersUpdate(). Since it represents
   // the Gecko state, it should be used as a basis for untransformation when
   // sending messages back to Gecko.
-  FrameMetrics mLastContentPaintMetrics;
+  ScrollMetadata mLastContentPaintMetadata;
+  FrameMetrics& mLastContentPaintMetrics;  // for convenience, refers to mLastContentPaintMetadata.mMetrics
   // The last metrics used for a content repaint request.
   FrameMetrics mLastPaintRequestMetrics;
   // The metrics that we expect content to have. This is updated when we
@@ -870,7 +872,11 @@ public:
   bool AttemptFling(FlingHandoffState& aHandoffState);
 
 private:
+#if defined(MOZ_ANDROID_APZ)
+  friend class FlingOverScrollerAnimation;
+#else
   friend class FlingAnimation;
+#endif
   friend class OverscrollAnimation;
   friend class SmoothScrollAnimation;
   friend class WheelScrollAnimation;
@@ -902,8 +908,6 @@ private:
   // Returns whether overscroll is allowed during an event.
   bool AllowScrollHandoffInCurrentBlock() const;
 
-  void AcknowledgeScrollUpdate() const;
-
   /* ===================================================================
    * The functions and members in this section are used to make ancestor chains
    * out of APZC instances. These chains can only be walked or manipulated
@@ -927,7 +931,7 @@ public:
 
   bool IsRootForLayersId() const {
     ReentrantMonitorAutoEnter lock(mMonitor);
-    return mFrameMetrics.IsLayersIdRoot();
+    return mScrollMetadata.IsLayersIdRoot();
   }
 
   bool IsRootContent() const {
@@ -948,7 +952,7 @@ private:
    */
 public:
   FrameMetrics::ViewID GetScrollHandoffParentId() const {
-    return mFrameMetrics.GetScrollParentId();
+    return mScrollMetadata.GetScrollParentId();
   }
 
   /**
@@ -1180,6 +1184,9 @@ private:
   // type of event that's triggering the scroll.
   Maybe<CSSPoint> FindSnapPointNear(const CSSPoint& aDestination,
                                     nsIScrollableFrame::ScrollUnit aUnit);
+#if defined(MOZ_ANDROID_APZ)
+  widget::sdk::OverScroller::GlobalRef mOverScroller;
+#endif // defined(MOZ_ANDROID_APZ)
 };
 
 } // namespace layers

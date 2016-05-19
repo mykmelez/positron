@@ -41,19 +41,6 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SimpleGlobalObject)
   NS_INTERFACE_MAP_ENTRY(nsIGlobalObject)
 NS_INTERFACE_MAP_END
 
-static bool
-SimpleGlobal_enumerate(JSContext *cx, JS::Handle<JSObject *> obj)
-{
-  return JS_EnumerateStandardClasses(cx, obj);
-}
-
-static bool
-SimpleGlobal_resolve(JSContext *cx, JS::Handle<JSObject *> obj,
-                    JS::Handle<jsid> id, bool *resolvedp)
-{
-  return JS_ResolveStandardClass(cx, obj, id, resolvedp);
-}
-
 static void
 SimpleGlobal_finalize(js::FreeOp *fop, JSObject *obj)
 {
@@ -75,9 +62,9 @@ static const js::ClassOps SimpleGlobalClassOps = {
     nullptr,
     nullptr,
     nullptr,
-    SimpleGlobal_enumerate,
-    SimpleGlobal_resolve,
-    nullptr,
+    JS_EnumerateStandardClasses,
+    JS_ResolveStandardClass,
+    JS_MayResolveStandardClass,
     SimpleGlobal_finalize,
     nullptr,
     nullptr,
@@ -109,18 +96,19 @@ SimpleGlobalObject::Create(GlobalType globalType, JS::Handle<JS::Value> proto)
   JS::CompartmentOptions options;
   options.creationOptions().setInvisibleToDebugger(true);
 
-  nsCOMPtr<nsIPrincipal> principal;
-  if (NS_IsMainThread()) {
-    principal = nsNullPrincipal::Create();
-    if (!principal) {
-      return nullptr;
-    }
-  }
+  JS::Rooted<JSObject*> global(cx);
 
-  JS::Rooted<JSObject*> global(cx,
-    JS_NewGlobalObject(cx, js::Jsvalify(&SimpleGlobalClass),
-                       nsJSPrincipals::get(principal),
-                       JS::DontFireOnNewGlobalHook, options));
+  if (NS_IsMainThread()) {
+    nsCOMPtr<nsIPrincipal> principal = nsNullPrincipal::Create();
+    options.creationOptions().setTrace(xpc::TraceXPCGlobal);
+    global = xpc::CreateGlobalObject(cx, js::Jsvalify(&SimpleGlobalClass),
+                                     nsJSPrincipals::get(principal),
+                                     options);
+  } else {
+    global = JS_NewGlobalObject(cx, js::Jsvalify(&SimpleGlobalClass),
+                                nullptr,
+                                JS::DontFireOnNewGlobalHook, options);
+  }
 
   if (!global) {
     JS_ClearPendingException(cx);
@@ -146,7 +134,7 @@ SimpleGlobalObject::Create(GlobalType globalType, JS::Handle<JS::Value> proto)
       return nullptr;
     }
 
-    if (!JS_SetPrototype(cx, global, protoObj)) {
+    if (!JS_SplicePrototype(cx, global, protoObj)) {
       JS_ClearPendingException(cx);
       return nullptr;
     }

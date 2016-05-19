@@ -913,7 +913,7 @@ TISInputSourceWrapper::InitKeyEvent(NSEvent *aNativeKeyEvent,
     aKeyEvent.mNativeModifierFlags = [aNativeKeyEvent modifierFlags];
   }
 
-  aKeyEvent.refPoint = LayoutDeviceIntPoint(0, 0);
+  aKeyEvent.mRefPoint = LayoutDeviceIntPoint(0, 0);
   aKeyEvent.isChar = false; // XXX not used in XP level
 
   UInt32 kbType = GetKbdType();
@@ -3526,7 +3526,7 @@ IMEInputHandler::FirstRectForCharacterRange(NSRange& aRange,
   }
   rect = nsCocoaUtils::DevPixelsToCocoaPoints(r, mWidget->BackingScaleFactor());
   rect = [rootView convertRect:rect toView:nil];
-  rect.origin = [rootWindow convertBaseToScreen:rect.origin];
+  rect.origin = nsCocoaUtils::ConvertPointToScreen(rootWindow, rect.origin);
 
   if (aActualRange) {
     *aActualRange = actualRange;
@@ -3560,11 +3560,11 @@ IMEInputHandler::CharacterIndexForPoint(NSPoint& aPoint)
   }
 
   WidgetQueryContentEvent charAt(true, eQueryCharacterAtPoint, mWidget);
-  NSPoint ptInWindow = [mainWindow convertScreenToBase:aPoint];
+  NSPoint ptInWindow = nsCocoaUtils::ConvertPointFromScreen(mainWindow, aPoint);
   NSPoint ptInView = [mView convertPoint:ptInWindow fromView:nil];
-  charAt.refPoint.x =
+  charAt.mRefPoint.x =
     static_cast<int32_t>(ptInView.x) * mWidget->BackingScaleFactor();
-  charAt.refPoint.y =
+  charAt.mRefPoint.y =
     static_cast<int32_t>(ptInView.y) * mWidget->BackingScaleFactor();
   mWidget->DispatchWindowEvent(charAt);
   if (!charAt.mSucceeded ||
@@ -3965,6 +3965,16 @@ IMEInputHandler::OnSelectionChange(const IMENotification& aIMENotification)
   if (mIMEHasFocus) {
     mSelectedRange = mRangeForWritingMode;
   }
+}
+
+bool
+IMEInputHandler::OnHandleEvent(NSEvent* aEvent)
+{
+  if (!IsFocused()) {
+    return false;
+  }
+  NSTextInputContext* inputContext = [mView inputContext];
+  return [inputContext handleEvent:aEvent];
 }
 
 #pragma mark -

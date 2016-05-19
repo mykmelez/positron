@@ -147,7 +147,8 @@ public:
 
 protected:
     virtual mozilla::ipc::RacyInterruptPolicy
-    MediateInterruptRace(const Message& parent, const Message& child) override
+    MediateInterruptRace(const MessageInfo& parent,
+                         const MessageInfo& child) override
     {
         return MediateRace(parent, child);
     }
@@ -265,6 +266,11 @@ protected:
     virtual nsresult GetScrollCaptureContainer(NPP aInstance, mozilla::layers::ImageContainer** aContainer) override;
     virtual nsresult UpdateScrollState(NPP aInstance, bool aIsScrolling);
 #endif
+
+    virtual nsresult HandledWindowedPluginKeyEvent(
+                       NPP aInstance,
+                       const mozilla::NativeEventData& aNativeKeyData,
+                       bool aIsConsumed) override;
 
 #if defined(XP_UNIX) && !defined(XP_MACOSX) && !defined(MOZ_WIDGET_GONK)
     virtual nsresult NP_Initialize(NPNetscapeFuncs* bFuncs, NPPluginFuncs* pFuncs, NPError* error) override;
@@ -602,7 +608,7 @@ private:
 
     DWORD mFlashProcess1;
     DWORD mFlashProcess2;
-    mozilla::plugins::FinishInjectorInitTask* mFinishInitTask;
+    RefPtr<mozilla::plugins::FinishInjectorInitTask> mFinishInitTask;
 #endif
 
     void OnProcessLaunched(const bool aSucceeded);
@@ -616,9 +622,10 @@ private:
             MOZ_ASSERT(aModule);
         }
 
-        void Run() override
+        NS_IMETHOD Run() override
         {
             mModule->OnProcessLaunched(mLaunchSucceeded);
+            return NS_OK;
         }
 
     private:

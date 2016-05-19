@@ -160,6 +160,7 @@ var Service = {
     this.uuidMap.set(uuid, extension);
     this.aps.setAddonLoadURICallback(extension.id, this.checkAddonMayLoad.bind(this, extension));
     this.aps.setAddonLocalizeCallback(extension.id, extension.localize.bind(extension));
+    this.aps.setAddonCSP(extension.id, extension.manifest.content_security_policy);
   },
 
   // Called when an extension is unloaded.
@@ -168,6 +169,7 @@ var Service = {
     this.uuidMap.delete(uuid);
     this.aps.setAddonLoadURICallback(extension.id, null);
     this.aps.setAddonLocalizeCallback(extension.id, null);
+    this.aps.setAddonCSP(extension.id, null);
 
     let handler = Services.io.getProtocolHandler("moz-extension");
     handler.QueryInterface(Ci.nsISubstitutingProtocolHandler);
@@ -257,6 +259,14 @@ function getAPILevelForWindow(window, addonId) {
                                           .isSystemPrincipal(parentDocument.nodePrincipal);
     if (parentDocument.location.href == "about:addons" && parentIsSystemPrincipal) {
       return FULL_PRIVILEGES;
+    }
+
+    // The addon iframes embedded in a addon page from with the same addonId
+    // should have the same privileges of the sameTypeParent.
+    // (see Bug 1258347 for rationale)
+    let parentSameAddonPrivileges = getAPILevelForWindow(parentWindow, addonId);
+    if (parentSameAddonPrivileges > NO_PRIVILEGES) {
+      return parentSameAddonPrivileges;
     }
 
     // In all the other cases, WebExtension URLs loaded into sub-frame UI

@@ -26,9 +26,8 @@ class nsAString;
 class nsPresContext;
 class nsDisplayItem;
 
-typedef nsContainerFrame nsVideoFrameBase;
-
-class nsVideoFrame : public nsVideoFrameBase, public nsIAnonymousContentCreator
+class nsVideoFrame : public nsContainerFrame
+                   , public nsIAnonymousContentCreator
 {
 public:
   template <typename T> using Maybe = mozilla::Maybe<T>;
@@ -53,7 +52,8 @@ public:
                                     nsIAtom* aAttribute,
                                     int32_t aModType) override;
 
-  void OnVisibilityChange(Visibility aNewVisibility,
+  void OnVisibilityChange(Visibility aOldVisibility,
+                          Visibility aNewVisibility,
                           Maybe<OnNonvisible> aNonvisibleAction = Nothing()) override;
 
   /* get the size of the video's display */

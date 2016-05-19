@@ -40,10 +40,23 @@ NS_EVENT_MESSAGE(eKeyPress)
 NS_EVENT_MESSAGE(eKeyUp)
 NS_EVENT_MESSAGE(eKeyDown)
 
+// These messages are dispatched when PluginInstaceChild receives native
+// keyboard events directly and it posts the information to the widget.
+// These messages shouldn't be handled by content and non-reserved chrome
+// event handlers.
+NS_EVENT_MESSAGE(eKeyDownOnPlugin)
+NS_EVENT_MESSAGE(eKeyUpOnPlugin)
+
 NS_EVENT_MESSAGE(eBeforeKeyDown)
 NS_EVENT_MESSAGE(eAfterKeyDown)
 NS_EVENT_MESSAGE(eBeforeKeyUp)
 NS_EVENT_MESSAGE(eAfterKeyUp)
+
+// This message is sent after a content process handles a key event or accesskey
+// to indicate that an potential accesskey was not found. The parent process may
+// then respond by, for example, opening menus and processing other shortcuts.
+// It inherits its properties from a keypress event.
+NS_EVENT_MESSAGE(eAccessKeyNotFound)
 
 NS_EVENT_MESSAGE(eResize)
 NS_EVENT_MESSAGE(eScroll)
@@ -235,9 +248,9 @@ NS_EVENT_MESSAGE(eQueryContentState)
 NS_EVENT_MESSAGE(eQuerySelectionAsTransferable)
 // Query for character at a point.  This returns the character offset, its
 // rect and also tentative caret point if the point is clicked.  The point is
-// specified by Event::refPoint.
+// specified by Event::mRefPoint.
 NS_EVENT_MESSAGE(eQueryCharacterAtPoint)
-// Query if the DOM element under Event::refPoint belongs to our widget
+// Query if the DOM element under Event::mRefPoint belongs to our widget
 // or not.
 NS_EVENT_MESSAGE(eQueryDOMWidgetHittest)
 

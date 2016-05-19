@@ -52,7 +52,10 @@ public:
 
   static nsIGlobalObject* IncumbentGlobal() {
     ScriptSettingsStackEntry *entry = Top();
-    return entry ? entry->mGlobalObject : nullptr;
+    if (!entry) {
+      return nullptr;
+    }
+    return entry->mGlobalObject;
   }
 
   static ScriptSettingsStackEntry* EntryPoint() {
@@ -70,7 +73,10 @@ public:
 
   static nsIGlobalObject* EntryGlobal() {
     ScriptSettingsStackEntry *entry = EntryPoint();
-    return entry ? entry->mGlobalObject : nullptr;
+    if (!entry) {
+      return nullptr;
+    }
+    return entry->mGlobalObject;
   }
 
 };
@@ -574,7 +580,8 @@ AutoJSAPI::ReportException()
   JSAutoCompartment ac(cx(), errorGlobal);
   JS::Rooted<JS::Value> exn(cx());
   js::ErrorReport jsReport(cx());
-  if (StealException(&exn) && jsReport.init(cx(), exn)) {
+  if (StealException(&exn) &&
+      jsReport.init(cx(), exn, js::ErrorReport::WithSideEffects)) {
     if (mIsMainThread) {
       RefPtr<xpc::ErrorReport> xpcReport = new xpc::ErrorReport();
 

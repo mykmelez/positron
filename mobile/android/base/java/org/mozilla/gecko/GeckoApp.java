@@ -20,6 +20,7 @@ import org.mozilla.gecko.gfx.PluginLayer;
 import org.mozilla.gecko.health.HealthRecorder;
 import org.mozilla.gecko.health.SessionInformation;
 import org.mozilla.gecko.health.StubbedHealthRecorder;
+import org.mozilla.gecko.home.HomeConfig.PanelType;
 import org.mozilla.gecko.menu.GeckoMenu;
 import org.mozilla.gecko.menu.GeckoMenuInflater;
 import org.mozilla.gecko.menu.MenuPanel;
@@ -37,7 +38,6 @@ import org.mozilla.gecko.text.TextSelection;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.ActivityResultHandler;
 import org.mozilla.gecko.util.ActivityUtils;
-import org.mozilla.gecko.util.BundleEventListener;
 import org.mozilla.gecko.util.EventCallback;
 import org.mozilla.gecko.util.FileUtils;
 import org.mozilla.gecko.util.GeckoEventListener;
@@ -128,7 +128,6 @@ import java.util.Set;
 public abstract class GeckoApp
     extends GeckoActivity
     implements
-    BundleEventListener,
     ContextGetter,
     GeckoAppShell.GeckoInterface,
     GeckoEventListener,
@@ -141,7 +140,7 @@ public abstract class GeckoApp
     ViewTreeObserver.OnGlobalLayoutListener {
 
     private static final String LOGTAG = "GeckoApp";
-    private static final int ONE_DAY_MS = 1000*60*60*24;
+    private static final int ONE_DAY_MS = 1000 * 60 * 60 * 24;
 
     public static final String ACTION_ALERT_CALLBACK       = "org.mozilla.gecko.ACTION_ALERT_CALLBACK";
     public static final String ACTION_HOMESCREEN_SHORTCUT  = "org.mozilla.gecko.BOOKMARK";
@@ -156,7 +155,7 @@ public abstract class GeckoApp
     public static final String PREFS_OOM_EXCEPTION         = "OOMException";
     public static final String PREFS_VERSION_CODE          = "versionCode";
     public static final String PREFS_WAS_STOPPED           = "wasStopped";
-    public static final String PREFS_CRASHED               = "crashed";
+    public static final String PREFS_CRASHED_COUNT         = "crashedCount";
     public static final String PREFS_CLEANUP_TEMP_FILES    = "cleanupTempFiles";
 
     public static final String SAVED_STATE_IN_BACKGROUND   = "inBackground";
@@ -179,6 +178,9 @@ public abstract class GeckoApp
     protected Menu mMenu;
     protected boolean mIsRestoringActivity;
 
+    /** Tells if we're aborting app launch, e.g. if this is an unsupported device configuration. */
+    protected boolean mIsAbortingAppLaunch;
+
     private ContactService mContactService;
     private PromptService mPromptService;
     protected TextSelection mTextSelection;
@@ -195,6 +197,7 @@ public abstract class GeckoApp
 
     private final HashMap<String, PowerManager.WakeLock> mWakeLocks = new HashMap<String, PowerManager.WakeLock>();
 
+    protected boolean mLastSessionCrashed;
     protected boolean mShouldRestore;
     protected boolean mInitialized;
     protected boolean mWindowFocusInitialized;
@@ -207,6 +210,8 @@ public abstract class GeckoApp
     private volatile Locale mLastLocale;
 
     private Intent mRestartIntent;
+
+    private boolean mWasFirstTabShownAfterActivityUnhidden;
 
     abstract public int getLayout();
 
@@ -275,10 +280,10 @@ public abstract class GeckoApp
     }
 
     @Override
-    public void onTabChanged(Tab tab, Tabs.TabEvents msg, Object data) {
+    public void onTabChanged(Tab tab, Tabs.TabEvents msg, String data) {
         // When a tab is closed, it is always unselected first.
         // When a tab is unselected, another tab is always selected first.
-        switch(msg) {
+        switch (msg) {
             case UNSELECTED:
                 hidePlugins(tab);
                 break;
@@ -466,7 +471,7 @@ public abstract class GeckoApp
             for (String clear : clearSet) {
                 try {
                     clearObj.put(clear, true);
-                } catch(JSONException ex) {
+                } catch (JSONException ex) {
                     Log.e(LOGTAG, "Error adding clear object " + clear, ex);
                 }
             }
@@ -474,17 +479,17 @@ public abstract class GeckoApp
             final JSONObject res = new JSONObject();
             try {
                 res.put("sanitize", clearObj);
-            } catch(JSONException ex) {
+            } catch (JSONException ex) {
                 Log.e(LOGTAG, "Error adding sanitize object", ex);
             }
 
             // If the user has opted out of session restore, and does want to clear history
             // we also want to prevent the current session info from being saved.
             if (clearObj.has("private.data.history")) {
-                final String sessionRestore = getSessionRestorePreference();
+                final String sessionRestore = getSessionRestorePreference(getSharedPreferences());
                 try {
                     res.put("dontSaveSession", "quit".equals(sessionRestore));
-                } catch(JSONException ex) {
+                } catch (JSONException ex) {
                     Log.e(LOGTAG, "Error adding session restore data", ex);
                 }
             }
@@ -704,24 +709,6 @@ public abstract class GeckoApp
         }
     }
 
-    @Override
-    public void handleMessage(final String event, final Bundle message, final EventCallback callback) {
-        if ("History:GetPrePathLastVisitedTimeMilliseconds".equals(event)) {
-            if (callback == null) {
-                Log.e(LOGTAG, "callback must not be null in " + event);
-                return;
-            }
-            final String prePath = message.getString("prePath");
-            if (prePath == null) {
-                callback.sendError("prePath must not be null in " + event);
-                return;
-            }
-            // We're on a background thread, so we can be synchronous.
-            final long millis = getProfile().getDB().getPrePathLastVisitedTimeMilliseconds(getContentResolver(), prePath);
-            callback.sendSuccess(millis);
-        }
-    }
-
     void onStatePurged() { }
 
     /**
@@ -771,7 +758,7 @@ public abstract class GeckoApp
             }
         });
 
-        builder.setNegativeButton(R.string.site_settings_cancel, new DialogInterface.OnClickListener(){
+        builder.setNegativeButton(R.string.site_settings_cancel, new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialog, int id) {
                 dialog.cancel();
@@ -936,7 +923,7 @@ public abstract class GeckoApp
         try {
             if (isDataURI) {
                 int dataStart = aSrc.indexOf(",");
-                byte[] buf = Base64.decode(aSrc.substring(dataStart+1), Base64.DEFAULT);
+                byte[] buf = Base64.decode(aSrc.substring(dataStart + 1), Base64.DEFAULT);
                 image = BitmapUtils.decodeByteArray(buf);
             } else {
                 int byteRead;
@@ -948,7 +935,7 @@ public abstract class GeckoApp
                 // Cannot read from same stream twice. Also, InputStream from
                 // URL does not support reset. So converting to byte array.
 
-                while((byteRead = is.read(buf)) != -1) {
+                while ((byteRead = is.read(buf)) != -1) {
                     os.write(buf, 0, byteRead);
                 }
                 byte[] imgBuffer = os.toByteArray();
@@ -983,22 +970,22 @@ public abstract class GeckoApp
             } else {
                 SnackbarHelper.showSnackbar(this, getString(R.string.set_image_fail), Snackbar.LENGTH_LONG);
             }
-        } catch(OutOfMemoryError ome) {
+        } catch (OutOfMemoryError ome) {
             Log.e(LOGTAG, "Out of Memory when converting to byte array", ome);
-        } catch(IOException ioe) {
+        } catch (IOException ioe) {
             Log.e(LOGTAG, "I/O Exception while setting wallpaper", ioe);
         } finally {
             if (is != null) {
                 try {
                     is.close();
-                } catch(IOException ioe) {
+                } catch (IOException ioe) {
                     Log.w(LOGTAG, "I/O Exception while closing stream", ioe);
                 }
             }
             if (os != null) {
                 try {
                     os.close();
-                } catch(IOException ioe) {
+                } catch (IOException ioe) {
                     Log.w(LOGTAG, "I/O Exception while closing stream", ioe);
                 }
             }
@@ -1110,6 +1097,7 @@ public abstract class GeckoApp
 
         if (!HardwareUtils.isSupportedSystem()) {
             // This build does not support the Android version of the device: Show an error and finish the app.
+            mIsAbortingAppLaunch = true;
             super.onCreate(savedInstanceState);
             showSDKVersionError();
             finish();
@@ -1132,7 +1120,7 @@ public abstract class GeckoApp
         // Workaround for <http://code.google.com/p/android/issues/detail?id=20915>.
         try {
             Class.forName("android.os.AsyncTask");
-        } catch (ClassNotFoundException e) {}
+        } catch (ClassNotFoundException e) { }
 
         MemoryMonitor.getInstance().init(getApplicationContext());
 
@@ -1234,9 +1222,6 @@ public abstract class GeckoApp
             "Update:Download",
             "Update:Install");
 
-        EventDispatcher.getInstance().registerBackgroundThreadListener((BundleEventListener) this,
-                "History:GetPrePathLastVisitedTimeMilliseconds");
-
         GeckoThread.launch();
 
         Bundle stateBundle = ContextUtils.getBundleExtra(getIntent(), EXTRA_STATE_BUNDLE);
@@ -1270,7 +1255,7 @@ public abstract class GeckoApp
         // Use global layout state change to kick off additional initialization
         mMainLayout.getViewTreeObserver().addOnGlobalLayoutListener(this);
 
-        if (Versions.preMarshmallow || !AppConstants.NIGHTLY_BUILD) {
+        if (Versions.preMarshmallow) {
             mTextSelection = new ActionBarTextSelection(
                     (TextSelectionHandle) findViewById(R.id.anchor_handle),
                     (TextSelectionHandle) findViewById(R.id.caret_handle),
@@ -1281,6 +1266,7 @@ public abstract class GeckoApp
         mTextSelection.create();
 
         // Determine whether we should restore tabs.
+        mLastSessionCrashed = updateCrashedState();
         mShouldRestore = getSessionRestoreState(savedInstanceState);
         if (mShouldRestore && savedInstanceState != null) {
             boolean wasInBackground =
@@ -1363,6 +1349,26 @@ public abstract class GeckoApp
         IntentHelper.init(this);
     }
 
+    @Override
+    public void onStart() {
+        super.onStart();
+        if (mIsAbortingAppLaunch) {
+            return;
+        }
+
+        mWasFirstTabShownAfterActivityUnhidden = false; // onStart indicates we were hidden.
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // Overriding here is not necessary, but we do this so we don't
+        // forget to add the abort if we override this method later.
+        if (mIsAbortingAppLaunch) {
+            return;
+        }
+    }
+
     /**
      * At this point, the resource system and the rest of the browser are
      * aware of the locale.
@@ -1409,25 +1415,23 @@ public abstract class GeckoApp
         mDoorHangerPopup = new DoorHangerPopup(this);
         mPluginContainer = (AbsoluteLayout) findViewById(R.id.plugin_container);
         mFormAssistPopup = (FormAssistPopup) findViewById(R.id.form_assist_popup);
-
-        if (mCameraView == null) {
-            // Pre-ICS devices need the camera surface in a visible layout.
-            if (Versions.preICS) {
-                mCameraView = new SurfaceView(this);
-                ((SurfaceView)mCameraView).getHolder().setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
-            }
-        }
     }
 
     /**
      * Loads the initial tab at Fennec startup. If we don't restore tabs, this
-     * tab will be about:home, or the homepage if the use has set one.
+     * tab will be about:home, or the homepage if the user has set one.
+     * If we've temporarily disabled restoring to break out of a crash loop, we'll
+     * show the recent tabs panel so the user can manually restore tabs as needed.
      * If we restore tabs, we don't need to create a new tab.
      */
     protected void loadStartupTab(final int flags) {
         if (!mShouldRestore) {
-            final String homepage = getHomepage();
-            Tabs.getInstance().loadUrl(!TextUtils.isEmpty(homepage) ? homepage : AboutPages.HOME, flags);
+            if (mLastSessionCrashed) {
+                Tabs.getInstance().loadUrl(AboutPages.getURLForBuiltinPanelType(PanelType.RECENT_TABS), flags);
+            } else {
+                final String homepage = getHomepage();
+                Tabs.getInstance().loadUrl(!TextUtils.isEmpty(homepage) ? homepage : AboutPages.HOME, flags);
+            }
         }
     }
 
@@ -1455,6 +1459,9 @@ public abstract class GeckoApp
 
     private void initialize() {
         mInitialized = true;
+
+        final boolean isFirstTab = !mWasFirstTabShownAfterActivityUnhidden;
+        mWasFirstTabShownAfterActivityUnhidden = true; // Reset since we'll be loading a tab.
 
         final SafeIntent intent = new SafeIntent(getIntent());
         final String action = intent.getAction();
@@ -1512,6 +1519,9 @@ public abstract class GeckoApp
                     int flags = Tabs.LOADURL_NEW_TAB | Tabs.LOADURL_USER_ENTERED | Tabs.LOADURL_EXTERNAL;
                     if (ACTION_HOMESCREEN_SHORTCUT.equals(action)) {
                         flags |= Tabs.LOADURL_PINNED;
+                    }
+                    if (isFirstTab) {
+                        flags |= Tabs.LOADURL_FIRST_AFTER_ACTIVITY_UNHIDDEN;
                     }
                     loadStartupTab(passedUri, intent, flags);
                 }
@@ -1707,6 +1717,27 @@ public abstract class GeckoApp
     }
 
     /**
+     * Check whether we've crashed during the last browsing session.
+     *
+     * @return True if the crash reporter ran after the last session.
+     */
+    protected boolean updateCrashedState() {
+        try {
+            File crashFlag = new File(GeckoProfileDirectories.getMozillaDirectory(this), "CRASHED");
+            if (crashFlag.exists() && crashFlag.delete()) {
+                // Set the flag that indicates we were stopped as expected, as
+                // the crash reporter has run, so it is not a silent OOM crash.
+                getSharedPreferences().edit().putBoolean(PREFS_WAS_STOPPED, true).apply();
+                return true;
+            }
+        } catch (NoMozillaDirectoryException e) {
+            // If we can't access the Mozilla directory, we're in trouble anyway.
+            Log.e(LOGTAG, "Cannot read crash flag: ", e);
+        }
+        return false;
+    }
+
+    /**
      * Determine whether the session should be restored.
      *
      * @param savedInstanceState Saved instance state given to the activity
@@ -1717,27 +1748,49 @@ public abstract class GeckoApp
         boolean shouldRestore = false;
 
         final int versionCode = getVersionCode();
-        if (prefs.getInt(PREFS_VERSION_CODE, 0) != versionCode) {
+        if (mLastSessionCrashed) {
+            if (incrementCrashCount(prefs) <= getSessionStoreMaxCrashResumes(prefs) &&
+                    getSessionRestoreAfterCrashPreference(prefs)) {
+                shouldRestore = true;
+            } else {
+                shouldRestore = false;
+            }
+        } else if (prefs.getInt(PREFS_VERSION_CODE, 0) != versionCode) {
             // If the version has changed, the user has done an upgrade, so restore
             // previous tabs.
             prefs.edit().putInt(PREFS_VERSION_CODE, versionCode).apply();
             shouldRestore = true;
         } else if (savedInstanceState != null ||
-                   getSessionRestorePreference().equals("always") ||
+                   getSessionRestorePreference(prefs).equals("always") ||
                    getRestartFromIntent()) {
             // We're coming back from a background kill by the OS, the user
             // has chosen to always restore, or we restarted.
-            shouldRestore = true;
-        } else if (prefs.getBoolean(GeckoApp.PREFS_CRASHED, false)) {
-            prefs.edit().putBoolean(PREFS_CRASHED, false).apply();
             shouldRestore = true;
         }
 
         return shouldRestore;
     }
 
-    private String getSessionRestorePreference() {
-        return getSharedPreferences().getString(GeckoPreferences.PREFS_RESTORE_SESSION, "always");
+    private int incrementCrashCount(SharedPreferences prefs) {
+        final int crashCount = getSuccessiveCrashesCount(prefs) + 1;
+        prefs.edit().putInt(PREFS_CRASHED_COUNT, crashCount).apply();
+        return crashCount;
+    }
+
+    private int getSuccessiveCrashesCount(SharedPreferences prefs) {
+        return prefs.getInt(PREFS_CRASHED_COUNT, 0);
+    }
+
+    private int getSessionStoreMaxCrashResumes(SharedPreferences prefs) {
+        return prefs.getInt(GeckoPreferences.PREFS_RESTORE_SESSION_MAX_CRASH_RESUMES, 1);
+    }
+
+    private boolean getSessionRestoreAfterCrashPreference(SharedPreferences prefs) {
+        return prefs.getBoolean(GeckoPreferences.PREFS_RESTORE_SESSION_FROM_CRASH, true);
+    }
+
+    private String getSessionRestorePreference(SharedPreferences prefs) {
+        return prefs.getString(GeckoPreferences.PREFS_RESTORE_SESSION, "always");
     }
 
     private boolean getRestartFromIntent() {
@@ -1865,6 +1918,9 @@ public abstract class GeckoApp
     protected void onNewIntent(Intent externalIntent) {
         final SafeIntent intent = new SafeIntent(externalIntent);
 
+        final boolean isFirstTab = !mWasFirstTabShownAfterActivityUnhidden;
+        mWasFirstTabShownAfterActivityUnhidden = true; // Reset since we'll be loading a tab.
+
         // if we were previously OOM killed, we can end up here when launching
         // from external shortcuts, so set this as the intent for initialization
         if (!mInitialized) {
@@ -1889,9 +1945,11 @@ public abstract class GeckoApp
                 @Override
                 public void run() {
                     final String url = intent.getDataString();
-                    Tabs.getInstance().loadUrlWithIntentExtras(url, intent, Tabs.LOADURL_NEW_TAB |
-                                                                                    Tabs.LOADURL_USER_ENTERED |
-                                                                                    Tabs.LOADURL_EXTERNAL);
+                    int flags = Tabs.LOADURL_NEW_TAB | Tabs.LOADURL_USER_ENTERED | Tabs.LOADURL_EXTERNAL;
+                    if (isFirstTab) {
+                        flags |= Tabs.LOADURL_FIRST_AFTER_ACTIVITY_UNHIDDEN;
+                    }
+                    Tabs.getInstance().loadUrlWithIntentExtras(url, intent, flags);
                 }
             });
         } else if (ACTION_HOMESCREEN_SHORTCUT.equals(action)) {
@@ -1936,6 +1994,9 @@ public abstract class GeckoApp
         // After an onPause, the activity is back in the foreground.
         // Undo whatever we did in onPause.
         super.onResume();
+        if (mIsAbortingAppLaunch) {
+            return;
+        }
 
         int newOrientation = getResources().getConfiguration().orientation;
         if (GeckoScreenOrientation.getInstance().update(newOrientation)) {
@@ -1971,6 +2032,13 @@ public abstract class GeckoApp
                 SharedPreferences prefs = GeckoApp.this.getSharedPreferences();
                 SharedPreferences.Editor editor = prefs.edit();
                 editor.putBoolean(GeckoApp.PREFS_WAS_STOPPED, false);
+
+                if (!mLastSessionCrashed) {
+                    // The last session terminated normally,
+                    // so we can reset the count of successive crashes.
+                    editor.putInt(GeckoApp.PREFS_CRASHED_COUNT, 0);
+                }
+
                 currentSession.recordBegin(editor);
                 editor.apply();
 
@@ -2006,6 +2074,11 @@ public abstract class GeckoApp
     @Override
     public void onPause()
     {
+        if (mIsAbortingAppLaunch) {
+            super.onPause();
+            return;
+        }
+
         final HealthRecorder rec = mHealthRecorder;
         final Context context = this;
 
@@ -2021,6 +2094,10 @@ public abstract class GeckoApp
                 if (rec != null) {
                     rec.recordSessionEnd("P", editor);
                 }
+
+                // onPause might in fact be called even after a crash, but in that case the
+                // crash reporter will record this fact for us and we'll pick it up in onCreate.
+                mLastSessionCrashed = false;
 
                 // If we haven't done it before, cleanup any old files in our old temp dir
                 if (prefs.getBoolean(GeckoApp.PREFS_CLEANUP_TEMP_FILES, true)) {
@@ -2050,6 +2127,11 @@ public abstract class GeckoApp
 
     @Override
     public void onRestart() {
+        if (mIsAbortingAppLaunch) {
+            super.onRestart();
+            return;
+        }
+
         // Faster on main thread with an async apply().
         final StrictMode.ThreadPolicy savedPolicy = StrictMode.allowThreadDiskReads();
         try {
@@ -2065,7 +2147,7 @@ public abstract class GeckoApp
 
     @Override
     public void onDestroy() {
-        if (!HardwareUtils.isSupportedSystem()) {
+        if (mIsAbortingAppLaunch) {
             // This build does not support the Android version of the device:
             // We did not initialize anything, so skip cleaning up.
             super.onDestroy();
@@ -2098,9 +2180,6 @@ public abstract class GeckoApp
             "Update:Check",
             "Update:Download",
             "Update:Install");
-
-        EventDispatcher.getInstance().unregisterBackgroundThreadListener((BundleEventListener) this,
-                "History:GetPrePathLastVisitedTimeMilliseconds");
 
         deleteTempFiles();
 
@@ -2700,10 +2779,6 @@ public abstract class GeckoApp
     }
 
     private void setSystemUiVisible(final boolean visible) {
-        if (Versions.preICS) {
-            return;
-        }
-
         ThreadUtils.postToUiThread(new Runnable() {
             @Override
             public void run() {

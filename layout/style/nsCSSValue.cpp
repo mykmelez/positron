@@ -622,7 +622,7 @@ void nsCSSValue::SetDependentListValue(nsCSSValueList* aList)
 }
 
 void
-nsCSSValue::AdoptListValue(nsCSSValueList*&& aValue)
+nsCSSValue::AdoptListValue(UniquePtr<nsCSSValueList> aValue)
 {
   // We have to copy the first element since for owned lists the first
   // element should be an nsCSSValueList_heap object.
@@ -632,8 +632,7 @@ nsCSSValue::AdoptListValue(nsCSSValueList*&& aValue)
   mValue.mList->mValue = aValue->mValue;
   mValue.mList->mNext  = aValue->mNext;
   aValue->mNext = nullptr;
-  delete aValue;
-  aValue = nullptr;
+  aValue.reset();
 }
 
 nsCSSValuePairList* nsCSSValue::SetPairListValue()
@@ -655,9 +654,9 @@ void nsCSSValue::SetDependentPairListValue(nsCSSValuePairList* aList)
 }
 
 void
-nsCSSValue::AdoptPairListValue(nsCSSValuePairList*&& aValue)
+nsCSSValue::AdoptPairListValue(UniquePtr<nsCSSValuePairList> aValue)
 {
-  // We have to copy the first element since for owned pair lists the first
+  // We have to copy the first element, since for owned pair lists, the first
   // element should be an nsCSSValuePairList_heap object.
   SetPairListValue();
   // FIXME: If nsCSSValue gets a swap method or move assignment operator,
@@ -666,8 +665,7 @@ nsCSSValue::AdoptPairListValue(nsCSSValuePairList*&& aValue)
   mValue.mPairList->mYValue = aValue->mYValue;
   mValue.mPairList->mNext   = aValue->mNext;
   aValue->mNext = nullptr;
-  delete aValue;
-  aValue = nullptr;
+  aValue.reset();
 }
 
 void nsCSSValue::SetAutoValue()
@@ -936,7 +934,7 @@ nsCSSValue::AppendCircleOrEllipseToString(nsCSSKeyword aFunctionId,
     aResult.Append(' ');
   }
   aResult.AppendLiteral("at ");
-  array->Item(count).AppendToString(eCSSProperty_background_position,
+  array->Item(count).AppendToString(eCSSProperty_object_position,
                                     aResult, aSerialization);
 }
 
@@ -1449,18 +1447,26 @@ nsCSSValue::AppendToString(nsCSSProperty aProperty, nsAString& aResult,
         }
         aResult.Append(char16_t(')'));
       }
-    } else if (eCSSUnit_HexColor == unit) {
+    } else if (eCSSUnit_HexColor == unit ||
+               eCSSUnit_HexColorAlpha == unit) {
       nscolor color = GetColorValue();
       aResult.Append('#');
       aResult.AppendPrintf("%02x", NS_GET_R(color));
       aResult.AppendPrintf("%02x", NS_GET_G(color));
       aResult.AppendPrintf("%02x", NS_GET_B(color));
-    } else if (eCSSUnit_ShortHexColor == unit) {
+      if (eCSSUnit_HexColorAlpha == unit) {
+        aResult.AppendPrintf("%02x", NS_GET_A(color));
+      }
+    } else if (eCSSUnit_ShortHexColor == unit ||
+               eCSSUnit_ShortHexColorAlpha == unit) {
       nscolor color = GetColorValue();
       aResult.Append('#');
       aResult.AppendInt(NS_GET_R(color) / 0x11, 16);
       aResult.AppendInt(NS_GET_G(color) / 0x11, 16);
       aResult.AppendInt(NS_GET_B(color) / 0x11, 16);
+      if (eCSSUnit_ShortHexColorAlpha == unit) {
+        aResult.AppendInt(NS_GET_A(color) / 0x11, 16);
+      }
     } else {
       MOZ_ASSERT(IsFloatColorUnit());
       mValue.mFloatColor->AppendToString(unit, aResult);
@@ -1551,12 +1557,12 @@ nsCSSValue::AppendToString(nsCSSProperty aProperty, nsAString& aResult,
         aResult.AppendLiteral("to");
         if (!(gradient->mBgPos.mXValue.GetIntValue() & NS_STYLE_IMAGELAYER_POSITION_CENTER)) {
           aResult.Append(' ');
-          gradient->mBgPos.mXValue.AppendToString(eCSSProperty_background_position,
+          gradient->mBgPos.mXValue.AppendToString(eCSSProperty_background_position_x,
                                                   aResult, aSerialization);
         }
         if (!(gradient->mBgPos.mYValue.GetIntValue() & NS_STYLE_IMAGELAYER_POSITION_CENTER)) {
           aResult.Append(' ');
-          gradient->mBgPos.mYValue.AppendToString(eCSSProperty_background_position,
+          gradient->mBgPos.mYValue.AppendToString(eCSSProperty_background_position_y,
                                                   aResult, aSerialization);
         }
         needSep = true;
@@ -1574,12 +1580,12 @@ nsCSSValue::AppendToString(nsCSSProperty aProperty, nsAString& aResult,
         aResult.AppendLiteral("at ");
       }
       if (gradient->mBgPos.mXValue.GetUnit() != eCSSUnit_None) {
-        gradient->mBgPos.mXValue.AppendToString(eCSSProperty_background_position,
+        gradient->mBgPos.mXValue.AppendToString(eCSSProperty_background_position_x,
                                                 aResult, aSerialization);
         aResult.Append(' ');
       }
       if (gradient->mBgPos.mYValue.GetUnit() != eCSSUnit_None) {
-        gradient->mBgPos.mYValue.AppendToString(eCSSProperty_background_position,
+        gradient->mBgPos.mYValue.AppendToString(eCSSProperty_background_position_y,
                                                 aResult, aSerialization);
         aResult.Append(' ');
       }
@@ -1756,6 +1762,8 @@ nsCSSValue::AppendToString(nsCSSProperty aProperty, nsAString& aResult,
     case eCSSUnit_RGBAColor:             break;
     case eCSSUnit_HexColor:              break;
     case eCSSUnit_ShortHexColor:         break;
+    case eCSSUnit_HexColorAlpha:         break;
+    case eCSSUnit_ShortHexColorAlpha:    break;
     case eCSSUnit_PercentageRGBColor:    break;
     case eCSSUnit_PercentageRGBAColor:   break;
     case eCSSUnit_HSLColor:              break;
@@ -1934,6 +1942,8 @@ nsCSSValue::SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
     case eCSSUnit_RGBAColor:
     case eCSSUnit_HexColor:
     case eCSSUnit_ShortHexColor:
+    case eCSSUnit_HexColorAlpha:
+    case eCSSUnit_ShortHexColorAlpha:
       break;
 
     // Float Color

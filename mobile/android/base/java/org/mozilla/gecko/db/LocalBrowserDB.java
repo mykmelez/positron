@@ -91,6 +91,11 @@ public class LocalBrowserDB implements BrowserDB {
 
     private volatile SuggestedSites mSuggestedSites;
 
+    // Constants used when importing history data from legacy browser.
+    public static String HISTORY_VISITS_DATE = "date";
+    public static String HISTORY_VISITS_COUNT = "visits";
+    public static String HISTORY_VISITS_URL = "url";
+
     private final Uri mBookmarksUriWithProfile;
     private final Uri mParentsUriWithProfile;
     private final Uri mHistoryUriWithProfile;
@@ -564,14 +569,10 @@ public class LocalBrowserDB implements BrowserDB {
             selectionArgs = DBUtils.appendSelectionArgs(selectionArgs, new String[] { urlFilter.toString() });
         }
 
-        // Our version of frecency is computed by scaling the number of visits by a multiplier
-        // that approximates Gaussian decay, based on how long ago the entry was last visited.
-        // Since we're limited by the math we can do with sqlite, we're calculating this
-        // approximation using the Cauchy distribution: multiplier = 15^2 / (age^2 + 15^2).
-        // Using 15 as our scale parameter, we get a constant 15^2 = 225. Following this math,
-        // frecencyScore = numVisits * max(1, 100 * 225 / (age*age + 225)). (See bug 704977)
-        // We also give bookmarks an extra bonus boost by adding 100 points to their frecency score.
-        final String sortOrder = BrowserContract.getFrecencySortOrder(true, false);
+        // Order by combined remote+local frecency score.
+        // Local visits are preferred, so they will by far outweigh remote visits.
+        // Bookmarked history items get extra frecency points.
+        final String sortOrder = BrowserContract.getCombinedFrecencySortOrder(true, false);
 
         return cr.query(combinedUriWithLimit(limit),
                         projection,
@@ -878,6 +879,15 @@ public class LocalBrowserDB implements BrowserDB {
             return new MergeCursor(cursorsToMerge.toArray(arr));
         } else {
             return c;
+        }
+    }
+
+    @Override
+    public int getBookmarkCountForFolder(ContentResolver cr, long folderID) {
+        if (folderID == Bookmarks.FAKE_READINGLIST_SMARTFOLDER_ID) {
+            return getUrlAnnotations().getAnnotationCount(cr, BrowserContract.UrlAnnotations.Key.READER_VIEW);
+        } else {
+            throw new IllegalArgumentException("Retrieving bookmark count for folder with ID=" + folderID + " not supported yet");
         }
     }
 
@@ -1483,6 +1493,72 @@ public class LocalBrowserDB implements BrowserDB {
             operations.add(builder.build());
         } finally {
             cursor.close();
+        }
+    }
+
+    /**
+     * Utility method used by AndroidImport to insert visit data for history records that were just imported.
+     * Uses batch operations.
+     *
+     * @param cr <code>ContentResolver</code> used to query history table and bulkInsert visit records
+     * @param operations Collection of operations for queueing inserts
+     * @param visitsToSynthesize List of ContentValues describing visit information for each history record:
+     *                                  (History URL, LAST DATE VISITED, VISIT COUNT)
+     */
+    public void insertVisitsFromImportHistoryInBatch(ContentResolver cr,
+                                                     Collection<ContentProviderOperation> operations,
+                                                     ArrayList<ContentValues> visitsToSynthesize) {
+        // If for any reason we fail to obtain history GUID for a tuple we're processing,
+        // let's just ignore it. It's possible that the "best-effort" history import
+        // did not fully succeed, so we could be missing some of the records.
+        int historyGUIDCol = -1;
+        for (ContentValues visitsInformation : visitsToSynthesize) {
+            final Cursor cursor = cr.query(mHistoryUriWithProfile,
+                    new String[] {History.GUID},
+                    History.URL + " = ?",
+                    new String[] {visitsInformation.getAsString(HISTORY_VISITS_URL)},
+                    null);
+            if (cursor == null) {
+                continue;
+            }
+
+            final String historyGUID;
+
+            try {
+                if (!cursor.moveToFirst()) {
+                    continue;
+                }
+                if (historyGUIDCol == -1) {
+                    historyGUIDCol = cursor.getColumnIndexOrThrow(History.GUID);
+                }
+
+                historyGUID = cursor.getString(historyGUIDCol);
+            } finally {
+                // We "continue" on a null cursor above, so it's safe to act upon it without checking.
+                cursor.close();
+            }
+            if (historyGUID == null) {
+                continue;
+            }
+
+            // This fakes the individual visit records, using last visited date as the starting point.
+            for (int i = 0; i < visitsInformation.getAsInteger(HISTORY_VISITS_COUNT); i++) {
+                // We rely on database defaults for IS_LOCAL and VISIT_TYPE.
+                final ContentValues visitToInsert = new ContentValues();
+                visitToInsert.put(BrowserContract.Visits.HISTORY_GUID, historyGUID);
+
+                // Visit timestamps are stored in microseconds, while Android Browser visit timestmaps
+                // are in milliseconds. This is the conversion point for imports.
+                visitToInsert.put(BrowserContract.Visits.DATE_VISITED,
+                        (visitsInformation.getAsLong(HISTORY_VISITS_DATE) - i) * 1000);
+
+                final ContentProviderOperation.Builder builder =
+                        ContentProviderOperation.newInsert(BrowserContract.Visits.CONTENT_URI);
+                builder.withValues(visitToInsert);
+
+                // Queue the insert operation
+                operations.add(builder.build());
+            }
         }
     }
 

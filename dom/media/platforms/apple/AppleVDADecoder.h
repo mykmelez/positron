@@ -92,6 +92,11 @@ public:
                        AppleFrameRef aFrameRef);
 
 protected:
+  void AssertOnTaskQueueThread()
+  {
+    MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
+  }
+
   // Flush and Drain operation, always run
   virtual void ProcessFlush();
   virtual void ProcessDrain();
@@ -103,7 +108,6 @@ protected:
   CFDictionaryRef CreateOutputConfiguration();
 
   RefPtr<MediaByteBuffer> mExtraData;
-  RefPtr<FlushableTaskQueue> mTaskQueue;
   MediaDataDecoderCallback* mCallback;
   RefPtr<layers::ImageContainer> mImageContainer;
   uint32_t mPictureWidth;
@@ -125,7 +129,6 @@ protected:
   // This is used to calculate how many frames has been buffered by the decoder.
   Atomic<uint32_t> mQueuedSamples;
 
-  // For wait on mIsFlushing during Shutdown() process.
   // Protects mReorderQueue.
   Monitor mMonitor;
   // Set on reader/decode thread calling Flush() to indicate that output is
@@ -135,13 +138,14 @@ protected:
   ReorderQueue mReorderQueue;
 
 private:
+  const RefPtr<FlushableTaskQueue> mTaskQueue;
   VDADecoder mDecoder;
 
   // Method to set up the decompression session.
   nsresult InitializeSession();
 
   // Method to pass a frame to VideoToolbox for decoding.
-  nsresult SubmitFrame(MediaRawData* aSample);
+  virtual nsresult ProcessDecode(MediaRawData* aSample);
   CFDictionaryRef CreateDecoderSpecification();
 };
 

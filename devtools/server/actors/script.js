@@ -15,7 +15,7 @@ const { FrameActor } = require("devtools/server/actors/frame");
 const { ObjectActor, createValueGrip, longStringGrip } = require("devtools/server/actors/object");
 const { SourceActor, getSourceURL } = require("devtools/server/actors/source");
 const { DebuggerServer } = require("devtools/server/main");
-const { ActorClass } = require("devtools/server/protocol");
+const { ActorClass } = require("devtools/shared/protocol");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const { assert, dumpn, update, fetch } = DevToolsUtils;
 const promise = require("promise");
@@ -35,7 +35,6 @@ loader.lazyGetter(this, "Debugger", () => {
 loader.lazyRequireGetter(this, "CssLogic", "devtools/shared/inspector/css-logic", true);
 loader.lazyRequireGetter(this, "events", "sdk/event/core");
 loader.lazyRequireGetter(this, "mapURIToAddonID", "devtools/server/actors/utils/map-uri-to-addon-id");
-loader.lazyRequireGetter(this, "setTimeout", "sdk/timers", true);
 
 /**
  * A BreakpointActorMap is a map from locations to instances of BreakpointActor.
@@ -1032,7 +1031,7 @@ const ThreadActor = ActorClass({
       let packet = this._resumed();
       this._popThreadPause();
       // Tell anyone who cares of the resume (as of now, that's the xpcshell
-      // harness)
+      // harness and devtools-startup.js when handling the --jsdebugger flag)
       if (Services.obs) {
         Services.obs.notifyObservers(this, "devtools-thread-resumed", null);
       }
@@ -1957,49 +1956,66 @@ const ThreadActor = ActorClass({
     this.scripts.addScripts(this.dbg.findScripts({ source: aSource }));
 
     let sourceActor = this.sources.createNonSourceMappedActor(aSource);
-
-    // Set any stored breakpoints.
     let bpActors = [...this.breakpointActorMap.findActors()];
-    let promises = [];
 
-    // Go ahead and establish the source actors for this script, which
-    // fetches sourcemaps if available and sends onNewSource
-    // notifications.
-    let sourceActorsCreated = this.sources.createSourceActors(aSource);
+    if (this._options.useSourceMaps) {
+      let promises = [];
 
-    if (bpActors.length) {
-      // We need to use unsafeSynchronize here because if the page is being reloaded,
-      // this call will replace the previous set of source actors for this source
-      // with a new one. If the source actors have not been replaced by the time
-      // we try to reset the breakpoints below, their location objects will still
-      // point to the old set of source actors, which point to different
-      // scripts.
-      this.unsafeSynchronize(sourceActorsCreated);
-    }
+      // Go ahead and establish the source actors for this script, which
+      // fetches sourcemaps if available and sends onNewSource
+      // notifications.
+      let sourceActorsCreated = this.sources._createSourceMappedActors(aSource);
 
-    for (let _actor of bpActors) {
-      // XXX bug 1142115: We do async work in here, so we need to create a fresh
-      // binding because for/of does not yet do that in SpiderMonkey.
-      let actor = _actor;
-
-      if (actor.isPending) {
-        promises.push(actor.originalLocation.originalSourceActor._setBreakpoint(actor));
-      } else {
-        promises.push(this.sources.getAllGeneratedLocations(actor.originalLocation)
-                                  .then((generatedLocations) => {
-          if (generatedLocations.length > 0 &&
-              generatedLocations[0].generatedSourceActor.actorID === sourceActor.actorID) {
-            sourceActor._setBreakpointAtAllGeneratedLocations(
-              actor,
-              generatedLocations
-            );
-          }
-        }));
+      if (bpActors.length) {
+        // We need to use unsafeSynchronize here because if the page is being reloaded,
+        // this call will replace the previous set of source actors for this source
+        // with a new one. If the source actors have not been replaced by the time
+        // we try to reset the breakpoints below, their location objects will still
+        // point to the old set of source actors, which point to different
+        // scripts.
+        this.unsafeSynchronize(sourceActorsCreated);
       }
-    }
 
-    if (promises.length > 0) {
-      this.unsafeSynchronize(promise.all(promises));
+      for (let _actor of bpActors) {
+        // XXX bug 1142115: We do async work in here, so we need to create a fresh
+        // binding because for/of does not yet do that in SpiderMonkey.
+        let actor = _actor;
+
+        if (actor.isPending) {
+          promises.push(actor.originalLocation.originalSourceActor._setBreakpoint(actor));
+        } else {
+          promises.push(this.sources.getAllGeneratedLocations(actor.originalLocation)
+                                    .then((generatedLocations) => {
+            if (generatedLocations.length > 0 &&
+                generatedLocations[0].generatedSourceActor.actorID === sourceActor.actorID) {
+              sourceActor._setBreakpointAtAllGeneratedLocations(
+                actor,
+                generatedLocations
+              );
+            }
+          }));
+        }
+      }
+
+      if (promises.length > 0) {
+        this.unsafeSynchronize(promise.all(promises));
+      }
+    } else {
+      // Bug 1225160: If addSource is called in response to a new script
+      // notification, and this notification was triggered by loading a JSM from
+      // chrome code, calling unsafeSynchronize could cause a debuggee timer to
+      // fire. If this causes the JSM to be loaded a second time, the browser
+      // will crash, because loading JSMS is not reentrant, and the first load
+      // has not completed yet.
+      //
+      // The root of the problem is that unsafeSynchronize can cause debuggee
+      // code to run. Unfortunately, fixing that is prohibitively difficult. The
+      // best we can do at the moment is disable source maps for the browser
+      // debugger, and carefully avoid the use of unsafeSynchronize in this
+      // function when source maps are disabled.
+      for (let actor of bpActors) {
+        actor.originalLocation.originalSourceActor._setBreakpoint(actor);
+      }
     }
 
     this._debuggerSourcesSeen.add(aSource);

@@ -719,7 +719,7 @@ AppendErrorTextMismatch(const nsString& host, nsIX509Cert* ix509,
   }
   notValidForHostnameString.Append('\n');
 
-  ScopedCERTCertificate nssCert(ix509->GetCert());
+  UniqueCERTCertificate nssCert(ix509->GetCert());
   if (!nssCert) {
     returnedMessage.Append(notValidForHostnameString);
     return NS_OK;
@@ -1076,16 +1076,15 @@ TransportSecurityInfo::GetFailedCertChain(nsIX509CertList** _result)
 }
 
 nsresult
-TransportSecurityInfo::SetFailedCertChain(ScopedCERTCertList& certList)
+TransportSecurityInfo::SetFailedCertChain(UniqueCERTCertList certList)
 {
   nsNSSShutDownPreventionLock lock;
   if (isAlreadyShutDown()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  nsCOMPtr<nsIX509CertList> comCertList;
   // nsNSSCertList takes ownership of certList
-  mFailedCertChain = new nsNSSCertList(certList, lock);
+  mFailedCertChain = new nsNSSCertList(Move(certList), lock);
 
   return NS_OK;
 }

@@ -25,10 +25,12 @@ Cu.import("resource://gre/modules/Downloads.jsm");
 const BASE = "http://mochi.test:8888/chrome/toolkit/components/extensions/test/mochitest";
 const TXT_FILE = "file_download.txt";
 const TXT_URL = BASE + "/" + TXT_FILE;
+/* bug 1272425
 const INTERRUPTIBLE_URL = BASE + "/interruptible.sjs";
 // Keep these in sync with code in interruptible.sjs
 const INT_PARTIAL_LEN = 15;
 const INT_TOTAL_LEN = 31;
+*/
 
 function backgroundScript() {
   let events = new Set();
@@ -173,6 +175,8 @@ function runInExtension(what, ...args) {
   return extension.awaitMessage(`${what}.done`);
 }
 
+/*
+ * bug 1272425
 // This is pretty simplistic, it looks for a progress update for a
 // download of the given url in which the total bytes are exactly equal
 // to the given value.  Unless you know exactly how data will arrive from
@@ -191,6 +195,7 @@ function waitForProgress(url, bytes) {
                     list.addView(view);
                   }));
 }
+*/
 
 add_task(function* setup() {
   const nsIFile = Ci.nsIFile;
@@ -245,6 +250,8 @@ add_task(function* test_events() {
   is(msg.status, "success", "got onCreated and onChanged events");
 });
 
+/*
+ * Disabled for bug 1272425
 add_task(function* test_cancel() {
   let msg = yield runInExtension("download", {url: INTERRUPTIBLE_URL});
   is(msg.status, "success", "download() succeeded");
@@ -683,6 +690,7 @@ add_task(function* test_removal_of_incomplete_download() {
   msg = yield runInExtension("removeFile", id);
   is(msg.status, "success", "removeFile() succeeded following completion of resumed download.");
 });
+*/
 
 // Test erase().  We don't do elaborate testing of the query handling
 // since it uses the exact same engine as search() which is tested
@@ -740,6 +748,70 @@ add_task(function* test_erase() {
   msg = yield runInExtension("search", {});
   is(msg.status, "success", "search succeded");
   is(msg.result.length, 0, "search found 0 downloads");
+});
+
+function loadImage(img, data) {
+  return new Promise((resolve) => {
+    let handle = () => {
+      img.removeEventListener("load", handle);
+      resolve();
+    };
+    img.addEventListener("load", handle);
+    img.src = data;
+  });
+}
+
+add_task(function* test_getFileIcon() {
+  let img = document.createElement("img");
+  let msg = yield runInExtension("download", {url: TXT_URL});
+  is(msg.status, "success", "download() succeeded");
+  const id = msg.result;
+
+  msg = yield runInExtension("getFileIcon", id);
+  is(msg.status, "success", "getFileIcon() succeeded");
+  yield loadImage(img, msg.result);
+  is(img.height, 32, "returns an icon with the right height");
+  is(img.width, 32, "returns an icon with the right width");
+
+  msg = yield runInExtension("waitForEvents", [
+    {type: "onCreated", data: {id, url: TXT_URL}},
+    {type: "onChanged"},
+  ]);
+  is(msg.status, "success", "got events");
+
+  msg = yield runInExtension("getFileIcon", id);
+  is(msg.status, "success", "getFileIcon() succeeded");
+  yield loadImage(img, msg.result);
+  is(img.height, 32, "returns an icon with the right height after download");
+  is(img.width, 32, "returns an icon with the right width after download");
+
+  msg = yield runInExtension("getFileIcon", id + 100);
+  is(msg.status, "error", "getFileIcon() failed");
+  ok(msg.errmsg.includes("Invalid download id"), "download id is invalid");
+
+  msg = yield runInExtension("getFileIcon", id, {size: 127});
+  is(msg.status, "success", "getFileIcon() succeeded");
+  yield loadImage(img, msg.result);
+  is(img.height, 127, "returns an icon with the right custom height");
+  is(img.width, 127, "returns an icon with the right custom width");
+
+  msg = yield runInExtension("getFileIcon", id, {size: 1});
+  is(msg.status, "success", "getFileIcon() succeeded");
+  yield loadImage(img, msg.result);
+  is(img.height, 1, "returns an icon with the right custom height");
+  is(img.width, 1, "returns an icon with the right custom width");
+
+  msg = yield runInExtension("getFileIcon", id, {size: "foo"});
+  is(msg.status, "error", "getFileIcon() fails");
+  ok(msg.errmsg.includes("Error processing size"), "size is not a number");
+
+  msg = yield runInExtension("getFileIcon", id, {size: 0});
+  is(msg.status, "error", "getFileIcon() fails");
+  ok(msg.errmsg.includes("Error processing size"), "size is too small");
+
+  msg = yield runInExtension("getFileIcon", id, {size: 128});
+  is(msg.status, "error", "getFileIcon() fails");
+  ok(msg.errmsg.includes("Error processing size"), "size is too big");
 });
 
 add_task(function* cleanup() {

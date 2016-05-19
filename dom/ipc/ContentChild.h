@@ -261,10 +261,6 @@ public:
   virtual bool
   DeallocPWebBrowserPersistDocumentChild(PWebBrowserPersistDocumentChild* aActor) override;
 
-  virtual bool
-  RecvDataStoreNotify(const uint32_t& aAppId, const nsString& aName,
-                      const nsString& aManifestURL) override;
-
   virtual PTestShellChild* AllocPTestShellChild() override;
 
   virtual bool DeallocPTestShellChild(PTestShellChild*) override;
@@ -290,6 +286,9 @@ public:
   virtual PPrintingChild* AllocPPrintingChild() override;
 
   virtual bool DeallocPPrintingChild(PPrintingChild*) override;
+
+  virtual PSendStreamChild* AllocPSendStreamChild() override;
+  virtual bool DeallocPSendStreamChild(PSendStreamChild*) override;
 
   virtual PScreenManagerChild*
   AllocPScreenManagerChild(uint32_t* aNumberOfScreens,

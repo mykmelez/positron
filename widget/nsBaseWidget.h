@@ -6,6 +6,8 @@
 #define nsBaseWidget_h__
 
 #include "mozilla/EventForwards.h"
+#include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/WidgetUtils.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "nsRect.h"
@@ -14,18 +16,19 @@
 #include "nsIFile.h"
 #include "nsString.h"
 #include "nsCOMPtr.h"
-#include "nsAutoPtr.h"
 #include "nsIRollupListener.h"
 #include "nsIObserver.h"
 #include "nsIWidgetListener.h"
 #include "nsPIDOMWindow.h"
 #include "nsWeakReference.h"
+#include "CompositorWidgetProxy.h"
 #include <algorithm>
 class nsIContent;
 class nsAutoRollup;
 class gfxContext;
 
 namespace mozilla {
+class CompositorVsyncDispatcher;
 #ifdef ACCESSIBILITY
 namespace a11y {
 class Accessible;
@@ -91,6 +94,7 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference
 {
   friend class nsAutoRollup;
   friend class DispatchWheelEventOnMainThread;
+  friend class mozilla::widget::CompositorWidgetProxyWrapper;
 
 protected:
   typedef base::Thread Thread;
@@ -107,6 +111,7 @@ protected:
   typedef mozilla::CSSIntRect CSSIntRect;
   typedef mozilla::CSSRect CSSRect;
   typedef mozilla::ScreenRotation ScreenRotation;
+  typedef mozilla::widget::CompositorWidgetProxy CompositorWidgetProxy;
 
   virtual ~nsBaseWidget();
 
@@ -163,23 +168,12 @@ public:
                                           LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT,
                                           bool* aAllowRetaining = nullptr) override;
 
-  CompositorVsyncDispatcher* GetCompositorVsyncDispatcher() override;
+  mozilla::CompositorVsyncDispatcher* GetCompositorVsyncDispatcher();
   void            CreateCompositorVsyncDispatcher();
   virtual CompositorBridgeParent* NewCompositorBridgeParent(int aSurfaceWidth, int aSurfaceHeight);
   virtual void            CreateCompositor();
   virtual void            CreateCompositor(int aWidth, int aHeight);
   virtual void            PrepareWindowEffects() override {}
-  virtual void            CleanupWindowEffects() override {}
-  virtual bool            PreRender(LayerManagerComposite* aManager) override { return true; }
-  virtual void            PostRender(LayerManagerComposite* aManager) override {}
-  virtual void            DrawWindowUnderlay(LayerManagerComposite* aManager, LayoutDeviceIntRect aRect) override {}
-  virtual void            DrawWindowOverlay(LayerManagerComposite* aManager, LayoutDeviceIntRect aRect) override {}
-  virtual already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawing() override;
-  virtual void            EndRemoteDrawing() override { };
-  virtual void            CleanupRemoteDrawing() override;
-  virtual already_AddRefed<mozilla::gfx::DrawTarget> CreateBackBufferDrawTarget(mozilla::gfx::DrawTarget* aScreenTarget,
-                                                                                const LayoutDeviceIntRect& aRect,
-                                                                                const LayoutDeviceIntRect& aClearRect) override;
   virtual void            UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries) override {}
   NS_IMETHOD              SetModal(bool aModal) override;
   virtual uint32_t        GetMaxTouchPoints() const override;
@@ -265,6 +259,7 @@ public:
                           const uint32_t& aFlags) override;
   // Dispatch an event that must be first be routed through APZ.
   nsEventStatus DispatchInputEvent(mozilla::WidgetInputEvent* aEvent) override;
+  void DispatchEventToAPZOnly(mozilla::WidgetInputEvent* aEvent) override;
 
   void SetConfirmedTargetAPZC(uint64_t aInputBlockId,
                               const nsTArray<ScrollableLayerGuid>& aTargets) const override;
@@ -318,14 +313,8 @@ public:
 
   NS_IMETHOD              ReparentNativeWidget(nsIWidget* aNewParent) override = 0;
 
-  virtual uint32_t GetGLFrameBufferFormat() override;
-
   virtual const SizeConstraints GetSizeConstraints() override;
   virtual void SetSizeConstraints(const SizeConstraints& aConstraints) override;
-
-  virtual bool CaptureWidgetOnScreen(RefPtr<mozilla::gfx::DrawTarget> aDT) override {
-    return false;
-  }
 
   virtual void StartAsyncScrollbarDrag(const AsyncDragMetrics& aDragMetrics) override;
 
@@ -357,8 +346,50 @@ public:
 
   void Shutdown();
 
-protected:
+  // Return a new CompositorWidgetProxy for this widget.
+  virtual CompositorWidgetProxy* NewCompositorWidgetProxy();
 
+protected:
+  // These are methods for CompositorWidgetProxyWrapper, and should only be
+  // accessed from that class. Derived widgets can choose which methods to
+  // implement, or none if supporting out-of-process compositing.
+  virtual bool PreRender(mozilla::layers::LayerManagerComposite* aManager) {
+    return true;
+  }
+  virtual void PostRender(mozilla::layers::LayerManagerComposite* aManager)
+  {}
+  virtual void DrawWindowUnderlay(mozilla::layers::LayerManagerComposite* aManager,
+                                  LayoutDeviceIntRect aRect)
+  {}
+  virtual void DrawWindowOverlay(mozilla::layers::LayerManagerComposite* aManager,
+                                 LayoutDeviceIntRect aRect)
+  {}
+  virtual already_AddRefed<DrawTarget> StartRemoteDrawing();
+  virtual already_AddRefed<DrawTarget>
+  StartRemoteDrawingInRegion(LayoutDeviceIntRegion& aInvalidRegion, BufferMode* aBufferMode)
+  {
+    return StartRemoteDrawing();
+  }
+  virtual void EndRemoteDrawing()
+  {}
+  virtual void EndRemoteDrawingInRegion(DrawTarget* aDrawTarget,
+                                        LayoutDeviceIntRegion& aInvalidRegion)
+  {
+    EndRemoteDrawing();
+  }
+  virtual void CleanupRemoteDrawing()
+  {}
+  virtual void CleanupWindowEffects()
+  {}
+  virtual bool InitCompositor(mozilla::layers::Compositor* aCompositor) {
+    return true;
+  }
+  virtual uint32_t GetGLFrameBufferFormat();
+  virtual mozilla::layers::Composer2D* GetComposer2D() {
+    return nullptr;
+  }
+
+protected:
   void            ResolveIconName(const nsAString &aIconName,
                                   const nsAString &aIconSuffix,
                                   nsIFile **aResult);
@@ -427,7 +458,7 @@ protected:
 
   virtual nsresult SynthesizeNativeTouchPoint(uint32_t aPointerId,
                                               TouchPointerState aPointerState,
-                                              ScreenIntPoint aPointerScreenPoint,
+                                              LayoutDeviceIntPoint aPoint,
                                               double aPointerPressure,
                                               uint32_t aPointerOrientation,
                                               nsIObserver* aObserver) override
@@ -499,10 +530,12 @@ protected:
 
   nsIDocument* GetDocument() const;
 
- void EnsureTextEventDispatcher();
+  void EnsureTextEventDispatcher();
 
   // Notify the compositor that a device reset has occurred.
   void OnRenderingDeviceReset();
+
+  bool UseAPZ();
 
 protected:
   /**
@@ -527,9 +560,8 @@ protected:
   RefPtr<CompositorBridgeParent> mCompositorBridgeParent;
   RefPtr<mozilla::CompositorVsyncDispatcher> mCompositorVsyncDispatcher;
   RefPtr<APZCTreeManager> mAPZC;
+  RefPtr<GeckoContentController> mRootContentController;
   RefPtr<APZEventState> mAPZEventState;
-  // Back buffer of BasicCompositor
-  RefPtr<DrawTarget> mLastBackBuffer;
   SetAllowedTouchBehaviorCallback mSetAllowedTouchBehaviorCallback;
   RefPtr<WidgetShutdownObserver> mShutdownObserver;
   RefPtr<TextEventDispatcher> mTextEventDispatcher;
@@ -544,6 +576,8 @@ protected:
   nsPopupLevel      mPopupLevel;
   nsPopupType       mPopupType;
   SizeConstraints   mSizeConstraints;
+
+  RefPtr<CompositorWidgetProxy> mCompositorWidgetProxy;
 
   bool              mUpdateCursor;
   bool              mUseAttachedEvents;

@@ -134,6 +134,7 @@
 #include "nsIStructuredCloneContainer.h"
 #ifdef MOZ_PLACES
 #include "nsIFaviconService.h"
+#include "mozIPlacesPendingOperation.h"
 #include "mozIAsyncFavicons.h"
 #endif
 #include "nsINetworkPredictor.h"
@@ -1475,8 +1476,8 @@ nsDocShell::LoadURI(nsIURI* aURI,
   //       for in InternalLoad is data:, javascript:, and about:blank
   //       URIs.  For other URIs this would all be dead wrong!
 
+  nsCOMPtr<nsIPrincipal> ownerPrincipal = do_QueryInterface(owner);
   if (owner && mItemType != typeChrome) {
-    nsCOMPtr<nsIPrincipal> ownerPrincipal = do_QueryInterface(owner);
     if (nsContentUtils::IsSystemPrincipal(ownerPrincipal)) {
       if (ownerIsExplicit) {
         return NS_ERROR_DOM_SECURITY_ERR;
@@ -1489,7 +1490,10 @@ nsDocShell::LoadURI(nsIURI* aURI,
       }
       // Don't inherit from the current page.  Just do the safe thing
       // and pretend that we were loaded by a nullprincipal.
-      owner = nsNullPrincipal::Create();
+      //
+      // We didn't inherit OriginAttributes here as ExpandedPrincipal doesn't
+      // have origin attributes.
+      owner = nsNullPrincipal::CreateWithInheritedAttributes(this);
       inheritOwner = false;
     }
   }
@@ -1500,7 +1504,9 @@ nsDocShell::LoadURI(nsIURI* aURI,
 
   if (aLoadFlags & LOAD_FLAGS_DISALLOW_INHERIT_OWNER) {
     inheritOwner = false;
-    owner = nsNullPrincipal::Create();
+    owner = ownerPrincipal ?
+              nsNullPrincipal::CreateWithInheritedAttributes(ownerPrincipal) :
+              nsNullPrincipal::CreateWithInheritedAttributes(this);
   }
 
   uint32_t flags = 0;
@@ -5057,6 +5063,11 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
         // ServiceWorker intercepted request, but something went wrong.
         error.AssignLiteral("corruptedContentError");
         break;
+      case NS_ERROR_NET_INADEQUATE_SECURITY:
+        // Server negotiated bad TLS for HTTP/2.
+        error.AssignLiteral("inadequateSecurityError");
+        addHostPort = true;
+        break;
       default:
         break;
     }
@@ -7796,6 +7807,7 @@ nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
                aStatus == NS_ERROR_UNSAFE_CONTENT_TYPE ||
                aStatus == NS_ERROR_REMOTE_XUL ||
                aStatus == NS_ERROR_INTERCEPTION_FAILED ||
+               aStatus == NS_ERROR_NET_INADEQUATE_SECURITY ||
                NS_ERROR_GET_MODULE(aStatus) == NS_ERROR_MODULE_SECURITY) {
       // Errors to be shown for any frame
       DisplayLoadError(aStatus, url, nullptr, aChannel);
@@ -7942,7 +7954,6 @@ nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal* aPrincipal,
     nsCOMPtr<nsIPrincipal> principal;
     if (mSandboxFlags & SANDBOXED_ORIGIN) {
       principal = nsNullPrincipal::CreateWithInheritedAttributes(aPrincipal);
-      NS_ENSURE_TRUE(principal, NS_ERROR_FAILURE);
     } else {
       principal = aPrincipal;
     }
@@ -9402,11 +9413,12 @@ public:
     MOZ_ASSERT(aDataLen == 0,
                "We weren't expecting the callback to deliver data.");
 
+    nsCOMPtr<mozIPlacesPendingOperation> po;
     return mSvc->SetAndFetchFaviconForPage(
       mNewURI, aFaviconURI, false,
       mInPrivateBrowsing ? nsIFaviconService::FAVICON_LOAD_PRIVATE :
                            nsIFaviconService::FAVICON_LOAD_NON_PRIVATE,
-      nullptr, mLoadingPrincipal);
+      nullptr, mLoadingPrincipal, getter_AddRefs(po));
   }
 
 private:
@@ -9455,7 +9467,7 @@ nsDocShell::CopyFavicon(nsIURI* aOldURI,
 #endif
 }
 
-class InternalLoadEvent : public nsRunnable
+class InternalLoadEvent : public Runnable
 {
 public:
   InternalLoadEvent(nsDocShell* aDocShell, nsIURI* aURI,
@@ -10566,6 +10578,11 @@ nsDocShell::DoURILoad(nsIURI* aURI,
   }
 
   if (IsFrame()) {
+
+    MOZ_ASSERT(aContentPolicyType == nsIContentPolicy::TYPE_INTERNAL_IFRAME ||
+               aContentPolicyType == nsIContentPolicy::TYPE_INTERNAL_FRAME,
+               "DoURILoad thinks this is a frame and InternalLoad does not");
+
     // Only allow view-source scheme in top-level docshells. view-source is
     // the only scheme to which this applies at the moment due to potential
     // timing attacks to read data from cross-origin iframes. If this widens
@@ -10584,7 +10601,11 @@ nsDocShell::DoURILoad(nsIURI* aURI,
       nestedURI->GetInnerURI(getter_AddRefs(tempURI));
       nestedURI = do_QueryInterface(tempURI);
     }
+  } else {
+    MOZ_ASSERT(aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT,
+    "DoURILoad thinks this is a document and InternalLoad does not");
   }
+
 
   // For mozWidget, display a load error if we navigate to a page which is not
   // claimed in |widgetPages|.
@@ -10620,37 +10641,31 @@ nsDocShell::DoURILoad(nsIURI* aURI,
   bool isSrcdoc = !aSrcdoc.IsVoid();
 
   // There are two cases we care about:
-  // * Top-level load (GetFrameElementInternal returns null). In this case,
-  //   requestingNode is null, but requestingWindow is our mScriptGlobal.
-  //   TODO we want to pass null for loadingPrincipal in this case.
-  // * Subframe load: requestingWindow is null, but requestingNode is the frame
+  // * Top-level load: In this case, loadingNode is null, but loadingWindow
+  //   is our mScriptGlobal. We pass null for loadingPrincipal in this case.
+  // * Subframe load: loadingWindow is null, but loadingNode is the frame
   //   element for the load. loadingPrincipal is the NodePrincipal of the frame
   //   element.
-  nsCOMPtr<nsINode> requestingNode;
-  nsCOMPtr<nsPIDOMWindowOuter> requestingWindow;
-
+  nsCOMPtr<nsINode> loadingNode;
+  nsCOMPtr<nsPIDOMWindowOuter> loadingWindow;
   nsCOMPtr<nsIPrincipal> loadingPrincipal;
-  requestingNode = mScriptGlobal->AsOuter()->GetFrameElementInternal();
-  if (requestingNode) {
-    // If we have a requesting node, then use that as our loadingPrincipal.
-    loadingPrincipal = requestingNode->NodePrincipal();
-  } else {
-    if (aContentPolicyType != nsIContentPolicy::TYPE_DOCUMENT) {
-      // If this isn't a top-level load and mScriptGlobal's frame element is
-      // null, then the element got removed from the DOM while we were trying to
-      // load this resource. This docshell is scheduled for destruction already,
-      // so bail out here.
-      return NS_OK;
-    }
 
-    requestingWindow = mScriptGlobal->AsOuter();
-    if (mItemType != typeChrome) {
-      nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
-      ssm->GetDocShellCodebasePrincipal(aURI, this, getter_AddRefs(loadingPrincipal));
+  if (aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT) {
+    loadingNode = nullptr;
+    loadingPrincipal = nullptr;
+    loadingWindow = mScriptGlobal->AsOuter();
+  } else {
+    loadingWindow = nullptr;
+    loadingNode = mScriptGlobal->AsOuter()->GetFrameElementInternal();
+    if (loadingNode) {
+      // If we have a loading node, then use that as our loadingPrincipal.
+      loadingPrincipal = loadingNode->NodePrincipal();
     } else {
-      // This is a top-level chrome load, use a system principal for the
-      // loadingPrincipal.
-      loadingPrincipal = nsContentUtils::GetSystemPrincipal();
+      // If this isn't a top-level load and mScriptGlobal's frame element is
+      // null, then the element got removed from the DOM while we were trying
+      // to load this resource. This docshell is scheduled for destruction
+      // already, so bail out here.
+      return NS_OK;
     }
   }
 
@@ -10658,6 +10673,10 @@ nsDocShell::DoURILoad(nsIURI* aURI,
   // only inherit if we have a triggeringPrincipal
   bool inherit = false;
 
+  // Get triggeringPrincipal.  This code should be updated by bug 1181370.
+  // Until then, we cannot rely on the triggeringPrincipal for TYPE_DOCUMENT
+  // or TYPE_SUBDOCUMENT loads.  Notice the triggeringPrincipal falls back to
+  // systemPrincipal below.
   nsCOMPtr<nsIPrincipal> triggeringPrincipal = do_QueryInterface(aOwner);
   if (triggeringPrincipal) {
     inherit = nsContentUtils::ChannelShouldInheritPrincipal(
@@ -10681,12 +10700,24 @@ nsDocShell::DoURILoad(nsIURI* aURI,
     securityFlags |= nsILoadInfo::SEC_SANDBOXED;
   }
 
+  if (mInPrivateBrowsing) {
+    securityFlags |= nsILoadInfo::SEC_FORCE_PRIVATE_BROWSING;
+  }
+
   nsCOMPtr<nsILoadInfo> loadInfo =
-    requestingWindow ?
-      new LoadInfo(requestingWindow, loadingPrincipal, triggeringPrincipal,
+    (aContentPolicyType == nsIContentPolicy::TYPE_DOCUMENT) ?
+      new LoadInfo(loadingWindow, triggeringPrincipal,
                    securityFlags) :
-      new LoadInfo(loadingPrincipal, triggeringPrincipal, requestingNode,
+      new LoadInfo(loadingPrincipal, triggeringPrincipal, loadingNode,
                    securityFlags, aContentPolicyType);
+
+  // We have to do this in case our OriginAttributes are different from the
+  // OriginAttributes of the parent document. Or in case there isn't a
+  // parent document.
+  NeckoOriginAttributes neckoAttrs;
+  neckoAttrs.InheritFromDocShellToNecko(GetOriginAttributes());
+  loadInfo->SetOriginAttributes(neckoAttrs);
+
   if (!isSrcdoc) {
     rv = NS_NewChannelInternal(getter_AddRefs(channel),
                                aURI,
@@ -10710,6 +10741,7 @@ nsDocShell::DoURILoad(nsIURI* aURI,
       }
       return rv;
     }
+
     if (aBaseURI) {
         nsCOMPtr<nsIViewSourceChannel> vsc = do_QueryInterface(channel);
         if (vsc) {
@@ -12041,9 +12073,18 @@ nsDocShell::AddToSessionHistory(nsIURI* aURI, nsIChannel* aChannel,
       if (loadInfo) {
         // For now keep storing just the principal in the SHEntry.
         if (loadInfo->GetLoadingSandboxed()) {
-          owner = nsNullPrincipal::CreateWithInheritedAttributes(
-            loadInfo->LoadingPrincipal());
-          NS_ENSURE_TRUE(owner, NS_ERROR_FAILURE);
+          if (loadInfo->LoadingPrincipal()) {
+            owner = nsNullPrincipal::CreateWithInheritedAttributes(
+              loadInfo->LoadingPrincipal());
+          } else {
+            // get the OriginAttributes
+            NeckoOriginAttributes nAttrs;
+            loadInfo->GetOriginAttributes(&nAttrs);
+            PrincipalOriginAttributes pAttrs;
+            pAttrs.InheritFromNecko(nAttrs);
+
+            owner = nsNullPrincipal::Create(pAttrs);
+          }
         } else if (loadInfo->GetForceInheritPrincipal()) {
           owner = loadInfo->TriggeringPrincipal();
         }
@@ -12215,8 +12256,7 @@ nsDocShell::LoadHistoryEntry(nsISHEntry* aEntry, uint32_t aLoadType)
       // Ensure that we have an owner.  Otherwise javascript: URIs will
       // pick it up from the about:blank page we just loaded, and we
       // don't really want even that in this case.
-      owner = nsNullPrincipal::Create();
-      NS_ENSURE_TRUE(owner, NS_ERROR_OUT_OF_MEMORY);
+      owner = nsNullPrincipal::CreateWithInheritedAttributes(this);
     }
   }
 
@@ -13195,7 +13235,7 @@ nsDocShell::SetBaseUrlForWyciwyg(nsIContentViewer* aContentViewer)
   if (baseURI) {
     nsIDocument* document = aContentViewer->GetDocument();
     if (document) {
-      rv = document->SetBaseURI(baseURI);
+      document->SetBaseURI(baseURI);
     }
   }
   return rv;
@@ -13487,7 +13527,7 @@ nsDocShell::SelectNone(void)
 
 // link handling
 
-class OnLinkClickEvent : public nsRunnable
+class OnLinkClickEvent : public Runnable
 {
 public:
   OnLinkClickEvent(nsDocShell* aHandler, nsIContent* aContent,
@@ -13897,8 +13937,7 @@ nsDocShell::GetPrintPreview(nsIWebBrowserPrint** aPrintPreview)
   nsCOMPtr<nsIDocumentViewerPrint> print = do_QueryInterface(mContentViewer);
   if (!print || !print->IsInitializedForPrintPreview()) {
     Stop(nsIWebNavigation::STOP_ALL);
-    nsCOMPtr<nsIPrincipal> principal = nsNullPrincipal::Create();
-    NS_ENSURE_STATE(principal);
+    nsCOMPtr<nsIPrincipal> principal = nsNullPrincipal::CreateWithInheritedAttributes(this);
     nsresult rv = CreateAboutBlankContentViewer(principal, nullptr);
     NS_ENSURE_SUCCESS(rv, rv);
     print = do_QueryInterface(mContentViewer);

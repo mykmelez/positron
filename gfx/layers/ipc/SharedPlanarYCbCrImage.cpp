@@ -82,7 +82,7 @@ SharedPlanarYCbCrImage::GetAsSourceSurface()
 }
 
 bool
-SharedPlanarYCbCrImage::SetData(const PlanarYCbCrData& aData)
+SharedPlanarYCbCrImage::CopyData(const PlanarYCbCrData& aData)
 {
   // If mTextureClient has not already been allocated (through Allocate(aData))
   // allocate it. This code path is slower than the one used when Allocate has
@@ -135,14 +135,14 @@ SharedPlanarYCbCrImage::AllocateAndGetNewBuffer(uint32_t aSize)
     // buffer which is where the y channel starts by default.
     return mapped.y.data;
   } else {
-    MOZ_CRASH();
+    MOZ_CRASH("GFX: Cannot borrow mapped YCbCr data");
   }
 }
 
 bool
-SharedPlanarYCbCrImage::SetDataNoCopy(const Data &aData)
+SharedPlanarYCbCrImage::AdoptData(const Data &aData)
 {
-  // SetDataNoCopy is used to update YUV plane offsets without (re)allocating
+  // AdoptData is used to update YUV plane offsets without (re)allocating
   // memory previously allocated with AllocateAndGetNewBuffer().
 
   MOZ_ASSERT(mTextureClient, "This Image should have already allocated data");
@@ -191,7 +191,8 @@ SharedPlanarYCbCrImage::Allocate(PlanarYCbCrData& aData)
   // because the underlyin BufferTextureData is always mapped in memory even outside
   // of the lock/unlock interval. That's sad and new code should follow this example.
   if (!mTextureClient->Lock(OpenMode::OPEN_READ) || !mTextureClient->BorrowMappedYCbCrData(mapped)) {
-    MOZ_CRASH();
+    MOZ_CRASH("GFX: Cannot lock or borrow mapped YCbCr");
+    return false;
   }
 
   aData.mYChannel = mapped.y.data;

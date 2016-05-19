@@ -15,7 +15,7 @@ namespace jit {
     _(SimdBox)                                                              \
     _(SimdUnbox)                                                            \
     _(SimdValueX4)                                                          \
-    _(SimdSplatX4)                                                          \
+    _(SimdSplat)                                                            \
     _(SimdConstant)                                                         \
     _(SimdConvert)                                                          \
     _(SimdReinterpretCast)                                                  \
@@ -52,6 +52,7 @@ namespace jit {
     _(ReturnFromCtor)                                                       \
     _(BinarySharedStub)                                                     \
     _(UnarySharedStub)                                                      \
+    _(NullarySharedStub)                                                    \
     _(CheckOverRecursed)                                                    \
     _(DefVar)                                                               \
     _(DefLexical)                                                           \
@@ -118,7 +119,7 @@ namespace jit {
     _(ToFloat32)                                                            \
     _(ToInt32)                                                              \
     _(TruncateToInt32)                                                      \
-    _(TruncateToInt64)                                                      \
+    _(WasmTruncateToInt64)                                                  \
     _(WrapInt64ToInt32)                                                     \
     _(ExtendInt32ToInt64)                                                   \
     _(Int64ToFloatingPoint)                                                 \
@@ -150,6 +151,7 @@ namespace jit {
     _(RegExpTester)                                                         \
     _(RegExpPrototypeOptimizable)                                           \
     _(RegExpInstanceOptimizable)                                            \
+    _(GetFirstDollarIndex)                                                  \
     _(StringReplace)                                                        \
     _(Lambda)                                                               \
     _(LambdaArrow)                                                          \
@@ -264,6 +266,7 @@ namespace jit {
     _(IsCallable)                                                           \
     _(IsObject)                                                             \
     _(HasClass)                                                             \
+    _(WasmTruncateToInt32)                                                  \
     _(AsmJSNeg)                                                             \
     _(AsmJSUnsignedToDouble)                                                \
     _(AsmJSUnsignedToFloat32)                                               \
@@ -280,6 +283,7 @@ namespace jit {
     _(AsmJSCall)                                                            \
     _(AsmSelect)                                                            \
     _(AsmReinterpret)                                                       \
+    _(Rotate)                                                               \
     _(NewDerivedTypedObject)                                                \
     _(RecompileCheck)                                                       \
     _(AsmJSCompareExchangeHeap)                                             \

@@ -127,10 +127,14 @@ public class Distribution {
      * {@link org.mozilla.gecko.distribution.Distribution#exists()} will return
      * false. In the other two callbacks, it will return true.
      */
-    @WorkerThread
     public interface ReadyCallback {
+        @WorkerThread
         void distributionNotFound();
+
+        @WorkerThread
         void distributionFound(Distribution distribution);
+
+        @WorkerThread
         void distributionArrivedLate(Distribution distribution);
     }
 
@@ -352,6 +356,34 @@ public class Distribution {
         return descFile;
     }
 
+    public DistributionDescriptor getDescriptor() {
+        File descFile = getDistributionFile("preferences.json");
+        if (descFile == null) {
+            // Logging and existence checks are handled in getDistributionFile.
+            return null;
+        }
+
+        try {
+            JSONObject all = FileUtils.readJSONObjectFromFile(descFile);
+
+            if (!all.has("Global")) {
+                Log.e(LOGTAG, "Distribution preferences.json has no Global entry!");
+                return null;
+            }
+
+            return new DistributionDescriptor(all.getJSONObject("Global"));
+
+        } catch (IOException e) {
+            Log.e(LOGTAG, "Error getting distribution descriptor file.", e);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
+            return null;
+        } catch (JSONException e) {
+            Log.e(LOGTAG, "Error parsing preferences.json", e);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
+            return null;
+        }
+    }
+
     /**
      * Get the Android preferences from the preferences.json file, if any exist.
      * @return The preferences in a JSONObject, or an empty JSONObject if no preferences are defined.
@@ -364,7 +396,7 @@ public class Distribution {
         }
 
         try {
-            final JSONObject all = new JSONObject(FileUtils.getFileContents(descFile));
+            final JSONObject all = FileUtils.readJSONObjectFromFile(descFile);
 
             if (!all.has("AndroidPreferences")) {
                 return new JSONObject();
@@ -391,7 +423,7 @@ public class Distribution {
         }
 
         try {
-            return new JSONArray(FileUtils.getFileContents(bookmarks));
+            return new JSONArray(FileUtils.readStringFromFile(bookmarks));
         } catch (IOException e) {
             Log.e(LOGTAG, "Error getting bookmarks", e);
             Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
@@ -897,7 +929,10 @@ public class Distribution {
             }
         }
 
-        return new String[] { baseDirectory };
+        return new String[] {
+                baseDirectory + "/default",
+                baseDirectory
+        };
     }
 
     /**

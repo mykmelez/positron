@@ -10,6 +10,8 @@
 #include "mozilla/HashFunctions.h"
 #include "mozilla/PodOperations.h"
 
+#include <stdio.h>
+
 #include "jsutil.h"
 #include "NamespaceImports.h"
 
@@ -111,6 +113,9 @@ js_strncpy(char16_t* dst, const char16_t* src, size_t nelem)
     return mozilla::PodCopy(dst, src, nelem);
 }
 
+extern int32_t
+js_fputs(const char16_t* s, FILE* f);
+
 namespace js {
 
 /* Initialize the String class, returning its prototype object. */
@@ -136,8 +141,14 @@ DuplicateString(ExclusiveContext* cx, const char16_t* s);
 extern UniqueChars
 DuplicateString(const char* s);
 
+extern UniqueChars
+DuplicateString(const char* s, size_t n);
+
 extern UniqueTwoByteChars
 DuplicateString(const char16_t* s);
+
+extern UniqueTwoByteChars
+DuplicateString(const char16_t* s, size_t n);
 
 /*
  * Convert a non-string value to a string, returning null after reporting an
@@ -338,6 +349,39 @@ str_charCodeAt_impl(JSContext* cx, HandleString string, HandleValue index, Mutab
 
 extern bool
 str_charCodeAt(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+str_contains(JSContext *cx, unsigned argc, Value *vp);
+
+extern bool
+str_endsWith(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+str_trim(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+str_trimLeft(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+str_trimRight(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+str_toLocaleLowerCase(JSContext* cx, unsigned argc, Value* vp);
+
+extern bool
+str_toLocaleUpperCase(JSContext* cx, unsigned argc, Value* vp);
+
+#if !EXPOSE_INTL_API
+extern bool
+str_localeCompare(JSContext* cx, unsigned argc, Value* vp);
+#else
+extern bool
+str_normalize(JSContext* cx, unsigned argc, Value* vp);
+#endif
+
+extern bool
+str_concat(JSContext* cx, unsigned argc, Value* vp);
+
 /*
  * Convert one UCS-4 char and write it into a UTF-8 buffer, which must be at
  * least 4 bytes long.  Return the number of UTF-8 bytes of data written.

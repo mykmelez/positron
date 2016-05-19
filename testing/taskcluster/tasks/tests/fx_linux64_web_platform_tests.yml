@@ -9,7 +9,6 @@ task:
       - --no-read-buildbot-config
       - --installer-url={{build_url}}
       - --test-packages-url={{test_packages_url}}
-      - --download-symbols=ondemand
       - --test-type=testharness
       - --total-chunk={{total_chunks}}
       - --this-chunk={{chunk}}
@@ -23,7 +22,7 @@ task:
     description: Web platform tests run {{chunk}}
   extra:
     chunks:
-      total: 8
+      total: 12
     suite:
       name: web-platform-tests
       flavor: web-platform-tests

@@ -20,6 +20,10 @@
         #include "nsScreenManagerGonk.h"
     #endif
 
+    #ifdef MOZ_WIDGET_ANDROID
+        #include "AndroidBridge.h"
+    #endif
+
     #ifdef ANDROID
         #include <android/log.h>
         #define LOG(args...)  __android_log_print(ANDROID_LOG_INFO, "Gonk" , ## args)
@@ -169,7 +173,15 @@ CreateSurfaceForWindow(nsIWidget* widget, const EGLConfig& config) {
 
     MOZ_ASSERT(widget);
 #ifdef MOZ_WIDGET_ANDROID
-    newSurface = EGLSurface(widget->GetNativeData(NS_NATIVE_NEW_EGL_SURFACE));
+    void* javaSurface = GET_NATIVE_WINDOW(widget);
+    if (!javaSurface) {
+        MOZ_CRASH("GFX: Failed to get Java surface.\n");
+    }
+    JNIEnv* const env = jni::GetEnvForThread();
+    void* nativeWindow = AndroidBridge::Bridge()->AcquireNativeWindow(env, reinterpret_cast<jobject>(javaSurface));
+    newSurface = sEGLLibrary.fCreateWindowSurface(sEGLLibrary.fGetDisplay(EGL_DEFAULT_DISPLAY), config,
+                                                  nativeWindow, 0);
+    AndroidBridge::Bridge()->ReleaseNativeWindow(nativeWindow);
 #else
     newSurface = sEGLLibrary.fCreateWindowSurface(EGL_DISPLAY(), config,
                                                   GET_NATIVE_WINDOW(widget), 0);
@@ -928,6 +940,10 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(CreateContextFlags flags,
                                                const mozilla::gfx::IntSize& size,
                                                const SurfaceCaps& minCaps)
 {
+    bool forceEnableHardware = bool(flags & CreateContextFlags::FORCE_ENABLE_HARDWARE);
+    if (!sEGLLibrary.EnsureInitialized(forceEnableHardware))
+        return nullptr;
+
     SurfaceCaps configCaps;
     EGLConfig config = ChooseConfig(&sEGLLibrary, flags, minCaps, &configCaps);
     if (config == EGL_NO_CONFIG) {
@@ -935,8 +951,9 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(CreateContextFlags flags,
         return nullptr;
     }
 
-    if (GLContext::ShouldSpew())
+    if (GLContext::ShouldSpew()) {
         sEGLLibrary.DumpEGLConfig(config);
+    }
 
     mozilla::gfx::IntSize pbSize(size);
     EGLSurface surface = GLContextEGL::CreatePBufferSurfaceTryingPowerOfTwo(config,
@@ -947,18 +964,11 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(CreateContextFlags flags,
         return nullptr;
     }
 
-
     RefPtr<GLContextEGL> gl = GLContextEGL::CreateGLContext(flags, configCaps, nullptr, true,
                                                             config, surface);
     if (!gl) {
         NS_WARNING("Failed to create GLContext from PBuffer");
         sEGLLibrary.fDestroySurface(sEGLLibrary.Display(), surface);
-        return nullptr;
-    }
-
-    if (!gl->Init()) {
-        NS_WARNING("Failed to initialize GLContext!");
-        // GLContextEGL::dtor will destroy |surface| for us.
         return nullptr;
     }
 
@@ -968,10 +978,6 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(CreateContextFlags flags,
 /*static*/ already_AddRefed<GLContext>
 GLContextProviderEGL::CreateHeadless(CreateContextFlags flags)
 {
-    bool forceEnableHardware = bool(flags & CreateContextFlags::FORCE_ENABLE_HARDWARE);
-    if (!sEGLLibrary.EnsureInitialized(forceEnableHardware))
-        return nullptr;
-
     mozilla::gfx::IntSize dummySize = mozilla::gfx::IntSize(16, 16);
     SurfaceCaps dummyCaps = SurfaceCaps::Any();
     return GLContextEGL::CreateEGLPBufferOffscreenContext(flags, dummySize, dummyCaps);
@@ -985,7 +991,7 @@ GLContextProviderEGL::CreateOffscreen(const mozilla::gfx::IntSize& size,
                                       CreateContextFlags flags)
 {
     bool forceEnableHardware = bool(flags & CreateContextFlags::FORCE_ENABLE_HARDWARE);
-    if (!sEGLLibrary.EnsureInitialized(forceEnableHardware))
+    if (!sEGLLibrary.EnsureInitialized(forceEnableHardware)) // Needed for IsANGLE().
         return nullptr;
 
     bool canOffscreenUseHeadless = true;

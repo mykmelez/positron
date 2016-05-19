@@ -6,7 +6,7 @@
 
 "use strict";
 
-define(function(require, exports, module) {
+define(function (require, exports, module) {
   const { DOM: dom, createFactory, createClass, PropTypes } = require("devtools/client/shared/vendor/react");
   const { createFactories } = require("devtools/client/shared/components/reps/rep-utils");
   const TreeView = createFactory(require("devtools/client/shared/components/tree/tree-view"));
@@ -15,6 +15,8 @@ define(function(require, exports, module) {
   const { Toolbar, ToolbarButton } = createFactories(require("./reps/toolbar"));
 
   const { div } = dom;
+  const AUTO_EXPAND_MAX_SIZE = 100 * 1024;
+  const AUTO_EXPAND_MAX_LEVEL = 7;
 
   /**
    * This template represents the 'JSON' panel. The panel is
@@ -28,35 +30,58 @@ define(function(require, exports, module) {
         PropTypes.array,
         PropTypes.object
       ]),
+      jsonTextLength: PropTypes.number,
       searchFilter: PropTypes.string,
       actions: PropTypes.object,
     },
 
     displayName: "JsonPanel",
 
-    getInitialState: function() {
+    getInitialState: function () {
       return {};
     },
 
-    componentDidMount: function() {
+    componentDidMount: function () {
       document.addEventListener("keypress", this.onKeyPress, true);
     },
 
-    componentWillUnmount: function() {
+    componentWillUnmount: function () {
       document.removeEventListener("keypress", this.onKeyPress, true);
     },
 
-    onKeyPress: function(e) {
+    onKeyPress: function (e) {
       // XXX shortcut for focusing the Filter field (see Bug 1178771).
     },
 
-    onFilter: function(object) {
+    onFilter: function (object) {
       if (!this.props.searchFilter) {
         return true;
       }
 
       let json = JSON.stringify(object).toLowerCase();
       return json.indexOf(this.props.searchFilter) >= 0;
+    },
+
+    getExpandedNodes: function (object, path = "", level = 0) {
+      if (typeof object != "object") {
+        return null;
+      }
+
+      if (level > AUTO_EXPAND_MAX_LEVEL) {
+        return null;
+      }
+
+      let expandedNodes = new Set();
+      for (let prop in object) {
+        let nodePath = path + "/" + prop;
+        expandedNodes.add(nodePath);
+
+        let nodes = this.getExpandedNodes(object[prop], nodePath, level + 1);
+        if (nodes) {
+          expandedNodes = new Set([...expandedNodes, ...nodes]);
+        }
+      }
+      return expandedNodes;
     },
 
     renderValue: props => {
@@ -71,7 +96,7 @@ define(function(require, exports, module) {
       return Rep(props);
     },
 
-    renderTree: function() {
+    renderTree: function () {
       // Append custom column for displaying values. This column
       // Take all available horizontal space.
       let columns = [{
@@ -79,17 +104,24 @@ define(function(require, exports, module) {
         width: "100%"
       }];
 
+      // Expand the document by default if its size isn't bigger than 100KB.
+      let expandedNodes = new Set();
+      if (this.props.jsonTextLength <= AUTO_EXPAND_MAX_SIZE) {
+        expandedNodes = this.getExpandedNodes(this.props.data);
+      }
+
       // Render tree component.
       return TreeView({
         object: this.props.data,
         mode: "tiny",
-        onFilter: this.onFilter.bind(this),
+        onFilter: this.onFilter,
         columns: columns,
-        renderValue: this.renderValue
+        renderValue: this.renderValue,
+        expandedNodes: expandedNodes,
       });
     },
 
-    render: function() {
+    render: function () {
       let content;
       let data = this.props.data;
 
@@ -130,15 +162,15 @@ define(function(require, exports, module) {
 
     // Commands
 
-    onSave: function(event) {
+    onSave: function (event) {
       this.props.actions.onSaveJson();
     },
 
-    onCopy: function(event) {
+    onCopy: function (event) {
       this.props.actions.onCopyJson();
     },
 
-    render: function() {
+    render: function () {
       return (
         Toolbar({},
           ToolbarButton({className: "btn save", onClick: this.onSave},

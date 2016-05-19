@@ -23,6 +23,7 @@
 #include "nsIDOMHTMLInputElement.h"
 #include "nsRenderingContext.h"
 #include "nsGkAtoms.h"
+#include "nsAttrValueInlines.h"
 
 #include "mozilla/EventStates.h"
 #include "mozilla/Services.h"
@@ -176,9 +177,18 @@ nsNativeThemeGTK::GetTabMarginPixels(nsIFrame* aFrame)
                        aFrame->PresContext()->AppUnitsToDevPixels(-margin)));
 }
 
+static bool ShouldScrollbarButtonBeDisabled(int32_t aCurpos, int32_t aMaxpos,
+                                            uint8_t aWidgetType)
+{
+  return ((aCurpos == 0 && (aWidgetType == NS_THEME_SCROLLBAR_BUTTON_UP ||
+                            aWidgetType == NS_THEME_SCROLLBAR_BUTTON_LEFT))
+      || (aCurpos == aMaxpos && (aWidgetType == NS_THEME_SCROLLBAR_BUTTON_DOWN ||
+                                 aWidgetType == NS_THEME_SCROLLBAR_BUTTON_RIGHT)));
+}
+
 bool
 nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
-                                       GtkThemeWidgetType& aGtkWidgetType,
+                                       WidgetNodeType& aGtkWidgetType,
                                        GtkWidgetState* aState,
                                        gint* aWidgetFlags)
 {
@@ -308,12 +318,9 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
           // the beginning or the end, depending on the button type.
           int32_t curpos = CheckIntAttr(aFrame, nsGkAtoms::curpos, 0);
           int32_t maxpos = CheckIntAttr(aFrame, nsGkAtoms::maxpos, 100);
-          if ((curpos == 0 && (aWidgetType == NS_THEME_SCROLLBAR_BUTTON_UP ||
-                aWidgetType == NS_THEME_SCROLLBAR_BUTTON_LEFT)) ||
-              (curpos == maxpos &&
-               (aWidgetType == NS_THEME_SCROLLBAR_BUTTON_DOWN ||
-                aWidgetType == NS_THEME_SCROLLBAR_BUTTON_RIGHT)))
+          if (ShouldScrollbarButtonBeDisabled(curpos, maxpos, aWidgetType)) {
             aState->disabled = true;
+          }
 
           // In order to simulate native GTK scrollbar click behavior,
           // we set the active attribute on the element to true if it's
@@ -503,8 +510,14 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
     break;
   case NS_THEME_NUMBER_INPUT:
   case NS_THEME_TEXTFIELD:
-  case NS_THEME_TEXTFIELD_MULTILINE:
     aGtkWidgetType = MOZ_GTK_ENTRY;
+    break;
+  case NS_THEME_TEXTFIELD_MULTILINE:
+#if (MOZ_WIDGET_GTK == 3)
+    aGtkWidgetType = MOZ_GTK_TEXT_VIEW;
+#else
+    aGtkWidgetType = MOZ_GTK_ENTRY;
+#endif
     break;
   case NS_THEME_LISTBOX:
   case NS_THEME_TREEVIEW:
@@ -697,7 +710,7 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
 #if (MOZ_WIDGET_GTK == 2)
 class ThemeRenderer : public gfxGdkNativeRenderer {
 public:
-  ThemeRenderer(GtkWidgetState aState, GtkThemeWidgetType aGTKWidgetType,
+  ThemeRenderer(GtkWidgetState aState, WidgetNodeType aGTKWidgetType,
                 gint aFlags, GtkTextDirection aDirection,
                 const GdkRectangle& aGDKRect, const GdkRectangle& aGDKClip)
     : mState(aState), mGTKWidgetType(aGTKWidgetType), mFlags(aFlags),
@@ -706,7 +719,7 @@ public:
                        GdkRectangle * clipRects, uint32_t numClipRects);
 private:
   GtkWidgetState mState;
-  GtkThemeWidgetType mGTKWidgetType;
+  WidgetNodeType mGTKWidgetType;
   gint mFlags;
   GtkTextDirection mDirection;
   const GdkRectangle& mGDKRect;
@@ -819,7 +832,7 @@ private:
 
 static void
 DrawThemeWithCairo(gfxContext* aContext, DrawTarget* aDrawTarget,
-                   GtkWidgetState aState, GtkThemeWidgetType aGTKWidgetType,
+                   GtkWidgetState aState, WidgetNodeType aGTKWidgetType,
                    gint aFlags, GtkTextDirection aDirection, gint aScaleFactor,
                    bool aSnapped, const Point& aDrawOrigin, const nsIntSize& aDrawSize,
                    GdkRectangle& aGDKRect, nsITheme::Transparency aTransparency)
@@ -1076,7 +1089,7 @@ nsNativeThemeGTK::DrawWidgetBackground(nsRenderingContext* aContext,
                                        const nsRect& aDirtyRect)
 {
   GtkWidgetState state;
-  GtkThemeWidgetType gtkWidgetType;
+  WidgetNodeType gtkWidgetType;
   GtkTextDirection direction = GetTextDirection(aFrame);
   gint flags;
   if (!GetGtkWidgetAndState(aWidgetType, aFrame, gtkWidgetType, &state,
@@ -1253,7 +1266,7 @@ nsNativeThemeGTK::GetWidgetBorder(nsDeviceContext* aContext, nsIFrame* aFrame,
     break;
   case NS_THEME_TAB:
     {
-      GtkThemeWidgetType gtkWidgetType;
+      WidgetNodeType gtkWidgetType;
       gint flags;
 
       if (!GetGtkWidgetAndState(aWidgetType, aFrame, gtkWidgetType, nullptr,
@@ -1276,7 +1289,7 @@ nsNativeThemeGTK::GetWidgetBorder(nsDeviceContext* aContext, nsIFrame* aFrame,
     MOZ_FALLTHROUGH;
   default:
     {
-      GtkThemeWidgetType gtkWidgetType;
+      WidgetNodeType gtkWidgetType;
       if (GetGtkWidgetAndState(aWidgetType, aFrame, gtkWidgetType, nullptr,
                                nullptr)) {
         moz_gtk_get_widget_border(gtkWidgetType, &aResult->left, &aResult->top,
@@ -1328,7 +1341,7 @@ nsNativeThemeGTK::GetWidgetPadding(nsDeviceContext* aContext,
           return false;
 
         aResult->SizeTo(0, 0, 0, 0);
-        GtkThemeWidgetType gtkWidgetType;
+        WidgetNodeType gtkWidgetType;
         if (GetGtkWidgetAndState(aWidgetType, aFrame, gtkWidgetType, nullptr,
                                  nullptr)) {
           moz_gtk_get_widget_border(gtkWidgetType, &aResult->left, &aResult->top,
@@ -1644,7 +1657,8 @@ nsNativeThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
 
 NS_IMETHODIMP
 nsNativeThemeGTK::WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType, 
-                                     nsIAtom* aAttribute, bool* aShouldRepaint)
+                                     nsIAtom* aAttribute, bool* aShouldRepaint,
+                                     const nsAttrValue* aOldValue)
 {
   // Some widget types just never change state.
   if (aWidgetType == NS_THEME_TOOLBOX ||
@@ -1679,7 +1693,25 @@ nsNativeThemeGTK::WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType,
        aWidgetType == NS_THEME_SCROLLBAR_BUTTON_RIGHT) &&
       (aAttribute == nsGkAtoms::curpos ||
        aAttribute == nsGkAtoms::maxpos)) {
-    *aShouldRepaint = true;
+    // If 'curpos' has changed and we are passed its old value, we can
+    // determine whether the button's enablement actually needs to change.
+    if (aAttribute == nsGkAtoms::curpos && aOldValue) {
+      int32_t curpos = CheckIntAttr(aFrame, nsGkAtoms::curpos, 0);
+      int32_t maxpos = CheckIntAttr(aFrame, nsGkAtoms::maxpos, 0);
+      nsAutoString str;
+      aOldValue->ToString(str);
+      nsresult err;
+      int32_t oldCurpos = str.ToInteger(&err);
+      if (str.IsEmpty() || NS_FAILED(err)) {
+        *aShouldRepaint = true;
+      } else {
+        bool disabledBefore = ShouldScrollbarButtonBeDisabled(oldCurpos, maxpos, aWidgetType);
+        bool disabledNow = ShouldScrollbarButtonBeDisabled(curpos, maxpos, aWidgetType);
+        *aShouldRepaint = (disabledBefore != disabledNow);
+      }
+    } else {
+      *aShouldRepaint = true;
+    }
     return NS_OK;
   }
 

@@ -40,20 +40,21 @@ EXPORTS.mozilla.dom += [
     'PushManager.h',
     'PushNotifier.h',
     'PushSubscription.h',
+    'PushSubscriptionOptions.h',
+    'PushUtil.h',
 ]
 
 UNIFIED_SOURCES += [
     'PushManager.cpp',
     'PushNotifier.cpp',
     'PushSubscription.cpp',
+    'PushSubscriptionOptions.cpp',
+    'PushUtil.cpp',
 ]
 
 TEST_DIRS += ['test/xpcshell']
 
 include('/ipc/chromium/chromium-config.mozbuild')
-
-if CONFIG['GNU_CXX']:
-    CXXFLAGS += ['-Wshadow']
 
 LOCAL_INCLUDES += [
     '../base',

@@ -57,7 +57,6 @@
 #include "imgIContainer.h"
 #include "nsGfxCIID.h"
 #include "nsIInterfaceRequestorUtils.h"
-#include "nsAutoPtr.h"
 
 #include "gfxQtPlatform.h"
 
@@ -681,7 +680,7 @@ NS_IMETHODIMP
 nsWindow::DispatchEvent(WidgetGUIEvent* aEvent, nsEventStatus& aStatus)
 {
 #ifdef DEBUG
-    debug_DumpEvent(stdout, aEvent->widget, aEvent,
+    debug_DumpEvent(stdout, aEvent->mWidget, aEvent,
                     "something", 0);
 #endif
 
@@ -862,17 +861,27 @@ nsWindow::SetTitle(const nsAString& aTitle)
 
 // EVENTS
 
+nsIWidgetListener*
+nsWindow::GetPaintListener()
+{
+    return mAttachedWidgetListener ? mAttachedWidgetListener : mWidgetListener;
+}
+
 void
 nsWindow::OnPaint()
 {
     LOGDRAW(("nsWindow::%s [%p]\n", __FUNCTION__, (void *)this));
-    nsIWidgetListener* listener =
-        mAttachedWidgetListener ? mAttachedWidgetListener : mWidgetListener;
+    nsIWidgetListener* listener = GetPaintListener();
     if (!listener) {
         return;
     }
 
     listener->WillPaintWindow(this);
+
+    nsIWidgetListener* listener = GetPaintListener();
+    if (!listener) {
+        return;
+    }
 
     switch (GetLayerManager()->GetBackendType()) {
         case mozilla::layers::LayersBackend::LAYERS_CLIENT: {
@@ -883,6 +892,11 @@ nsWindow::OnPaint()
         }
         default:
             NS_ERROR("Invalid layer manager");
+    }
+
+    nsIWidgetListener* listener = GetPaintListener();
+    if (!listener) {
+        return;
     }
 
     listener->DidPaintWindow();
@@ -944,14 +958,14 @@ static void
 InitMouseEvent(WidgetMouseEvent& aMouseEvent, QMouseEvent* aEvent,
                int aClickCount)
 {
-    aMouseEvent.refPoint.x = nscoord(aEvent->pos().x());
-    aMouseEvent.refPoint.y = nscoord(aEvent->pos().y());
+    aMouseEvent.mRefPoint.x = nscoord(aEvent->pos().x());
+    aMouseEvent.mRefPoint.y = nscoord(aEvent->pos().y());
 
     aMouseEvent.InitBasicModifiers(aEvent->modifiers() & Qt::ControlModifier,
                                    aEvent->modifiers() & Qt::AltModifier,
                                    aEvent->modifiers() & Qt::ShiftModifier,
                                    aEvent->modifiers() & Qt::MetaModifier);
-    aMouseEvent.clickCount = aClickCount;
+    aMouseEvent.mClickCount = aClickCount;
 
     switch (aEvent->button()) {
     case Qt::LeftButton:
@@ -1287,8 +1301,8 @@ nsWindow::wheelEvent(QWheelEvent* aEvent)
         break;
     }
 
-    wheelEvent.refPoint.x = nscoord(aEvent->pos().x());
-    wheelEvent.refPoint.y = nscoord(aEvent->pos().y());
+    wheelEvent.mRefPoint.x = nscoord(aEvent->pos().x());
+    wheelEvent.mRefPoint.y = nscoord(aEvent->pos().y());
 
     wheelEvent.InitBasicModifiers(aEvent->modifiers() & Qt::ControlModifier,
                                   aEvent->modifiers() & Qt::AltModifier,
@@ -1970,14 +1984,14 @@ nsWindow::ProcessMotionEvent()
     if (mMoveEvent.needDispatch) {
         WidgetMouseEvent event(true, eMouseMove, this, WidgetMouseEvent::eReal);
 
-        event.refPoint.x = nscoord(mMoveEvent.pos.x());
-        event.refPoint.y = nscoord(mMoveEvent.pos.y());
+        event.mRefPoint.x = nscoord(mMoveEvent.pos.x());
+        event.mRefPoint.y = nscoord(mMoveEvent.pos.y());
 
         event.InitBasicModifiers(mMoveEvent.modifiers & Qt::ControlModifier,
                                  mMoveEvent.modifiers & Qt::AltModifier,
                                  mMoveEvent.modifiers & Qt::ShiftModifier,
                                  mMoveEvent.modifiers & Qt::MetaModifier);
-        event.clickCount      = 0;
+        event.mClickCount = 0;
 
         DispatchEvent(&event);
         mMoveEvent.needDispatch = false;

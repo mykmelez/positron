@@ -770,7 +770,7 @@ TableWidget.prototype = {
    */
   push: function(item, suppressFlash) {
     if (!this.sortedOn || !this.columns) {
-      Cu.reportError("Can't insert item without defining columns first");
+      console.error("Can't insert item without defining columns first");
       return;
     }
 
@@ -1680,7 +1680,7 @@ EditableFieldsEngine.prototype = {
       return;
     }
 
-    target.scrollIntoView();
+    target.scrollIntoView(false);
     target.focus();
 
     if (!target.matches(this.selectors.join(","))) {
@@ -1781,8 +1781,8 @@ EditableFieldsEngine.prototype = {
       "marginRight",
       "marginBottom",
       "marginLeft",
-      "MozMarginStart",
-      "MozMarginEnd"
+      "marginInlineStart",
+      "marginInlineEnd"
     ];
 
     for (let prop of props) {

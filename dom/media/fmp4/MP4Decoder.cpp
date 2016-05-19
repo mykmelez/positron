@@ -90,7 +90,8 @@ IsWhitelistedH264Codec(const nsAString& aCodec)
 /* static */
 bool
 MP4Decoder::CanHandleMediaType(const nsACString& aMIMETypeExcludingCodecs,
-                               const nsAString& aCodecs)
+                               const nsAString& aCodecs,
+                               DecoderDoctorDiagnostics* aDiagnostics)
 {
   if (!IsEnabled()) {
     return false;
@@ -150,10 +151,9 @@ MP4Decoder::CanHandleMediaType(const nsACString& aMIMETypeExcludingCodecs,
   }
 
   // Verify that we have a PDM that supports the whitelisted types.
-  PDMFactory::Init();
   RefPtr<PDMFactory> platform = new PDMFactory();
   for (const nsCString& codecMime : codecMimes) {
-    if (!platform->SupportsMimeType(codecMime)) {
+    if (!platform->SupportsMimeType(codecMime, aDiagnostics)) {
       return false;
     }
   }
@@ -162,7 +162,8 @@ MP4Decoder::CanHandleMediaType(const nsACString& aMIMETypeExcludingCodecs,
 }
 
 /* static */ bool
-MP4Decoder::CanHandleMediaType(const nsAString& aContentType)
+MP4Decoder::CanHandleMediaType(const nsAString& aContentType,
+                               DecoderDoctorDiagnostics* aDiagnostics)
 {
   nsContentTypeParser parser(aContentType);
   nsAutoString mimeType;
@@ -173,7 +174,9 @@ MP4Decoder::CanHandleMediaType(const nsAString& aContentType)
   nsString codecs;
   parser.GetParameter("codecs", codecs);
 
-  return CanHandleMediaType(NS_ConvertUTF16toUTF8(mimeType), codecs);
+  return CanHandleMediaType(NS_ConvertUTF16toUTF8(mimeType),
+                            codecs,
+                            aDiagnostics);
 }
 
 /* static */
@@ -221,17 +224,16 @@ CreateTestH264Decoder(layers::LayersBackend aBackend,
   aConfig.mId = 1;
   aConfig.mDuration = 40000;
   aConfig.mMediaTime = 0;
-  aConfig.mDisplay = nsIntSize(640, 360);
-  aConfig.mImage = nsIntRect(0, 0, 640, 360);
+  aConfig.mImage = aConfig.mDisplay = nsIntSize(640, 360);
   aConfig.mExtraData = new MediaByteBuffer();
   aConfig.mExtraData->AppendElements(sTestH264ExtraData,
                                      MOZ_ARRAY_LENGTH(sTestH264ExtraData));
 
-  PDMFactory::Init();
-
   RefPtr<PDMFactory> platform = new PDMFactory();
   RefPtr<MediaDataDecoder> decoder(
-    platform->CreateDecoder(aConfig, aTaskQueue, nullptr, aBackend, nullptr));
+    platform->CreateDecoder(aConfig, aTaskQueue, nullptr,
+                            /* DecoderDoctorDiagnostics* */ nullptr,
+                            aBackend, nullptr));
 
   return decoder.forget();
 }

@@ -493,21 +493,28 @@ DataTextureSourceD3D9::Update(gfx::DataSourceSurface* aSurface,
   return true;
 }
 
-static bool AssertD3D9Compositor(Compositor* aCompositor)
+static CompositorD3D9* AssertD3D9Compositor(Compositor* aCompositor)
 {
-  bool ok = aCompositor && aCompositor->GetBackendType() == LayersBackend::LAYERS_D3D9;
-  MOZ_ASSERT(ok);
-  return ok;
+  CompositorD3D9* compositor = aCompositor ? aCompositor->AsCompositorD3D9()
+                                           : nullptr;
+  if (!compositor) {
+    // We probably had a device reset and this D3D9 texture was already sent but
+    // we are now falling back to a basic compositor. That can happen if a video
+    // is playing while the device reset occurs and it's not too bad if we miss a
+    // few frames.
+    gfxCriticalNote << "[D3D9] Attempt to set an incompatible compositor";
+  }
+  return compositor;
 }
 
 void
 DataTextureSourceD3D9::SetCompositor(Compositor* aCompositor)
 {
-  if (!AssertD3D9Compositor(aCompositor)) {
+  CompositorD3D9* d3dCompositor = AssertD3D9Compositor(aCompositor);
+  if (!d3dCompositor) {
     Reset();
     return;
   }
-  CompositorD3D9* d3dCompositor = static_cast<CompositorD3D9*>(aCompositor);
   if (mCompositor && mCompositor != d3dCompositor) {
     Reset();
   }
@@ -591,6 +598,17 @@ D3D9TextureData::CreateSimilar(ClientIPCAllocator*, TextureFlags aFlags, Texture
   return D3D9TextureData::Create(mSize, mFormat, aAllocFlags);
 }
 
+void
+D3D9TextureData::FillInfo(TextureData::Info& aInfo) const
+{
+  aInfo.size = mSize;
+  aInfo.format = mFormat;
+  aInfo.hasIntermediateBuffer = true;
+  aInfo.supportsMoz2D = true;
+  aInfo.canExposeMappedData = false;
+  aInfo.hasSynchronization = false;
+}
+
 bool
 D3D9TextureData::Lock(OpenMode aMode, FenceHandle*)
 {
@@ -667,11 +685,11 @@ D3D9TextureData::BorrowDrawTarget()
   }
 
   if (mNeedsClear) {
-    dt->ClearRect(Rect(0, 0, GetSize().width, GetSize().height));
+    dt->ClearRect(Rect(0, 0, mSize.width, mSize.height));
     mNeedsClear = false;
   }
   if (mNeedsClearWhite) {
-    dt->FillRect(Rect(0, 0, GetSize().width, GetSize().height), ColorPattern(Color(1.0, 1.0, 1.0, 1.0)));
+    dt->FillRect(Rect(0, 0, mSize.width, mSize.height), ColorPattern(Color(1.0, 1.0, 1.0, 1.0)));
     mNeedsClearWhite = false;
   }
 
@@ -771,6 +789,17 @@ DXGID3D9TextureData::Create(gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
 
   gfxWindowsPlatform::sD3D9SharedTextureUsed += aSize.width * aSize.height * 4;
   return data;
+}
+
+void
+DXGID3D9TextureData::FillInfo(TextureData::Info& aInfo) const
+{
+  aInfo.size = GetSize();
+  aInfo.format = mFormat;
+  aInfo.supportsMoz2D = false;
+  aInfo.canExposeMappedData = false;
+  aInfo.hasIntermediateBuffer = false;
+  aInfo.hasSynchronization = false;
 }
 
 already_AddRefed<IDirect3DSurface9>
@@ -920,12 +949,11 @@ TextureHostD3D9::GetDevice()
 void
 TextureHostD3D9::SetCompositor(Compositor* aCompositor)
 {
-  if (!AssertD3D9Compositor(aCompositor)) {
-    mCompositor = nullptr;
+  mCompositor = AssertD3D9Compositor(aCompositor);
+  if (!mCompositor) {
     mTextureSource = nullptr;
     return;
   }
-  mCompositor = static_cast<CompositorD3D9*>(aCompositor);
   if (mTextureSource) {
     mTextureSource->SetCompositor(aCompositor);
   }
@@ -1046,12 +1074,10 @@ DXGITextureHostD3D9::Unlock()
 void
 DXGITextureHostD3D9::SetCompositor(Compositor* aCompositor)
 {
-  if (!AssertD3D9Compositor(aCompositor)) {
-    mCompositor = nullptr;
+  mCompositor = AssertD3D9Compositor(aCompositor);
+  if (!mCompositor) {
     mTextureSource = nullptr;
-    return;
   }
-  mCompositor = static_cast<CompositorD3D9*>(aCompositor);
 }
 
 void
@@ -1085,14 +1111,12 @@ DXGIYCbCrTextureHostD3D9::GetDevice()
 void
 DXGIYCbCrTextureHostD3D9::SetCompositor(Compositor* aCompositor)
 {
-  if (!AssertD3D9Compositor(aCompositor)) {
-    mCompositor = nullptr;
+  mCompositor = AssertD3D9Compositor(aCompositor);
+  if (!mCompositor) {
     mTextureSources[0] = nullptr;
     mTextureSources[1] = nullptr;
     mTextureSources[2] = nullptr;
-    return;
   }
-  mCompositor = static_cast<CompositorD3D9*>(aCompositor);
 }
 
 bool

@@ -14,7 +14,6 @@
 #include "gfxMatrix.h"
 #include "gfxPattern.h"
 #include "nsTArray.h"
-#include "nsAutoPtr.h"
 
 #include "mozilla/gfx/2D.h"
 
@@ -78,12 +77,6 @@ public:
      */
     static already_AddRefed<gfxContext>
         ForDrawTargetWithTransform(mozilla::gfx::DrawTarget* aTarget);
-
-    /**
-     * Return the current transparency group target, if any. If no group is
-     * active, returns the surface the gfxContext was created with.
-     */
-    already_AddRefed<gfxASurface> CurrentSurface();
 
     mozilla::gfx::DrawTarget *GetDrawTarget() { return mDT; }
 
@@ -642,6 +635,8 @@ public:
         MOZ_ASSERT(mContext, "mMatrix doesn't contain a useful matrix");
         return mMatrix;
     }
+
+    bool HasMatrix() const { return !!mContext; }
 
 private:
     gfxContext *mContext;

@@ -112,7 +112,7 @@ struct nsGridContainerFrame::TrackSize
     eMaxContentMinSizing =     0x4,
     eMinOrMaxContentMinSizing = eMinContentMinSizing | eMaxContentMinSizing,
     eIntrinsicMinSizing = eMinOrMaxContentMinSizing | eAutoMinSizing,
-    eFlexMinSizing =           0x8,
+    eFlexMinSizing =           0x8, // not really used ATM due to a spec change
     eAutoMaxSizing =          0x10,
     eMinContentMaxSizing =    0x20,
     eMaxContentMaxSizing =    0x40,
@@ -152,8 +152,22 @@ nsGridContainerFrame::TrackSize::Initialize(nscoord aPercentageBasis,
 {
   MOZ_ASSERT(mBase == 0 && mLimit == 0 && mState == 0,
              "track size data is expected to be initialized to zero");
+  auto minSizeUnit = aMinCoord.GetUnit();
+  auto maxSizeUnit = aMaxCoord.GetUnit();
+  if (aPercentageBasis == NS_UNCONSTRAINEDSIZE) {
+    // https://drafts.csswg.org/css-grid/#valdef-grid-template-columns-percentage
+    // "If the inline or block size of the grid container is indefinite,
+    //  <percentage> values relative to that size are treated as 'auto'."
+    if (aMinCoord.HasPercent()) {
+      minSizeUnit = eStyleUnit_Auto;
+    }
+    if (aMaxCoord.HasPercent()) {
+      maxSizeUnit = eStyleUnit_Auto;
+    }
+  }
   // http://dev.w3.org/csswg/css-grid/#algo-init
-  switch (aMinCoord.GetUnit()) {
+  switch (minSizeUnit) {
+    case eStyleUnit_FlexFraction:
     case eStyleUnit_Auto:
       mState = eAutoMinSizing;
       break;
@@ -161,13 +175,10 @@ nsGridContainerFrame::TrackSize::Initialize(nscoord aPercentageBasis,
       mState = IsMinContent(aMinCoord) ? eMinContentMinSizing
                                        : eMaxContentMinSizing;
       break;
-    case eStyleUnit_FlexFraction:
-      mState = eFlexMinSizing;
-      break;
     default:
       mBase = nsRuleNode::ComputeCoordPercentCalc(aMinCoord, aPercentageBasis);
   }
-  switch (aMaxCoord.GetUnit()) {
+  switch (maxSizeUnit) {
     case eStyleUnit_Auto:
       mState |= eAutoMaxSizing;
       mLimit = NS_UNCONSTRAINEDSIZE;
@@ -3208,12 +3219,8 @@ nsGridContainerFrame::Tracks::Initialize(
                              aFunctions.NumExplicitTracks());
   mSizes.SetLength(aNumTracks);
   PodZero(mSizes.Elements(), mSizes.Length());
-  nscoord percentageBasis = aContentBoxSize;
-  if (percentageBasis == NS_UNCONSTRAINEDSIZE) {
-    percentageBasis = 0;
-  }
   for (uint32_t i = 0, len = mSizes.Length(); i < len; ++i) {
-    mSizes[i].Initialize(percentageBasis,
+    mSizes[i].Initialize(aContentBoxSize,
                          aFunctions.MinSizingFor(i),
                          aFunctions.MaxSizingFor(i));
   }
@@ -4015,14 +4022,17 @@ nsGridContainerFrame::LineRange::ToPositionAndLengthForAbsPos(
       // done
     } else {
       const nscoord endPos = *aPos + *aLength;
-      nscoord startPos =
-        aTracks.GridLineEdge(mStart, GridLineSide::eAfterGridGap);
+      auto side = mStart == aTracks.mSizes.Length() ? GridLineSide::eBeforeGridGap
+                                                    : GridLineSide::eAfterGridGap;
+      nscoord startPos = aTracks.GridLineEdge(mStart, side);
       *aPos = aGridOrigin + startPos;
       *aLength = std::max(endPos - *aPos, 0);
     }
   } else {
     if (mStart == kAutoLine) {
-      nscoord endPos = aTracks.GridLineEdge(mEnd, GridLineSide::eBeforeGridGap);
+      auto side = mEnd == 0 ? GridLineSide::eAfterGridGap
+                            : GridLineSide::eBeforeGridGap;
+      nscoord endPos = aTracks.GridLineEdge(mEnd, side);
       *aLength = std::max(aGridOrigin + endPos, 0);
     } else {
       nscoord pos;
@@ -5206,15 +5216,6 @@ nsGridContainerFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // Our children are all grid-level boxes, which behave the same as
   // inline-blocks in painting, so their borders/backgrounds all go on
   // the BlockBorderBackgrounds list.
-  // Also, we capture positioned descendants so we can sort them by
-  // CSS 'order'.
-  nsDisplayList positionedDescendants;
-  nsDisplayListSet childLists(aLists.BlockBorderBackgrounds(),
-                              aLists.BlockBorderBackgrounds(),
-                              aLists.Floats(),
-                              aLists.Content(),
-                              &positionedDescendants,
-                              aLists.Outlines());
   typedef GridItemCSSOrderIterator::OrderState OrderState;
   OrderState order = HasAnyStateBits(NS_STATE_GRID_NORMAL_FLOW_CHILDREN_IN_CSS_ORDER)
                        ? OrderState::eKnownOrdered
@@ -5223,11 +5224,9 @@ nsGridContainerFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 GridItemCSSOrderIterator::eIncludeAll, order);
   for (; !iter.AtEnd(); iter.Next()) {
     nsIFrame* child = *iter;
-    BuildDisplayListForChild(aBuilder, child, aDirtyRect, childLists,
+    BuildDisplayListForChild(aBuilder, child, aDirtyRect, aLists,
                              ::GetDisplayFlagsForGridItem(child));
   }
-  positionedDescendants.SortByCSSOrder();
-  aLists.PositionedDescendants()->AppendToTop(&positionedDescendants);
 }
 
 bool

@@ -514,7 +514,7 @@ public class GeckoAppShell
                 getApplicationContext(), 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
 
         // AlarmManager only supports millisecond precision
-        long time = ((long)aSeconds * 1000) + ((long)aNanoSeconds/1_000_000L);
+        long time = ((long) aSeconds * 1000) + ((long) aNanoSeconds / 1_000_000L);
         am.setExact(AlarmManager.RTC_WAKEUP, time, pi);
 
         return true;
@@ -541,7 +541,7 @@ public class GeckoAppShell
         SensorManager sm = (SensorManager)
             getApplicationContext().getSystemService(Context.SENSOR_SERVICE);
 
-        switch(aSensortype) {
+        switch (aSensortype) {
         case GeckoHalDefines.SENSOR_GAME_ROTATION_VECTOR:
             if (gGameRotationVectorSensor == null) {
                 gGameRotationVectorSensor = sm.getDefaultSensor(15);
@@ -912,7 +912,7 @@ public class GeckoAppShell
                                        .build();
         notificationIntent.setData(dataUri);
         PendingIntent contentIntent = PendingIntent.getActivity(
-                getContext(), 0, notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+                getApplicationContext(), 0, notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT);
 
         ALERT_COOKIES.put(aAlertName, aAlertCookie);
         callObserver(aAlertName, "alertshow", aAlertCookie);
@@ -1231,7 +1231,7 @@ public class GeckoAppShell
         EnumerateGeckoProcesses(visitor);
     }
 
-    interface GeckoProcessesVisitor{
+    interface GeckoProcessesVisitor {
         boolean callback(int pid);
     }
 
@@ -1297,7 +1297,7 @@ public class GeckoAppShell
             if (null != cmdlineReader) {
                 try {
                     cmdlineReader.close();
-                } catch (Exception e) {}
+                } catch (Exception e) { }
             }
         }
     }
@@ -1492,7 +1492,7 @@ public class GeckoAppShell
         List<ResolveInfo> plugins = pm.queryIntentServices(new Intent(PLUGIN_ACTION),
                 PackageManager.GET_SERVICES | PackageManager.GET_META_DATA);
 
-        synchronized(mPackageInfoCache) {
+        synchronized (mPackageInfoCache) {
 
             // clear the list of existing packageInfo objects
             mPackageInfoCache.clear();
@@ -1619,7 +1619,7 @@ public class GeckoAppShell
             return null;
         }
 
-        synchronized(mPackageInfoCache) {
+        synchronized (mPackageInfoCache) {
             for (PackageInfo pkgInfo : mPackageInfoCache) {
                 if (pluginLib.contains(pkgInfo.packageName)) {
                     return pkgInfo.packageName;
@@ -1671,6 +1671,7 @@ public class GeckoAppShell
         sContextGetter = cg;
     }
 
+    @WrapForJNI(allowMultithread = true)
     public static Context getApplicationContext() {
         return sApplicationContext;
     }
@@ -1792,7 +1793,7 @@ public class GeckoAppShell
                     try {
                         if (getGeckoInterface() != null)
                             getGeckoInterface().enableCameraView();
-                    } catch (Exception e) {}
+                    } catch (Exception e) { }
                 }
             });
 
@@ -1824,7 +1825,7 @@ public class GeckoAppShell
                         params.setPreviewFrameRate(nFps);
                     }
                 }
-            } catch(Exception e) {
+            } catch (Exception e) {
                 params.setPreviewFrameRate(kPreferredFPS);
             }
 
@@ -1871,7 +1872,7 @@ public class GeckoAppShell
             result[1] = params.getPreviewSize().width;
             result[2] = params.getPreviewSize().height;
             result[3] = params.getPreviewFrameRate();
-        } catch(RuntimeException e) {
+        } catch (RuntimeException e) {
             Log.w(LOGTAG, "initCamera RuntimeException.", e);
             result[0] = result[1] = result[2] = result[3] = 0;
         }
@@ -1886,7 +1887,7 @@ public class GeckoAppShell
                     try {
                         if (getGeckoInterface() != null)
                             getGeckoInterface().disableCameraView();
-                    } catch (Exception e) {}
+                    } catch (Exception e) { }
                 }
             });
         if (sCamera != null) {
@@ -2210,7 +2211,7 @@ public class GeckoAppShell
                             try {
                                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, output);
                                 output.close();
-                            } catch (IOException ioe) {}
+                            } catch (IOException ioe) { }
                         }
                     });
                 mHaveConnected = true;
@@ -2242,7 +2243,7 @@ public class GeckoAppShell
                     final Bitmap bitmap = BitmapUtils.getBitmapFromDrawable(d);
                     return new BitmapConnection(bitmap);
                 }
-            } catch(Exception ex) {
+            } catch (Exception ex) {
                 Log.e(LOGTAG, "error", ex);
             }
 
@@ -2251,7 +2252,7 @@ public class GeckoAppShell
             if (colon == -1 || colon > spec.indexOf('/')) {
                 spec = spec.replaceFirst("/", ":/");
             }
-        } catch(Exception ex) {
+        } catch (Exception ex) {
             return null;
         }
         return null;

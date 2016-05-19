@@ -7,9 +7,9 @@
 const {Cu} = require("chrome");
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Task.jsm");
 
 var Services = require("Services");
+var {Task} = require("resource://gre/modules/Task.jsm");
 var EventEmitter = require("devtools/shared/event-emitter");
 var Telemetry = require("devtools/client/shared/telemetry");
 
@@ -147,7 +147,9 @@ ToolSidebar.prototype = {
     // Add menuitems to the alltabs menu if there are already tabs in the
     // sidebar
     for (let [id, tab] of this._tabs) {
-      this._addItemToAllTabsMenu(id, tab, tab.hasAttribute("selected"));
+      if (!tab.hidden) {
+        this._addItemToAllTabsMenu(id, tab, tab.hasAttribute("selected"));
+      }
     }
   },
 
@@ -494,6 +496,7 @@ ToolSidebar.prototype = {
   hide: function() {
     Services.prefs.setIntPref("devtools.toolsidebar-width." + this._uid, this._tabbox.width);
     this._tabbox.setAttribute("hidden", "true");
+    this._panelDoc.activeElement.blur();
 
     this.emit("hide");
   },
@@ -570,7 +573,7 @@ XPCOMUtils.defineLazyGetter(this, "l10n", function() {
         return bundle.formatStringFromName(aName, aArgs, aArgs.length);
       }
     } catch (ex) {
-      Services.console.logStringMessage("Error reading '" + aName + "'");
+      console.log("Error reading '" + aName + "'");
     }
   };
   return l10n;

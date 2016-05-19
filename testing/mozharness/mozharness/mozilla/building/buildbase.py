@@ -356,7 +356,6 @@ class BuildOptionParser(object):
         'source': 'builds/releng_sub_%s_configs/%s_source.py',
         'api-9': 'builds/releng_sub_%s_configs/%s_api_9.py',
         'api-11': 'builds/releng_sub_%s_configs/%s_api_11.py',
-        'api-15-frontend': 'builds/releng_sub_%s_configs/%s_api_15_frontend.py',
         'api-15-gradle-dependencies': 'builds/releng_sub_%s_configs/%s_api_15_gradle_dependencies.py',
         'api-15': 'builds/releng_sub_%s_configs/%s_api_15.py',
         'api-9-debug': 'builds/releng_sub_%s_configs/%s_api_9_debug.py',
@@ -365,6 +364,7 @@ class BuildOptionParser(object):
         'x86': 'builds/releng_sub_%s_configs/%s_x86.py',
         'api-11-partner-sample1': 'builds/releng_sub_%s_configs/%s_api_11_partner_sample1.py',
         'api-15-partner-sample1': 'builds/releng_sub_%s_configs/%s_api_15_partner_sample1.py',
+        'android-test': 'builds/releng_sub_%s_configs/%s_test.py',
         'android-checkstyle': 'builds/releng_sub_%s_configs/%s_checkstyle.py',
         'android-lint': 'builds/releng_sub_%s_configs/%s_lint.py',
     }
@@ -943,35 +943,13 @@ or run without that action (ie: --no-{action})"
                 check_test_env[env_var] = env_value % dirs
         return check_test_env
 
-    def _query_who(self):
-        """ looks for who triggered the build with a change.
-
-        This is used for things like try builds where the upload dir is
-        associated with who pushed to try. First it will look in self.config
-        and failing that, will poll buildbot_config
-        If nothing is found, it will default to returning "nobody@example.com"
-        """
-        _who = "nobody@example.com"
-        if self.config.get('who'):
-            _who = self.config['who']
-        else:
-            try:
-                if self.buildbot_config:
-                    _who = self.buildbot_config['sourcestamp']['changes'][0]['who']
-            except (KeyError, IndexError):
-                # KeyError: "sourcestamp" or "changes" or "who" not in buildbot_config
-                # IndexError: buildbot_config['sourcestamp']['changes'] is empty
-                # "who" is not available, using the default value
-                pass
-        return _who
-
     def _query_post_upload_cmd(self, multiLocale):
         c = self.config
         post_upload_cmd = ["post_upload.py"]
         buildid = self.query_buildid()
         revision = self.query_revision()
         platform = self.stage_platform
-        who = self._query_who()
+        who = self.query_who()
         if c.get('pgo_build'):
             platform += '-pgo'
 
@@ -1132,6 +1110,9 @@ or run without that action (ie: --no-{action})"
         auth_file = self._get_tooltool_auth_file()
         if auth_file:
             cmd.extend(['--authentication-file', auth_file])
+        cache = c['env'].get('TOOLTOOL_CACHE')
+        if cache:
+            cmd.extend(['-c', cache])
         self.info(str(cmd))
         self.run_command_m(cmd, cwd=dirs['abs_src_dir'], halt_on_failure=True)
 
@@ -1829,6 +1810,8 @@ or run without that action (ie: --no-{action})"
         and then posts to graph server the results.
         We only post to graph server for non nightly build
         """
+        import tarfile
+        import zipfile
         c = self.config
 
         if c.get('enable_count_ctors'):
@@ -1855,49 +1838,49 @@ or run without that action (ie: --no-{action})"
             else:
                 self.fatal("could not determine packageName")
 
-        paths = [
-            (packageName, os.path.join(dirs['abs_obj_dir'], 'dist', packageName)),
-            ('omni.ja', os.path.join(dirs['abs_obj_dir'], 'dist', 'fennec', 'omni.ja')),
-            ('classes.dex', os.path.join(dirs['abs_obj_dir'], 'dist', 'fennec', 'classes.dex'))
-        ]
-
-        # Find a stripped version of libxul if possible
-        def find_file(rootPath, fileName):
-            for root, dirs, files in os.walk(rootPath):
-                for file in files:
-                    if file == fileName:
-                        return (fileName, os.path.join(root, file))
-            return None
-
-        # Check in the firefox and fennec dist dirs
-        libxul = None
-        dist_root = os.path.join(dirs['abs_obj_dir'], 'dist')
-        for dist in ('firefox', 'fennec', 'b2g'):
-            libxul = find_file(os.path.join(dist_root, dist), 'libxul.so')
-            if libxul:
-                break
-
-        if libxul:
-            paths.append(libxul)
-        else:
-            paths.append( ('libxul.so', os.path.join(dirs['abs_obj_dir'], 'dist', 'bin', 'libxul.so')) )
-
-        size_measurements = []
+        interests = ['libxul.so', 'classes.dex', 'omni.ja']
+        installer = os.path.join(dirs['abs_obj_dir'], 'dist', packageName)
         installer_size = 0
-        for (name, path) in paths:
-            # FIXME: Remove the tinderboxprints when bug 1161249 is fixed and
-            # we're displaying perfherder data for each job automatically
-            if os.path.exists(path):
-                filesize = self.query_filesize(path)
-                self.info('TinderboxPrint: Size of %s<br/>%s bytes\n' % (
-                    name, filesize))
-                if any(name.endswith(extension) for extension in ['apk',
-                                                                  'dmg',
-                                                                  'bz2',
-                                                                  'zip']):
-                    installer_size = filesize
-                else:
-                    size_measurements.append({'name': name, 'value': filesize})
+        size_measurements = []
+
+        if os.path.exists(installer):
+            installer_size = self.query_filesize(installer)
+            self.info('TinderboxPrint: Size of %s<br/>%s bytes\n' % (
+                packageName, installer_size))
+            try:
+                subtests = {}
+                if zipfile.is_zipfile(installer):
+                    with zipfile.ZipFile(installer, 'r') as zf:
+                        for zi in zf.infolist():
+                            name = os.path.basename(zi.filename)
+                            size = zi.file_size
+                            if name in interests:
+                                if name in subtests:
+                                    # File seen twice in same archive;
+                                    # ignore to avoid confusion.
+                                    subtests[name] = None
+                                else:
+                                    subtests[name] = size
+                elif tarfile.is_tarfile(installer):
+                    with tarfile.open(installer, 'r:*') as tf:
+                        for ti in tf:
+                            name = os.path.basename(ti.name)
+                            size = ti.size
+                            if name in interests:
+                                if name in subtests:
+                                    # File seen twice in same archive;
+                                    # ignore to avoid confusion.
+                                    subtests[name] = None
+                                else:
+                                    subtests[name] = size
+                for name in subtests:
+                    if subtests[name] is not None:
+                        self.info('TinderboxPrint: Size of %s<br/>%s bytes\n' % (
+                            name, subtests[name]))
+                        size_measurements.append({'name': name, 'value': subtests[name]})
+            except:
+                self.info('Unable to search %s for component sizes.' % installer)
+                size_measurements = []
 
         perfherder_data = {
             "framework": {
@@ -1909,6 +1892,7 @@ or run without that action (ie: --no-{action})"
             perfherder_data["suites"].append({
                 "name": "installer size",
                 "value": installer_size,
+                "alertThreshold": 0.25,
                 "subtests": size_measurements
             })
         if (hasattr(self, "build_metrics_summary") and

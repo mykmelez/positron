@@ -159,6 +159,7 @@ function Editor(config) {
     matchBrackets: true,
     extraKeys: {},
     indentWithTabs: useTabs,
+    inputStyle: "textarea",
     styleActiveLine: true,
     autoCloseBrackets: "()[]{}''\"\"``",
     autoCloseEnabled: useAutoClose,
@@ -975,7 +976,7 @@ Editor.prototype = {
 
     inp.type = "text";
     inp.style.width = "10em";
-    inp.style.MozMarginStart = "1em";
+    inp.style.marginInlineStart = "1em";
 
     div.appendChild(txt);
     div.appendChild(inp);

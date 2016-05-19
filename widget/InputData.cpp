@@ -80,7 +80,7 @@ MouseInput::MouseInput(const WidgetMouseEventBase& aMouseEvent)
   }
 
   mOrigin =
-    ScreenPoint(ViewAs<ScreenPixel>(aMouseEvent.refPoint,
+    ScreenPoint(ViewAs<ScreenPixel>(aMouseEvent.mRefPoint,
       PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
 }
 
@@ -158,12 +158,12 @@ MouseInput::ToWidgetMouseEvent(nsIWidget* aWidget) const
   event.mModifiers = modifiers;
   event.mTime = mTime;
   event.mTimeStamp = mTimeStamp;
-  event.refPoint =
+  event.mRefPoint =
     RoundedToInt(ViewAs<LayoutDevicePixel>(mOrigin,
       PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
-  event.clickCount = clickCount;
+  event.mClickCount = clickCount;
   event.inputSource = mInputSource;
-  event.ignoreRootScrollFrame = true;
+  event.mIgnoreRootScrollFrame = true;
 
   return event;
 }
@@ -284,8 +284,8 @@ MultiTouchInput::ToWidgetMouseEvent(nsIWidget* aWidget) const
                          WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
 
   const SingleTouchData& firstTouch = mTouches[0];
-  event.refPoint.x = firstTouch.mScreenPoint.x;
-  event.refPoint.y = firstTouch.mScreenPoint.y;
+  event.mRefPoint.x = firstTouch.mScreenPoint.x;
+  event.mRefPoint.y = firstTouch.mScreenPoint.y;
 
   event.mTime = mTime;
   event.button = WidgetMouseEvent::eLeftButton;
@@ -294,7 +294,7 @@ MultiTouchInput::ToWidgetMouseEvent(nsIWidget* aWidget) const
   event.mFlags.mHandledByAPZ = mHandledByAPZ;
 
   if (mouseEventMessage != eMouseMove) {
-    event.clickCount = 1;
+    event.mClickCount = 1;
   }
 
   return event;
@@ -347,7 +347,7 @@ MultiTouchInput::MultiTouchInput(const WidgetMouseEvent& aMouseEvent)
   }
 
   mTouches.AppendElement(SingleTouchData(0,
-                                         ViewAs<ScreenPixel>(aMouseEvent.refPoint,
+                                         ViewAs<ScreenPixel>(aMouseEvent.mRefPoint,
                                                              PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent),
                                          ScreenSize(1, 1),
                                          180.0f,
@@ -387,7 +387,7 @@ PanGestureInput::ToWidgetWheelEvent(nsIWidget* aWidget) const
   wheelEvent.mModifiers = this->modifiers;
   wheelEvent.mTime = mTime;
   wheelEvent.mTimeStamp = mTimeStamp;
-  wheelEvent.refPoint =
+  wheelEvent.mRefPoint =
     RoundedToInt(ViewAs<LayoutDevicePixel>(mPanStartPoint,
       PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
   wheelEvent.buttons = 0;
@@ -417,6 +417,20 @@ PanGestureInput::TransformToLocal(const ScreenToParentLayerMatrix4x4& aTransform
   }
   mLocalPanDisplacement = *panDisplacement;
   return true;
+}
+
+ScreenPoint
+PanGestureInput::UserMultipliedPanDisplacement() const
+{
+  return ScreenPoint(mPanDisplacement.x * mUserDeltaMultiplierX,
+                     mPanDisplacement.y * mUserDeltaMultiplierY);
+}
+
+ParentLayerPoint
+PanGestureInput::UserMultipliedLocalPanDisplacement() const
+{
+  return ParentLayerPoint(mLocalPanDisplacement.x * mUserDeltaMultiplierX,
+                          mLocalPanDisplacement.y * mUserDeltaMultiplierY);
 }
 
 bool
@@ -476,7 +490,7 @@ ScrollWheelInput::ScrollWheelInput(const WidgetWheelEvent& aWheelEvent)
       aWheelEvent.mAllowToOverrideSystemScrollSpeed)
 {
   mOrigin =
-    ScreenPoint(ViewAs<ScreenPixel>(aWheelEvent.refPoint,
+    ScreenPoint(ViewAs<ScreenPixel>(aWheelEvent.mRefPoint,
       PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
 }
 
@@ -487,7 +501,7 @@ ScrollWheelInput::ToWidgetWheelEvent(nsIWidget* aWidget) const
   wheelEvent.mModifiers = this->modifiers;
   wheelEvent.mTime = mTime;
   wheelEvent.mTimeStamp = mTimeStamp;
-  wheelEvent.refPoint =
+  wheelEvent.mRefPoint =
     RoundedToInt(ViewAs<LayoutDevicePixel>(mOrigin,
       PixelCastJustification::LayoutDeviceIsScreenForUntransformedEvent));
   wheelEvent.buttons = 0;

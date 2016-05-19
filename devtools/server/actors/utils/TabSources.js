@@ -259,6 +259,10 @@ TabSources.prototype = {
    * @returns Boolean
    */
   _isMinifiedURL: function (aURL) {
+    if (!aURL) {
+      return false;
+    }
+
     try {
       let url = new URL(aURL);
       let pathname = url.pathname;
@@ -329,7 +333,13 @@ TabSources.prototype = {
             }
           } catch (e) {
             // This only needs to be here because URL is not yet exposed to
-            // workers.
+            // workers. (BUG 1258892)
+            const filename = url;
+            const index = filename.lastIndexOf(".");
+            const extension = index >= 0 ? filename.slice(index + 1) : "";
+            if (extension === "js") {
+              spec.contentType = "text/javascript";
+            }
           }
         }
       }

@@ -36,12 +36,11 @@ namespace mozilla {
 struct ElementPropertyTransition : public dom::KeyframeEffectReadOnly
 {
   ElementPropertyTransition(nsIDocument* aDocument,
-                            dom::Element* aTarget,
-                            CSSPseudoElementType aPseudoType,
+                            Maybe<OwningAnimationTarget>& aTarget,
                             const TimingParams &aTiming,
                             StyleAnimationValue aStartForReversingTest,
                             double aReversePortion)
-    : dom::KeyframeEffectReadOnly(aDocument, aTarget, aPseudoType, aTiming)
+    : dom::KeyframeEffectReadOnly(aDocument, aTarget, aTiming)
     , mStartForReversingTest(aStartForReversingTest)
     , mReversePortion(aReversePortion)
   { }
@@ -53,19 +52,28 @@ struct ElementPropertyTransition : public dom::KeyframeEffectReadOnly
   }
 
   nsCSSProperty TransitionProperty() const {
-    MOZ_ASSERT(mProperties.Length() == 1,
-               "Transitions should have exactly one animation property. "
+    MOZ_ASSERT(mKeyframes.Length() == 2,
+               "Transitions should have exactly two animation keyframes. "
                "Perhaps we are using an un-initialized transition?");
-    return mProperties[0].mProperty;
+    MOZ_ASSERT(mKeyframes[0].mPropertyValues.Length() == 1,
+               "Transitions should have exactly one property in their first "
+               "frame");
+    return mKeyframes[0].mPropertyValues[0].mProperty;
   }
 
   StyleAnimationValue ToValue() const {
-    MOZ_ASSERT(mProperties.Length() == 1,
-               "Transitions should have exactly one animation property");
-    MOZ_ASSERT(mProperties[0].mSegments.Length() == 1,
-               "Transitions should have one animation property segment ");
+    // If we failed to generate properties from the transition frames,
+    // return a null value but also show a warning since we should be
+    // detecting that kind of situation in advance and not generating a
+    // transition in the first place.
+    if (mProperties.Length() < 1 ||
+        mProperties[0].mSegments.Length() < 1) {
+      NS_WARNING("Failed to generate transition property values");
+      return StyleAnimationValue();
+    }
     return mProperties[0].mSegments[0].mToValue;
   }
+
   // This is the start value to be used for a check for whether a
   // transition is being reversed.  Normally the same as
   // mProperties[0].mSegments[0].mFromValue, except when this transition

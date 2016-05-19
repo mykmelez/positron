@@ -141,8 +141,10 @@ class StaticBlockScope : public NestedStaticScope
 
     /* Return the number of variables associated with this block. */
     uint32_t numVariables() const {
-        // TODO: propertyCount() is O(n), use O(1) lastProperty()->slot() instead
-        return propertyCount();
+        uint32_t num = 0;
+        if (!lastProperty()->isEmptyShape())
+            num = lastProperty()->slot() + 1 - RESERVED_SLOTS;
+        return num;
     }
 
   private:
@@ -895,7 +897,7 @@ class NestedScopeObject : public ScopeObject
   public:
     // Return the static scope corresponding to this scope chain object.
     inline NestedStaticScope* staticScope() {
-        return &getProto()->as<NestedStaticScope>();
+        return &staticPrototype()->as<NestedStaticScope>();
     }
 
     void initEnclosingScope(JSObject* obj) {
@@ -925,7 +927,7 @@ class DynamicWithObject : public NestedScopeObject
            WithKind kind = SyntacticWith);
 
     StaticWithScope& staticWith() const {
-        return getProto()->as<StaticWithScope>();
+        return staticPrototype()->as<StaticWithScope>();
     }
 
     /* Return the 'o' in 'with (o)'. */
@@ -1005,7 +1007,7 @@ class ClonedBlockObject : public NestedScopeObject
   public:
     /* The static block from which this block was cloned. */
     StaticBlockScope& staticBlock() const {
-        return getProto()->as<StaticBlockScope>();
+        return staticPrototype()->as<StaticBlockScope>();
     }
 
     /* Assuming 'put' has been called, return the value of the ith let var. */
@@ -1385,7 +1387,7 @@ template<>
 inline bool
 JSObject::is<js::StaticBlockScope>() const
 {
-    return hasClass(&js::ClonedBlockObject::class_) && !getProto();
+    return hasClass(&js::ClonedBlockObject::class_) && !staticPrototype();
 }
 
 template<>
@@ -1409,7 +1411,7 @@ template<>
 inline bool
 JSObject::is<js::ClonedBlockObject>() const
 {
-    return hasClass(&js::ClonedBlockObject::class_) && !!getProto();
+    return hasClass(&js::ClonedBlockObject::class_) && staticPrototype();
 }
 
 template<>

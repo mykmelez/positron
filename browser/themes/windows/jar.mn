@@ -51,8 +51,6 @@ browser.jar:
   skin/classic/browser/pageInfo-XP.png
   skin/classic/browser/pointerLock-16.png
   skin/classic/browser/pointerLock-64.png
-  skin/classic/browser/Privacy-16.png
-  skin/classic/browser/Privacy-16-XP.png
   skin/classic/browser/privatebrowsing-mask-tabstrip.png
   skin/classic/browser/privatebrowsing-mask-tabstrip-XPVista7.png
   skin/classic/browser/privatebrowsing-mask-titlebar.png
@@ -158,7 +156,6 @@ browser.jar:
 * skin/classic/browser/preferences/in-content/preferences.css  (preferences/in-content/preferences.css)
 * skin/classic/browser/preferences/in-content/dialog.css       (preferences/in-content/dialog.css)
   skin/classic/browser/preferences/applications.css            (preferences/applications.css)
-  skin/classic/browser/preferences/search.css                  (preferences/search.css)
   skin/classic/browser/preferences/checkbox.png                (preferences/checkbox.png)
   skin/classic/browser/preferences/checkbox-aero.png           (preferences/checkbox-aero.png)
   skin/classic/browser/preferences/checkbox-classic.png        (preferences/checkbox-classic.png)
@@ -203,12 +200,12 @@ browser.jar:
   skin/classic/browser/sync-32.png
   skin/classic/browser/sync-128.png
   skin/classic/browser/sync-bg.png
-  skin/classic/browser/sync-desktopIcon.png
+  skin/classic/browser/sync-desktopIcon.svg  (../shared/sync-desktopIcon.svg)
   skin/classic/browser/sync-horizontalbar.png
   skin/classic/browser/sync-horizontalbar@2x.png
   skin/classic/browser/sync-horizontalbar-XPVista7.png
   skin/classic/browser/sync-horizontalbar-XPVista7@2x.png
-  skin/classic/browser/sync-mobileIcon.png
+  skin/classic/browser/sync-mobileIcon.svg  (../shared/sync-mobileIcon.svg)
   skin/classic/browser/sync-notification-24.png
   skin/classic/browser/syncSetup.css
   skin/classic/browser/syncCommon.css
@@ -244,7 +241,6 @@ browser.jar:
 % override chrome://browser/skin/menu-back.png                        chrome://browser/skin/menu-back-XP.png                            os=WINNT osversion<6
 % override chrome://browser/skin/menu-forward.png                     chrome://browser/skin/menu-forward-XP.png                         os=WINNT osversion<6
 % override chrome://browser/skin/pageInfo.png                         chrome://browser/skin/pageInfo-XP.png                             os=WINNT osversion<6
-% override chrome://browser/skin/Privacy-16.png                       chrome://browser/skin/Privacy-16-XP.png                           os=WINNT osversion<6
 % override chrome://browser/skin/downloads/buttons.png                chrome://browser/skin/downloads/buttons-XP.png                    os=WINNT osversion<6
 % override chrome://browser/skin/feeds/feedIcon.png                   chrome://browser/skin/feeds/feedIcon-XP.png                       os=WINNT osversion<6
 % override chrome://browser/skin/feeds/feedIcon16.png                 chrome://browser/skin/feeds/feedIcon16-XP.png                     os=WINNT osversion<6

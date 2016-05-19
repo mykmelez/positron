@@ -33,8 +33,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "TelemetryUtils",
                                   "resource://gre/modules/TelemetryUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "CommonUtils",
                                   "resource://services-common/utils.js");
-XPCOMUtils.defineLazyModuleGetter(this, "Metrics",
-                                  "resource://gre/modules/Metrics.jsm");
 
 XPCOMUtils.defineLazyServiceGetter(this, "gCrashReporter",
                                    "@mozilla.org/xre/app-info;1",
@@ -1722,13 +1720,14 @@ Experiments.ExperimentEntry.prototype = {
   _runFilterFunction: Task.async(function* (jsfilter) {
     this._log.trace("runFilterFunction() - filter: " + jsfilter);
 
-    const nullprincipal = Cc["@mozilla.org/nullprincipal;1"].createInstance(Ci.nsIPrincipal);
+    let ssm = Services.scriptSecurityManager;
+    const nullPrincipal = ssm.createNullPrincipal({});
     let options = {
       sandboxName: "telemetry experiments jsfilter sandbox",
       wantComponents: false,
     };
 
-    let sandbox = Cu.Sandbox(nullprincipal, options);
+    let sandbox = Cu.Sandbox(nullPrincipal, options);
     try {
       Cu.evalInSandbox(jsfilter, sandbox);
     } catch (e) {

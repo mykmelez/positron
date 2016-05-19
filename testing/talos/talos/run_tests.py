@@ -165,15 +165,19 @@ def run_tests(config, browser_config):
         results_urls = dict(
             # another hack; datazilla stands for Perfherder
             # and do not require url, but a non empty dict is required...
-            datazilla_urls=['local.json'],
+            output_urls=['local.json'],
         )
     else:
         # local mode, output to files
-        results_urls = dict(datazilla_urls=[os.path.abspath('local.json')])
+        results_urls = dict(output_urls=[os.path.abspath('local.json')])
     talos_results.check_output_formats(results_urls)
 
     httpd = setup_webserver(browser_config['webserver'])
     httpd.start()
+
+    # if e10s add as extra results option
+    if config['e10s']:
+        talos_results.add_extra_option('e10s')
 
     testname = None
     # run the tests
@@ -215,7 +219,7 @@ def run_tests(config, browser_config):
         talos_results.output(results_urls)
         if browser_config['develop']:
             print ("Thanks for running Talos locally. Results are in %s"
-                   % (results_urls['datazilla_urls']))
+                   % (results_urls['output_urls']))
 
     # we will stop running tests on a failed test, or we will return 0 for
     # green

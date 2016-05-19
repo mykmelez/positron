@@ -119,18 +119,7 @@ WebGLContext::GetChannelBits(const char* funcName, GLenum pname, GLint* const ou
 
         case LOCAL_GL_DEPTH_BITS:
             if (mOptions.depth) {
-                const auto& glFormats = gl->GetGLFormats();
-
-                GLenum depthFormat = glFormats.depth;
-                if (mOptions.stencil && glFormats.depthStencil) {
-                    depthFormat = glFormats.depthStencil;
-                }
-
-                if (depthFormat == LOCAL_GL_DEPTH_COMPONENT16) {
-                    *out_val = 16;
-                } else {
-                    *out_val = 24;
-                }
+                *out_val = gl->Screen()->DepthBits();
             } else {
                 *out_val = 0;
             }
@@ -569,8 +558,15 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         case LOCAL_GL_DEPTH_RANGE:
         case LOCAL_GL_ALIASED_POINT_SIZE_RANGE:
         case LOCAL_GL_ALIASED_LINE_WIDTH_RANGE: {
+            GLenum driverPName = pname;
+            if (gl->IsCoreProfile() &&
+                driverPName == LOCAL_GL_ALIASED_POINT_SIZE_RANGE)
+            {
+                driverPName = LOCAL_GL_POINT_SIZE_RANGE;
+            }
+
             GLfloat fv[2] = { 0 };
-            gl->fGetFloatv(pname, fv);
+            gl->fGetFloatv(driverPName, fv);
             JSObject* obj = dom::Float32Array::Create(cx, this, 2, fv);
             if (!obj) {
                 rv = NS_ERROR_OUT_OF_MEMORY;

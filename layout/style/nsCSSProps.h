@@ -15,6 +15,7 @@
 #include "nsCSSProperty.h"
 #include "nsStyleStructFwd.h"
 #include "nsCSSKeywords.h"
+#include "mozilla/CSSEnabledState.h"
 #include "mozilla/UseCounter.h"
 
 // Length of the "--" prefix on custom names (such as custom property names,
@@ -226,6 +227,10 @@ static_assert((CSS_PROPERTY_PARSE_PROPERTY_MASK &
 //   wrapped in "#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL".
 // Note that, these flags have no effect on the use of aliases of this
 // property.
+// Furthermore, for the purposes of animation (including triggering
+// transitions) these flags are ignored. That is, if the property is disabled
+// by a pref, we will *not* run animations or transitions on it even in
+// UA sheets or chrome.
 #define CSS_PROPERTY_ENABLED_MASK                 (3<<22)
 #define CSS_PROPERTY_ENABLED_IN_UA_SHEETS         (1<<22)
 #define CSS_PROPERTY_ENABLED_IN_CHROME            (1<<23)
@@ -250,26 +255,20 @@ static_assert((CSS_PROPERTY_PARSE_PROPERTY_MASK &
 // margin-block-start or margin-inline-start).
 #define CSS_PROPERTY_LOGICAL_END_EDGE             (1<<26)
 
-// This property is a logical property which always maps to the same physical
-// property, and its values have some custom processing when being mapped to
-// the physical property's values.  Must not be used in conjunction with
-// CSS_PROPERTY_LOGICAL_{AXIS,BLOCK_AXIS,END_EDGE}.
-#define CSS_PROPERTY_LOGICAL_SINGLE_CUSTOM_VALMAPPING (1<<27)
-
 // This property can be animated on the compositor.
-#define CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR    (1<<28)
+#define CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR    (1<<27)
 
 // This property is an internal property that is not represented
 // in the DOM.  Properties with this flag must be defined in an #ifndef
 // CSS_PROP_LIST_EXCLUDE_INTERNAL section of nsCSSPropList.h.
-#define CSS_PROPERTY_INTERNAL                     (1<<29)
+#define CSS_PROPERTY_INTERNAL                     (1<<28)
 
 // This property has values that can establish a containing block for
 // fixed positioned and absolutely positioned elements.
 // This should be set for any properties that can cause an element to be
 // such a containing block, as implemented in
 // nsStyleDisplay::IsFixedPosContainingBlock.
-#define CSS_PROPERTY_FIXPOS_CB                    (1<<30)
+#define CSS_PROPERTY_FIXPOS_CB                    (1<<29)
 
 // This property has values that can establish a containing block for
 // absolutely positioned elements.
@@ -278,10 +277,7 @@ static_assert((CSS_PROPERTY_PARSE_PROPERTY_MASK &
 // nsStyleDisplay::IsAbsPosContainingBlock.
 // It does not need to be set for properties that also have
 // CSS_PROPERTY_FIXPOS_CB set.
-#define CSS_PROPERTY_ABSPOS_CB                    (1u<<31)
-
-// NOTE: Before adding any new CSS_PROPERTY_* flags here, we'll need to
-// upgrade kFlagsTable to 64-bits -- see bug 1231384.
+#define CSS_PROPERTY_ABSPOS_CB                    (1<<30)
 
 /**
  * Types of animatable values.
@@ -335,6 +331,8 @@ enum nsStyleAnimType {
 
 class nsCSSProps {
 public:
+  typedef mozilla::CSSEnabledState EnabledState;
+
   struct KTableEntry {
     nsCSSKeyword mKeyword;
     int16_t mValue;
@@ -342,21 +340,6 @@ public:
 
   static void AddRefTable(void);
   static void ReleaseTable(void);
-
-  enum EnabledState {
-    // The default EnabledState: only enable what's enabled for all content,
-    // given the current values of preferences.
-    eEnabledForAllContent = 0,
-    // Enable a property in UA sheets.
-    eEnabledInUASheets    = 0x01,
-    // Enable a property in chrome code.
-    eEnabledInChrome      = 0x02,
-    // Special value to unconditionally enable a property. This implies all the
-    // bits above, but is strictly more than just their OR-ed union.
-    // This just skips any test so a property will be enabled even if it would
-    // have been disabled with all the bits above set.
-    eIgnoreEnabledState   = 0xff
-  };
 
   // Looks up the property with name aProperty and returns its corresponding
   // nsCSSProperty value.  If aProperty is the name of a custom property,
@@ -555,11 +538,8 @@ public:
    * by the sentinel.
    *
    * When called with a property that has the CSS_PROPERTY_LOGICAL_AXIS
-   * flag, the returned array will have two values preceding the sentinel.
-   * When called with a property that has the
-   * CSS_PROPERTY_LOGICAL_SINGLE_CUSTOM_VALMAPPING flag, the returned array
-   * will have one value preceding the sentinel.
-   * Otherwise it will have four values preceding the sentinel.
+   * flag, the returned array will have two values preceding the sentinel;
+   * otherwise it will have four.
    *
    * (Note that the running time of this function is proportional to the
    * number of logical longhand properties that exist.  If we start
@@ -632,15 +612,15 @@ public:
     if (IsEnabled(aProperty)) {
       return true;
     }
-    if (aEnabled == eIgnoreEnabledState) {
+    if (aEnabled == EnabledState::eIgnoreEnabledState) {
       return true;
     }
-    if ((aEnabled & eEnabledInUASheets) &&
+    if ((aEnabled & EnabledState::eInUASheets) &&
         PropHasFlags(aProperty, CSS_PROPERTY_ENABLED_IN_UA_SHEETS))
     {
       return true;
     }
-    if ((aEnabled & eEnabledInChrome) &&
+    if ((aEnabled & EnabledState::eInChrome) &&
         PropHasFlags(aProperty, CSS_PROPERTY_ENABLED_IN_CHROME))
     {
       return true;
@@ -652,13 +632,14 @@ public:
 
 // Storing the enabledstate_ value in an nsCSSProperty variable is a small hack
 // to avoid needing a separate variable declaration for its real type
-// (nsCSSProps::EnabledState), which would then require using a block and
+// (CSSEnabledState), which would then require using a block and
 // therefore a pair of macros by consumers for the start and end of the loop.
-#define CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(it_, prop_, enabledstate_)       \
-  for (const nsCSSProperty *it_ = nsCSSProps::SubpropertyEntryFor(prop_),     \
-                            es_ = (nsCSSProperty) (enabledstate_);            \
-       *it_ != eCSSProperty_UNKNOWN; ++it_)                                   \
-    if (nsCSSProps::IsEnabled(*it_, (nsCSSProps::EnabledState) es_))
+#define CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(it_, prop_, enabledstate_)   \
+  for (const nsCSSProperty *it_ = nsCSSProps::SubpropertyEntryFor(prop_), \
+                            es_ = (nsCSSProperty)((enabledstate_) |       \
+                                                  CSSEnabledState(0));    \
+       *it_ != eCSSProperty_UNKNOWN; ++it_)                               \
+    if (nsCSSProps::IsEnabled(*it_, (mozilla::CSSEnabledState) es_))
 
   // Keyword/Enum value tables
   static const KTableEntry kAnimationDirectionKTable[];
@@ -678,6 +659,9 @@ public:
   static const KTableEntry kImageLayerSizeKTable[];
   static const KTableEntry kImageLayerCompositeKTable[];
   static const KTableEntry kImageLayerModeKTable[];
+  // Not const because we modify its entries when the pref
+  // "layout.css.background-clip.text" changes:
+  static KTableEntry kBackgroundClipKTable[];
   static const KTableEntry kBlendModeKTable[];
   static const KTableEntry kBorderCollapseKTable[];
   static const KTableEntry kBorderColorKTable[];
@@ -844,29 +828,5 @@ public:
   static const KTableEntry kWordWrapKTable[];
   static const KTableEntry kWritingModeKTable[];
 };
-
-inline nsCSSProps::EnabledState operator|(nsCSSProps::EnabledState a,
-                                          nsCSSProps::EnabledState b)
-{
-  return nsCSSProps::EnabledState(int(a) | int(b));
-}
-
-inline nsCSSProps::EnabledState operator&(nsCSSProps::EnabledState a,
-                                          nsCSSProps::EnabledState b)
-{
-  return nsCSSProps::EnabledState(int(a) & int(b));
-}
-
-inline nsCSSProps::EnabledState& operator|=(nsCSSProps::EnabledState& a,
-                                            nsCSSProps::EnabledState b)
-{
-  return a = a | b;
-}
-
-inline nsCSSProps::EnabledState& operator&=(nsCSSProps::EnabledState& a,
-                                            nsCSSProps::EnabledState b)
-{
-  return a = a & b;
-}
 
 #endif /* nsCSSProps_h___ */

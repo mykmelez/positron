@@ -354,9 +354,13 @@ class AndroidEmulator(object):
         """
         avd = os.path.join(
             EMULATOR_HOME_DIR, 'avd', self.avd_info.name + '.avd')
+        ini_file = os.path.join(
+            EMULATOR_HOME_DIR, 'avd', self.avd_info.name + '.ini')
         if force and os.path.exists(avd):
             shutil.rmtree(avd)
         if not os.path.exists(avd):
+            if os.path.exists(ini_file):
+                os.remove(ini_file)
             url = '%s/%s' % (TRY_URL, self.avd_info.tooltool_manifest)
             _download_file(url, 'releng.manifest', EMULATOR_HOME_DIR)
             _tooltool_fetch()
@@ -633,7 +637,8 @@ def _tooltool_fetch():
     def outputHandler(line):
         _log_debug(line)
     _download_file(TOOLTOOL_URL, 'tooltool.py', EMULATOR_HOME_DIR)
-    command = ['python', 'tooltool.py', 'fetch', '-o', '-m', 'releng.manifest']
+    command = [sys.executable, 'tooltool.py',
+               'fetch', '-o', '-m', 'releng.manifest']
     proc = ProcessHandler(
         command, processOutputLine=outputHandler, storeOutput=False,
         cwd=EMULATOR_HOME_DIR)

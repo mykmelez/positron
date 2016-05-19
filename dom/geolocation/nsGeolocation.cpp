@@ -223,7 +223,7 @@ public:
 
 NS_IMPL_ISUPPORTS(GeolocationSettingsCallback, nsISettingsServiceCallback)
 
-class RequestPromptEvent : public nsRunnable
+class RequestPromptEvent : public Runnable
 {
 public:
   RequestPromptEvent(nsGeolocationRequest* aRequest, nsWeakPtr aWindow)
@@ -244,7 +244,7 @@ private:
   nsWeakPtr mWindow;
 };
 
-class RequestAllowEvent : public nsRunnable
+class RequestAllowEvent : public Runnable
 {
 public:
   RequestAllowEvent(int allow, nsGeolocationRequest* request)
@@ -267,7 +267,7 @@ private:
   RefPtr<nsGeolocationRequest> mRequest;
 };
 
-class RequestSendLocationEvent : public nsRunnable
+class RequestSendLocationEvent : public Runnable
 {
 public:
   RequestSendLocationEvent(nsIDOMGeoPosition* aPosition,
@@ -791,7 +791,7 @@ NS_IMPL_ISUPPORTS(nsGeolocationRequest::TimerCallbackHolder, nsISupports, nsITim
 NS_IMETHODIMP
 nsGeolocationRequest::TimerCallbackHolder::Notify(nsITimer*)
 {
-  if (mRequest) {
+  if (mRequest && mRequest->mLocator) {
     RefPtr<nsGeolocationRequest> request(mRequest);
     request->Notify();
   }

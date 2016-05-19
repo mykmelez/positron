@@ -25,7 +25,17 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(MediaStreamTrackSource)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(MediaStreamTrackSource)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
-NS_IMPL_CYCLE_COLLECTION(MediaStreamTrackSource, mPrincipal)
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(MediaStreamTrackSource)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(MediaStreamTrackSource)
+  tmp->Destroy();
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mPrincipal)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(MediaStreamTrackSource)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPrincipal)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 already_AddRefed<Promise>
 MediaStreamTrackSource::ApplyConstraints(nsPIDOMWindowInner* aWindow,
@@ -89,7 +99,7 @@ public:
                                     const PrincipalHandle& aNewPrincipalHandle) override
   {
     nsCOMPtr<nsIRunnable> runnable =
-      NS_NewRunnableMethodWithArgs<StoreCopyPassByConstLRef<PrincipalHandle>>(
+      NewRunnableMethod<StoreCopyPassByConstLRef<PrincipalHandle>>(
         this, &PrincipalHandleListener::DoNotifyPrincipalHandleChanged, aNewPrincipalHandle);
     aGraph->DispatchToMainThreadAfterStreamStateUpdate(runnable.forget());
   }
@@ -222,6 +232,13 @@ MediaStreamTrack::Stop()
   }
 
   mSource->UnregisterSink(this);
+
+  MOZ_ASSERT(mOwningStream, "Every MediaStreamTrack needs an owning DOMMediaStream");
+  DOMMediaStream::TrackPort* port = mOwningStream->FindOwnedTrackPort(*this);
+  MOZ_ASSERT(port, "A MediaStreamTrack must exist in its owning DOMMediaStream");
+  RefPtr<Pledge<bool>> p = port->BlockSourceTrackId(mInputTrackID);
+  Unused << p;
+
   mStopped = true;
 }
 

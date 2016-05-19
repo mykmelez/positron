@@ -9,7 +9,6 @@
 #include "mozilla/dom/AnimatableBinding.h"
 #include "mozilla/dom/KeyframeEffectBinding.h"
 #include "mozilla/AnimationUtils.h"
-#include "mozilla/EffectCompositor.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/LookAndFeel.h" // For LookAndFeel::GetInt
 #include "mozilla/KeyframeUtils.h"
@@ -20,7 +19,6 @@
 #include "nsCSSProps.h" // For nsCSSProps::PropHasFlags
 #include "nsCSSPseudoElements.h" // For CSSPseudoElementType
 #include "nsDOMMutationObserver.h" // For nsAutoAnimationMutationBatch
-#include <algorithm> // For std::max
 
 namespace mozilla {
 
@@ -62,7 +60,8 @@ namespace dom {
 NS_IMPL_CYCLE_COLLECTION_INHERITED(KeyframeEffectReadOnly,
                                    AnimationEffectReadOnly,
                                    mTarget,
-                                   mAnimation)
+                                   mAnimation,
+                                   mTiming)
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(KeyframeEffectReadOnly,
                                                AnimationEffectReadOnly)
@@ -76,27 +75,24 @@ NS_IMPL_RELEASE_INHERITED(KeyframeEffectReadOnly, AnimationEffectReadOnly)
 
 KeyframeEffectReadOnly::KeyframeEffectReadOnly(
   nsIDocument* aDocument,
-  Element* aTarget,
-  CSSPseudoElementType aPseudoType,
+  const Maybe<OwningAnimationTarget>& aTarget,
   const TimingParams& aTiming)
-  : KeyframeEffectReadOnly(aDocument, aTarget, aPseudoType,
-                           new AnimationEffectTimingReadOnly(aTiming))
+  : KeyframeEffectReadOnly(aDocument, aTarget,
+                           new AnimationEffectTimingReadOnly(aDocument,
+                                                             aTiming))
 {
 }
 
 KeyframeEffectReadOnly::KeyframeEffectReadOnly(
   nsIDocument* aDocument,
-  Element* aTarget,
-  CSSPseudoElementType aPseudoType,
+  const Maybe<OwningAnimationTarget>& aTarget,
   AnimationEffectTimingReadOnly* aTiming)
   : AnimationEffectReadOnly(aDocument)
   , mTarget(aTarget)
-  , mTiming(*aTiming)
-  , mPseudoType(aPseudoType)
+  , mTiming(aTiming)
   , mInEffectOnLastAnimationTimingUpdate(false)
 {
   MOZ_ASSERT(aTiming);
-  MOZ_ASSERT(aTarget, "null animation target is not yet supported");
 }
 
 JSObject*
@@ -161,7 +157,8 @@ KeyframeEffectReadOnly::NotifyAnimationTimingUpdated()
   bool inEffect = IsInEffect();
   if (inEffect != mInEffectOnLastAnimationTimingUpdate) {
     if (mTarget) {
-      EffectSet* effectSet = EffectSet::GetEffectSet(mTarget, mPseudoType);
+      EffectSet* effectSet = EffectSet::GetEffectSet(mTarget->mElement,
+                                                     mTarget->mPseudoType);
       if (effectSet) {
         effectSet->MarkCascadeNeedsUpdate();
       }
@@ -171,36 +168,24 @@ KeyframeEffectReadOnly::NotifyAnimationTimingUpdated()
 
   // Request restyle if necessary.
   //
-  // Bug 1235002: We should skip requesting a restyle when mProperties is empty.
-  // However, currently we don't properly encapsulate mProperties so we can't
-  // detect when it changes. As a result, if we skip requesting restyles when
-  // mProperties is empty and we play an animation and *then* add properties to
-  // it (as we currently do when building CSS animations), we will fail to
-  // request a restyle at all. Since animations without properties are rare, we
-  // currently just request the restyle regardless of whether mProperties is
-  // empty or not.
-  //
   // Bug 1216843: When we implement iteration composite modes, we need to
   // also detect if the current iteration has changed.
-  if (mAnimation && GetComputedTiming().mProgress != mProgressOnLastCompose) {
+  if (mAnimation &&
+      !mProperties.IsEmpty() &&
+      GetComputedTiming().mProgress != mProgressOnLastCompose) {
     EffectCompositor::RestyleType restyleType =
       CanThrottle() ?
       EffectCompositor::RestyleType::Throttled :
       EffectCompositor::RestyleType::Standard;
-    nsPresContext* presContext = GetPresContext();
-    if (presContext) {
-      presContext->EffectCompositor()->
-        RequestRestyle(mTarget, mPseudoType, restyleType,
-                       mAnimation->CascadeLevel());
-    }
+    RequestRestyle(restyleType);
+  }
 
-    // If we're not relevant, we will have been removed from the EffectSet.
-    // As a result, when the restyle we requested above is fulfilled, our
-    // ComposeStyle will not get called and mProgressOnLastCompose will not
-    // be updated. Instead, we need to manually clear it.
-    if (!isRelevant) {
-      mProgressOnLastCompose.SetNull();
-    }
+  // If we're no longer "in effect", our ComposeStyle method will never be
+  // called and we will never have a chance to update mProgressOnLastCompose.
+  // We clear mProgressOnLastCompose here to ensure that if we later become
+  // "in effect" we will request a restyle (above).
+  if (!inEffect) {
+     mProgressOnLastCompose.SetNull();
   }
 }
 
@@ -217,7 +202,8 @@ KeyframeEffectReadOnly::GetLocalTime() const
 }
 
 void
-KeyframeEffectReadOnly::GetComputedTimingAsDict(ComputedTimingProperties& aRetVal) const
+KeyframeEffectReadOnly::GetComputedTimingAsDict(
+    ComputedTimingProperties& aRetVal) const
 {
   const Nullable<TimeDuration> currentTime = GetLocalTime();
   GetComputedTimingDictionary(GetComputedTimingAt(currentTime,
@@ -229,8 +215,8 @@ KeyframeEffectReadOnly::GetComputedTimingAsDict(ComputedTimingProperties& aRetVa
 
 ComputedTiming
 KeyframeEffectReadOnly::GetComputedTimingAt(
-                          const Nullable<TimeDuration>& aLocalTime,
-                          const TimingParams& aTiming)
+    const Nullable<TimeDuration>& aLocalTime,
+    const TimingParams& aTiming)
 {
   const StickyTimeDuration zeroDuration;
 
@@ -243,14 +229,18 @@ KeyframeEffectReadOnly::GetComputedTimingAt(
     result.mDuration = aTiming.mDuration.ref();
   }
 
-  result.mIterations = IsNaN(aTiming.mIterations) || aTiming.mIterations < 0.0f ?
-                       1.0f :
-                       aTiming.mIterations;
-  result.mIterationStart = std::max(aTiming.mIterationStart, 0.0);
+  MOZ_ASSERT(aTiming.mIterations >= 0.0 && !IsNaN(aTiming.mIterations),
+             "mIterations should be nonnegative & finite, as ensured by "
+             "ValidateIterations or CSSParser");
+  result.mIterations = aTiming.mIterations;
 
-  result.mActiveDuration = ActiveDuration(result.mDuration, result.mIterations);
-  result.mEndTime = aTiming.mDelay + result.mActiveDuration +
-                    aTiming.mEndDelay;
+  MOZ_ASSERT(aTiming.mIterationStart >= 0.0,
+             "mIterationStart should be nonnegative, as ensured by "
+             "ValidateIterationStart");
+  result.mIterationStart = aTiming.mIterationStart;
+
+  result.mActiveDuration = aTiming.ActiveDuration();
+  result.mEndTime = aTiming.EndTime();
   result.mFill = aTiming.mFill == dom::FillMode::Auto ?
                  dom::FillMode::None :
                  aTiming.mFill;
@@ -262,12 +252,8 @@ KeyframeEffectReadOnly::GetComputedTimingAt(
   }
   const TimeDuration& localTime = aLocalTime.Value();
 
-  // When we finish exactly at the end of an iteration we need to report
-  // the end of the final iteration and not the start of the next iteration
-  // so we set up a flag for that case.
-  bool isEndOfFinalIteration = false;
-
-  // Get the normalized time within the active interval.
+  // Calculate the time within the active interval.
+  // https://w3c.github.io/web-animations/#active-time
   StickyTimeDuration activeTime;
   if (localTime >=
         std::min(StickyTimeDuration(aTiming.mDelay + result.mActiveDuration),
@@ -275,21 +261,14 @@ KeyframeEffectReadOnly::GetComputedTimingAt(
     result.mPhase = ComputedTiming::AnimationPhase::After;
     if (!result.FillsForwards()) {
       // The animation isn't active or filling at this time.
-      result.mProgress.SetNull();
       return result;
     }
     activeTime = result.mActiveDuration;
-    double finiteProgress =
-      (IsInfinite(result.mIterations) ? 0.0 : result.mIterations)
-      + result.mIterationStart;
-    isEndOfFinalIteration = result.mIterations != 0.0 &&
-                            fmod(finiteProgress, 1.0) == 0;
   } else if (localTime <
                std::min(StickyTimeDuration(aTiming.mDelay), result.mEndTime)) {
     result.mPhase = ComputedTiming::AnimationPhase::Before;
     if (!result.FillsBackwards()) {
       // The animation isn't active or filling at this time.
-      result.mProgress.SetNull();
       return result;
     }
     // activeTime is zero
@@ -300,70 +279,50 @@ KeyframeEffectReadOnly::GetComputedTimingAt(
     activeTime = localTime - aTiming.mDelay;
   }
 
-  // Calculate the scaled active time
-  // (We handle the case where the iterationStart is zero separately in case
-  // the duration is infinity, since 0 * Infinity is undefined.)
-  StickyTimeDuration startOffset =
-    result.mIterationStart == 0.0
-    ? StickyTimeDuration(0)
-    : result.mDuration.MultDouble(result.mIterationStart);
-  StickyTimeDuration scaledActiveTime = activeTime + startOffset;
+  // Convert active time to a multiple of iterations.
+  // https://w3c.github.io/web-animations/#overall-progress
+  double overallProgress;
+  if (result.mDuration == zeroDuration) {
+    overallProgress = result.mPhase == ComputedTiming::AnimationPhase::Before
+                      ? 0.0
+                      : result.mIterations;
+  } else {
+    overallProgress = activeTime / result.mDuration;
+  }
 
-  // Get the position within the current iteration.
-  StickyTimeDuration iterationTime;
-  if (result.mDuration != zeroDuration &&
-      scaledActiveTime != StickyTimeDuration::Forever()) {
-    iterationTime = isEndOfFinalIteration
-                    ? result.mDuration
-      : scaledActiveTime % result.mDuration;
-  } /* else, either the duration is zero and iterationTime is zero,
-       or the scaledActiveTime is infinity in which case the iterationTime
-       should become infinity but we will not use the iterationTime in that
-       case so we just leave it as zero */
+  // Factor in iteration start offset.
+  if (IsFinite(overallProgress)) {
+    overallProgress += result.mIterationStart;
+  }
 
   // Determine the 0-based index of the current iteration.
-  if (result.mPhase == ComputedTiming::AnimationPhase::Before ||
-      result.mIterations == 0) {
-    result.mCurrentIteration = static_cast<uint64_t>(result.mIterationStart);
-  } else if (result.mPhase == ComputedTiming::AnimationPhase::After) {
-    result.mCurrentIteration =
-      IsInfinite(result.mIterations)
-      ? UINT64_MAX // In GetComputedTimingDictionary(), we will convert this
-                   // into Infinity.
-      : static_cast<uint64_t>(ceil(result.mIterations +
-                              result.mIterationStart)) - 1;
-  } else if (result.mDuration == StickyTimeDuration::Forever()) {
-    result.mCurrentIteration = static_cast<uint64_t>(result.mIterationStart);
-  } else {
-    result.mCurrentIteration =
-      static_cast<uint64_t>(scaledActiveTime / result.mDuration); // floor
-  }
+  // https://w3c.github.io/web-animations/#current-iteration
+  result.mCurrentIteration =
+    IsInfinite(result.mIterations) &&
+      result.mPhase == ComputedTiming::AnimationPhase::After
+    ? UINT64_MAX // In GetComputedTimingDictionary(),
+                 // we will convert this into Infinity
+    : static_cast<uint64_t>(overallProgress);
 
-  // Normalize the iteration time into a fraction of the iteration duration.
-  if (result.mPhase == ComputedTiming::AnimationPhase::Before ||
-      result.mIterations == 0) {
-    double progress = fmod(result.mIterationStart, 1.0);
-    result.mProgress.SetValue(progress);
-  } else if (result.mPhase == ComputedTiming::AnimationPhase::After) {
-    double progress;
-    if (isEndOfFinalIteration) {
-      progress = 1.0;
-    } else if (IsInfinite(result.mIterations)) {
-      progress = fmod(result.mIterationStart, 1.0);
-    } else {
-      progress = fmod(result.mIterations + result.mIterationStart, 1.0);
+  // Convert the overall progress to a fraction of a single iteration--the
+  // simply iteration progress.
+  // https://w3c.github.io/web-animations/#simple-iteration-progress
+  double progress = IsFinite(overallProgress)
+                    ? fmod(overallProgress, 1.0)
+                    : fmod(result.mIterationStart, 1.0);
+
+  // When we finish exactly at the end of an iteration we need to report
+  // the end of the final iteration and not the start of the next iteration.
+  if (result.mPhase == ComputedTiming::AnimationPhase::After &&
+      progress == 0.0 &&
+      result.mIterations != 0.0) {
+    progress = 1.0;
+    if (result.mCurrentIteration != UINT64_MAX) {
+      result.mCurrentIteration--;
     }
-    result.mProgress.SetValue(progress);
-  } else {
-    // We are in the active phase so the iteration duration can't be zero.
-    MOZ_ASSERT(result.mDuration != zeroDuration,
-               "In the active phase of a zero-duration animation?");
-    double progress = result.mDuration == StickyTimeDuration::Forever()
-                      ? fmod(result.mIterationStart, 1.0)
-                      : iterationTime / result.mDuration;
-    result.mProgress.SetValue(progress);
   }
 
+  // Factor in the direction.
   bool thisIterationReverse = false;
   switch (aTiming.mDirection) {
     case PlaybackDirection::Normal:
@@ -382,9 +341,11 @@ KeyframeEffectReadOnly::GetComputedTimingAt(
       MOZ_ASSERT(true, "Unknown PlaybackDirection type");
   }
   if (thisIterationReverse) {
-    result.mProgress.SetValue(1.0 - result.mProgress.Value());
+    progress = 1.0 - progress;
   }
 
+  // Calculate the 'before flag' which we use when applying step timing
+  // functions.
   if ((result.mPhase == ComputedTiming::AnimationPhase::After &&
        thisIterationReverse) ||
       (result.mPhase == ComputedTiming::AnimationPhase::Before &&
@@ -392,30 +353,14 @@ KeyframeEffectReadOnly::GetComputedTimingAt(
     result.mBeforeFlag = ComputedTimingFunction::BeforeFlag::Set;
   }
 
+  // Apply the easing.
   if (aTiming.mFunction) {
-    result.mProgress.SetValue(
-      aTiming.mFunction->GetValue(result.mProgress.Value(),
-                                  result.mBeforeFlag));
+    progress = aTiming.mFunction->GetValue(progress, result.mBeforeFlag);
   }
 
+  MOZ_ASSERT(IsFinite(progress), "Progress value should be finite");
+  result.mProgress.SetValue(progress);
   return result;
-}
-
-StickyTimeDuration
-KeyframeEffectReadOnly::ActiveDuration(
-  const StickyTimeDuration& aIterationDuration,
-  double aIterationCount)
-{
-  // If either the iteration duration or iteration count is zero,
-  // Web Animations says that the active duration is zero. This is to
-  // ensure that the result is defined when the other argument is Infinity.
-  const StickyTimeDuration zeroDuration;
-  if (aIterationDuration == zeroDuration ||
-      aIterationCount == 0.0) {
-    return zeroDuration;
-  }
-
-  return aIterationDuration.MultDouble(aIterationCount);
 }
 
 // https://w3c.github.io/web-animations/#in-play
@@ -477,16 +422,48 @@ KeyframesEqualIgnoringComputedOffsets(const nsTArray<Keyframe>& aLhs,
   return true;
 }
 
+// https://w3c.github.io/web-animations/#dom-keyframeeffect-setkeyframes
 void
-KeyframeEffectReadOnly::SetFrames(nsTArray<Keyframe>&& aFrames,
-                                  nsStyleContext* aStyleContext)
+KeyframeEffectReadOnly::SetKeyframes(JSContext* aContext,
+                                     JS::Handle<JSObject*> aKeyframes,
+                                     ErrorResult& aRv)
 {
-  if (KeyframesEqualIgnoringComputedOffsets(aFrames, mFrames)) {
+  nsIDocument* doc = AnimationUtils::GetCurrentRealmDocument(aContext);
+  if (!doc) {
+    aRv.Throw(NS_ERROR_FAILURE);
     return;
   }
 
-  mFrames = Move(aFrames);
-  KeyframeUtils::ApplyDistributeSpacing(mFrames);
+  nsTArray<Keyframe> keyframes =
+    KeyframeUtils::GetKeyframesFromObject(aContext, aKeyframes, aRv);
+  if (aRv.Failed()) {
+    return;
+  }
+
+  RefPtr<nsStyleContext> styleContext;
+  nsIPresShell* shell = doc->GetShell();
+  if (shell && mTarget) {
+    nsIAtom* pseudo =
+      mTarget->mPseudoType < CSSPseudoElementType::Count ?
+      nsCSSPseudoElements::GetPseudoAtom(mTarget->mPseudoType) : nullptr;
+    styleContext =
+      nsComputedDOMStyle::GetStyleContextForElement(mTarget->mElement,
+                                                    pseudo, shell);
+  }
+
+  SetKeyframes(Move(keyframes), styleContext);
+}
+
+void
+KeyframeEffectReadOnly::SetKeyframes(nsTArray<Keyframe>&& aKeyframes,
+                                  nsStyleContext* aStyleContext)
+{
+  if (KeyframesEqualIgnoringComputedOffsets(aKeyframes, mKeyframes)) {
+    return;
+  }
+
+  mKeyframes = Move(aKeyframes);
+  KeyframeUtils::ApplyDistributeSpacing(mKeyframes);
 
   if (mAnimation && mAnimation->IsRelevant()) {
     nsNodeUtils::AnimationChanged(mAnimation);
@@ -535,9 +512,9 @@ KeyframeEffectReadOnly::UpdateProperties(nsStyleContext* aStyleContext)
   if (mTarget) {
     properties =
       KeyframeUtils::GetAnimationPropertiesFromKeyframes(aStyleContext,
-                                                         mTarget,
-                                                         mPseudoType,
-                                                         mFrames);
+                                                         mTarget->mElement,
+                                                         mTarget->mPseudoType,
+                                                         mKeyframes);
   }
 
   if (mProperties == properties) {
@@ -567,20 +544,13 @@ KeyframeEffectReadOnly::UpdateProperties(nsStyleContext* aStyleContext)
   }
 
   if (mTarget) {
-    EffectSet* effectSet = EffectSet::GetEffectSet(mTarget, mPseudoType);
+    EffectSet* effectSet = EffectSet::GetEffectSet(mTarget->mElement,
+                                                   mTarget->mPseudoType);
     if (effectSet) {
       effectSet->MarkCascadeNeedsUpdate();
     }
-  }
 
-  if (mAnimation) {
-    nsPresContext* presContext = GetPresContext();
-    if (presContext) {
-      presContext->EffectCompositor()->
-        RequestRestyle(mTarget, mPseudoType,
-                       EffectCompositor::RestyleType::Layer,
-                       mAnimation->CascadeLevel());
-    }
+    RequestRestyle(EffectCompositor::RestyleType::Layer);
   }
 }
 
@@ -724,12 +694,35 @@ KeyframeEffectReadOnly::~KeyframeEffectReadOnly()
 {
 }
 
+static Maybe<OwningAnimationTarget>
+ConvertTarget(const Nullable<ElementOrCSSPseudoElement>& aTarget)
+{
+  // Return value optimization.
+  Maybe<OwningAnimationTarget> result;
+
+  if (aTarget.IsNull()) {
+    return result;
+  }
+
+  const ElementOrCSSPseudoElement& target = aTarget.Value();
+  MOZ_ASSERT(target.IsElement() || target.IsCSSPseudoElement(),
+             "Uninitialized target");
+
+  if (target.IsElement()) {
+    result.emplace(&target.GetAsElement());
+  } else {
+    RefPtr<Element> elem = target.GetAsCSSPseudoElement().ParentElement();
+    result.emplace(elem, target.GetAsCSSPseudoElement().GetType());
+  }
+  return result;
+}
+
 template <class KeyframeEffectType, class OptionsType>
 /* static */ already_AddRefed<KeyframeEffectType>
 KeyframeEffectReadOnly::ConstructKeyframeEffect(
     const GlobalObject& aGlobal,
     const Nullable<ElementOrCSSPseudoElement>& aTarget,
-    JS::Handle<JSObject*> aFrames,
+    JS::Handle<JSObject*> aKeyframes,
     const OptionsType& aOptions,
     ErrorResult& aRv)
 {
@@ -745,46 +738,14 @@ KeyframeEffectReadOnly::ConstructKeyframeEffect(
     return nullptr;
   }
 
-  if (aTarget.IsNull()) {
-    // We don't support null targets yet.
-    aRv.Throw(NS_ERROR_DOM_ANIM_NO_TARGET_ERR);
-    return nullptr;
-  }
+  Maybe<OwningAnimationTarget> target = ConvertTarget(aTarget);
+  RefPtr<KeyframeEffectType> effect =
+    new KeyframeEffectType(doc, target, timingParams);
 
-  const ElementOrCSSPseudoElement& target = aTarget.Value();
-  MOZ_ASSERT(target.IsElement() || target.IsCSSPseudoElement(),
-             "Uninitialized target");
-
-  RefPtr<Element> targetElement;
-  CSSPseudoElementType pseudoType = CSSPseudoElementType::NotPseudo;
-  if (target.IsElement()) {
-    targetElement = &target.GetAsElement();
-  } else {
-    targetElement = target.GetAsCSSPseudoElement().ParentElement();
-    pseudoType = target.GetAsCSSPseudoElement().GetType();
-  }
-
-  nsTArray<Keyframe> keyframes =
-    KeyframeUtils::GetKeyframesFromObject(aGlobal.Context(), aFrames, aRv);
+  effect->SetKeyframes(aGlobal.Context(), aKeyframes, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
-
-  RefPtr<KeyframeEffectType> effect =
-    new KeyframeEffectType(targetElement->OwnerDoc(), targetElement,
-                           pseudoType, timingParams);
-
-  RefPtr<nsStyleContext> styleContext;
-  nsIPresShell* shell = doc->GetShell();
-  if (shell && targetElement) {
-    nsIAtom* pseudo =
-      pseudoType < CSSPseudoElementType::Count ?
-      nsCSSPseudoElements::GetPseudoAtom(pseudoType) : nullptr;
-    styleContext =
-      nsComputedDOMStyle::GetStyleContextForElement(targetElement, pseudo,
-                                                    shell);
-  }
-  effect->SetFrames(Move(keyframes), styleContext);
 
   return effect.forget();
 }
@@ -794,6 +755,14 @@ KeyframeEffectReadOnly::ResetIsRunningOnCompositor()
 {
   for (AnimationProperty& property : mProperties) {
     property.mIsRunningOnCompositor = false;
+  }
+}
+
+void
+KeyframeEffectReadOnly::ResetWinsInCascade()
+{
+  for (AnimationProperty& property : mProperties) {
+    property.mWinsInCascade = false;
   }
 }
 
@@ -814,17 +783,36 @@ KeyframeEffectReadOnly::UpdateTargetRegistration()
              "Out of date Animation::IsRelevant value");
 
   if (isRelevant) {
-    EffectSet* effectSet = EffectSet::GetOrCreateEffectSet(mTarget,
-                                                           mPseudoType);
+    EffectSet* effectSet =
+      EffectSet::GetOrCreateEffectSet(mTarget->mElement, mTarget->mPseudoType);
     effectSet->AddEffect(*this);
   } else {
-    EffectSet* effectSet = EffectSet::GetEffectSet(mTarget, mPseudoType);
-    if (effectSet) {
-      effectSet->RemoveEffect(*this);
-      if (effectSet->IsEmpty()) {
-        EffectSet::DestroyEffectSet(mTarget, mPseudoType);
-      }
+    UnregisterTarget();
+  }
+}
+
+void
+KeyframeEffectReadOnly::UnregisterTarget()
+{
+  EffectSet* effectSet =
+    EffectSet::GetEffectSet(mTarget->mElement, mTarget->mPseudoType);
+  if (effectSet) {
+    effectSet->RemoveEffect(*this);
+    if (effectSet->IsEmpty()) {
+      EffectSet::DestroyEffectSet(mTarget->mElement, mTarget->mPseudoType);
     }
+  }
+}
+
+void
+KeyframeEffectReadOnly::RequestRestyle(
+  EffectCompositor::RestyleType aRestyleType)
+{
+  nsPresContext* presContext = GetPresContext();
+  if (presContext && mTarget && mAnimation) {
+    presContext->EffectCompositor()->
+      RequestRestyle(mTarget->mElement, mTarget->mPseudoType,
+                     aRestyleType, mAnimation->CascadeLevel());
   }
 }
 
@@ -850,25 +838,16 @@ DumpAnimationProperties(nsTArray<AnimationProperty>& aAnimationProperties)
 }
 #endif
 
-/**
- * A property and StyleAnimationValue pair.
- */
-struct KeyframeValue
-{
-  nsCSSProperty mProperty;
-  StyleAnimationValue mValue;
-};
-
 /* static */ already_AddRefed<KeyframeEffectReadOnly>
 KeyframeEffectReadOnly::Constructor(
     const GlobalObject& aGlobal,
     const Nullable<ElementOrCSSPseudoElement>& aTarget,
-    JS::Handle<JSObject*> aFrames,
+    JS::Handle<JSObject*> aKeyframes,
     const UnrestrictedDoubleOrKeyframeEffectOptions& aOptions,
     ErrorResult& aRv)
 {
   return ConstructKeyframeEffect<KeyframeEffectReadOnly>(aGlobal, aTarget,
-                                                         aFrames, aOptions,
+                                                         aKeyframes, aOptions,
                                                          aRv);
 }
 
@@ -881,15 +860,16 @@ KeyframeEffectReadOnly::GetTarget(
     return;
   }
 
-  switch (mPseudoType) {
+  switch (mTarget->mPseudoType) {
     case CSSPseudoElementType::before:
     case CSSPseudoElementType::after:
       aRv.SetValue().SetAsCSSPseudoElement() =
-        CSSPseudoElement::GetCSSPseudoElement(mTarget, mPseudoType);
+        CSSPseudoElement::GetCSSPseudoElement(mTarget->mElement,
+                                              mTarget->mPseudoType);
       break;
 
     case CSSPseudoElementType::NotPseudo:
-      aRv.SetValue().SetAsElement() = mTarget;
+      aRv.SetValue().SetAsElement() = mTarget->mElement;
       break;
 
     default:
@@ -986,19 +966,19 @@ KeyframeEffectReadOnly::GetProperties(
 }
 
 void
-KeyframeEffectReadOnly::GetFrames(JSContext*& aCx,
-                                  nsTArray<JSObject*>& aResult,
-                                  ErrorResult& aRv)
+KeyframeEffectReadOnly::GetKeyframes(JSContext*& aCx,
+                                     nsTArray<JSObject*>& aResult,
+                                     ErrorResult& aRv)
 {
   MOZ_ASSERT(aResult.IsEmpty());
   MOZ_ASSERT(!aRv.Failed());
 
-  if (!aResult.SetCapacity(mFrames.Length(), mozilla::fallible)) {
+  if (!aResult.SetCapacity(mKeyframes.Length(), mozilla::fallible)) {
     aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
     return;
   }
 
-  for (const Keyframe& keyframe : mFrames) {
+  for (const Keyframe& keyframe : mKeyframes) {
     // Set up a dictionary object for the explicit members
     BaseComputedKeyframe keyframeDict;
     if (keyframe.mOffset) {
@@ -1095,7 +1075,8 @@ KeyframeEffectReadOnly::CanThrottle() const
       continue;
     }
 
-    EffectSet* effectSet = EffectSet::GetEffectSet(mTarget, mPseudoType);
+    EffectSet* effectSet = EffectSet::GetEffectSet(mTarget->mElement,
+                                                   mTarget->mPseudoType);
     MOZ_ASSERT(effectSet, "CanThrottle should be called on an effect "
                           "associated with a target element");
     layers::Layer* layer =
@@ -1143,7 +1124,8 @@ KeyframeEffectReadOnly::CanThrottleTransformChanges(nsIFrame& aFrame) const
   TimeStamp now =
     presContext->RefreshDriver()->MostRecentRefresh();
 
-  EffectSet* effectSet = EffectSet::GetEffectSet(mTarget, mPseudoType);
+  EffectSet* effectSet = EffectSet::GetEffectSet(mTarget->mElement,
+                                                 mTarget->mPseudoType);
   MOZ_ASSERT(effectSet, "CanThrottleTransformChanges is expected to be called"
                         " on an effect in an effect set");
   MOZ_ASSERT(mAnimation, "CanThrottleTransformChanges is expected to be called"
@@ -1181,18 +1163,18 @@ KeyframeEffectReadOnly::GetAnimationFrame() const
     return nullptr;
   }
 
-  nsIFrame* frame = mTarget->GetPrimaryFrame();
+  nsIFrame* frame = mTarget->mElement->GetPrimaryFrame();
   if (!frame) {
     return nullptr;
   }
 
-  if (mPseudoType == CSSPseudoElementType::before) {
+  if (mTarget->mPseudoType == CSSPseudoElementType::before) {
     frame = nsLayoutUtils::GetBeforeFrame(frame);
-  } else if (mPseudoType == CSSPseudoElementType::after) {
+  } else if (mTarget->mPseudoType == CSSPseudoElementType::after) {
     frame = nsLayoutUtils::GetAfterFrame(frame);
   } else {
-    MOZ_ASSERT(mPseudoType == CSSPseudoElementType::NotPseudo,
-               "unknown mPseudoType");
+    MOZ_ASSERT(mTarget->mPseudoType == CSSPseudoElementType::NotPseudo,
+               "unknown mTarget->mPseudoType");
   }
   if (!frame) {
     return nullptr;
@@ -1207,7 +1189,7 @@ KeyframeEffectReadOnly::GetRenderedDocument() const
   if (!mTarget) {
     return nullptr;
   }
-  return mTarget->GetComposedDoc();
+  return mTarget->mElement->GetComposedDoc();
 }
 
 nsPresContext*
@@ -1325,7 +1307,7 @@ KeyframeEffectReadOnly::SetPerformanceWarning(
       if (nsLayoutUtils::IsAnimationLoggingEnabled() &&
           property.mPerformanceWarning->ToLocalizedString(localizedString)) {
         nsAutoCString logMessage = NS_ConvertUTF16toUTF8(localizedString);
-        AnimationUtils::LogAsyncAnimationFailure(logMessage, mTarget);
+        AnimationUtils::LogAsyncAnimationFailure(logMessage, mTarget->mElement);
       }
       return;
     }
@@ -1339,11 +1321,10 @@ KeyframeEffectReadOnly::SetPerformanceWarning(
 //---------------------------------------------------------------------
 
 KeyframeEffect::KeyframeEffect(nsIDocument* aDocument,
-                               Element* aTarget,
-                               CSSPseudoElementType aPseudoType,
+                               const Maybe<OwningAnimationTarget>& aTarget,
                                const TimingParams& aTiming)
-  : KeyframeEffectReadOnly(aDocument, aTarget, aPseudoType,
-                           new AnimationEffectTiming(aTiming, this))
+  : KeyframeEffectReadOnly(aDocument, aTarget,
+                           new AnimationEffectTiming(aDocument, aTiming, this))
 {
 }
 
@@ -1358,11 +1339,11 @@ KeyframeEffect::WrapObject(JSContext* aCx,
 KeyframeEffect::Constructor(
     const GlobalObject& aGlobal,
     const Nullable<ElementOrCSSPseudoElement>& aTarget,
-    JS::Handle<JSObject*> aFrames,
+    JS::Handle<JSObject*> aKeyframes,
     const UnrestrictedDoubleOrKeyframeEffectOptions& aOptions,
     ErrorResult& aRv)
 {
-  return ConstructKeyframeEffect<KeyframeEffect>(aGlobal, aTarget, aFrames,
+  return ConstructKeyframeEffect<KeyframeEffect>(aGlobal, aTarget, aKeyframes,
                                                  aOptions, aRv);
 }
 
@@ -1370,18 +1351,21 @@ KeyframeEffect::Constructor(
 KeyframeEffect::Constructor(
     const GlobalObject& aGlobal,
     const Nullable<ElementOrCSSPseudoElement>& aTarget,
-    JS::Handle<JSObject*> aFrames,
+    JS::Handle<JSObject*> aKeyframes,
     const UnrestrictedDoubleOrKeyframeAnimationOptions& aOptions,
     ErrorResult& aRv)
 {
-  return ConstructKeyframeEffect<KeyframeEffect>(aGlobal, aTarget, aFrames,
+  return ConstructKeyframeEffect<KeyframeEffect>(aGlobal, aTarget, aKeyframes,
                                                  aOptions, aRv);
 }
 
-void KeyframeEffect::NotifySpecifiedTimingUpdated()
+void
+KeyframeEffect::NotifySpecifiedTimingUpdated()
 {
   // Use the same document for a pseudo element and its parent element.
-  nsAutoAnimationMutationBatch mb(mTarget->OwnerDoc());
+  // Use nullptr if we don't have mTarget, so disable the mutation batch.
+  nsAutoAnimationMutationBatch mb(mTarget ? mTarget->mElement->OwnerDoc()
+                                          : nullptr);
 
   if (mAnimation) {
     mAnimation->NotifyEffectTimingUpdated();
@@ -1390,19 +1374,79 @@ void KeyframeEffect::NotifySpecifiedTimingUpdated()
       nsNodeUtils::AnimationChanged(mAnimation);
     }
 
-    nsPresContext* presContext = GetPresContext();
-    if (presContext) {
-      presContext->EffectCompositor()->
-        RequestRestyle(mTarget, mPseudoType,
-                       EffectCompositor::RestyleType::Layer,
-                       mAnimation->CascadeLevel());
+    RequestRestyle(EffectCompositor::RestyleType::Layer);
+  }
+}
+
+void
+KeyframeEffect::SetTarget(const Nullable<ElementOrCSSPseudoElement>& aTarget)
+{
+  Maybe<OwningAnimationTarget> newTarget = ConvertTarget(aTarget);
+  if (mTarget == newTarget) {
+    // Assign the same target, skip it.
+    return;
+  }
+
+  if (mTarget) {
+    UnregisterTarget();
+    ResetIsRunningOnCompositor();
+    ResetWinsInCascade();
+
+    RequestRestyle(EffectCompositor::RestyleType::Layer);
+
+    nsAutoAnimationMutationBatch mb(mTarget->mElement->OwnerDoc());
+    if (mAnimation) {
+      nsNodeUtils::AnimationRemoved(mAnimation);
+    }
+  }
+
+  mTarget = newTarget;
+
+  if (mTarget) {
+    UpdateTargetRegistration();
+    MaybeUpdateProperties();
+
+    RequestRestyle(EffectCompositor::RestyleType::Layer);
+
+    nsAutoAnimationMutationBatch mb(mTarget->mElement->OwnerDoc());
+    if (mAnimation) {
+      nsNodeUtils::AnimationAdded(mAnimation);
     }
   }
 }
 
 KeyframeEffect::~KeyframeEffect()
 {
-  mTiming->Unlink();
+  // mTiming is cycle collected, so we have to do null check first even though
+  // mTiming shouldn't be null during the lifetime of KeyframeEffect.
+  if (mTiming) {
+    mTiming->Unlink();
+  }
+}
+
+void
+KeyframeEffect::MaybeUpdateProperties()
+{
+  if (!mTarget) {
+    return;
+  }
+
+  nsIDocument* doc = mTarget->mElement->OwnerDoc();
+  if (!doc) {
+    return;
+  }
+
+  nsIAtom* pseudo = mTarget->mPseudoType < CSSPseudoElementType::Count ?
+                    nsCSSPseudoElements::GetPseudoAtom(mTarget->mPseudoType) :
+                    nullptr;
+  RefPtr<nsStyleContext> styleContext =
+    nsComputedDOMStyle::GetStyleContextForElement(mTarget->mElement, pseudo,
+                                                  doc->GetShell());
+  if (!styleContext) {
+    return;
+  }
+
+  UpdateProperties(styleContext);
 }
 
 } // namespace dom

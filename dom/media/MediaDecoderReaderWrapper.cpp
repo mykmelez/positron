@@ -19,9 +19,8 @@ extern LazyLogModule gMediaDecoderLog;
 // until it gets a sample from both channels, such that we can be guaranteed
 // to know the start time by the time On{Audio,Video}Decoded is called on MDSM.
 class StartTimeRendezvous {
+  typedef MediaDecoderReader::MediaDataPromise MediaDataPromise;
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(StartTimeRendezvous);
-  typedef MediaDecoderReader::AudioDataPromise AudioDataPromise;
-  typedef MediaDecoderReader::VideoDataPromise VideoDataPromise;
 
 public:
   StartTimeRendezvous(AbstractThread* aOwnerThread,
@@ -58,23 +57,17 @@ public:
     return mHaveStartTimePromise.Ensure(__func__);
   }
 
-  template<typename PromiseType>
-  struct PromiseSampleType {
-    typedef typename PromiseType::ResolveValueType::element_type Type;
-  };
-
-  template<typename PromiseType, MediaData::Type SampleType>
-  RefPtr<PromiseType>
-  ProcessFirstSample(typename PromiseSampleType<PromiseType>::Type* aData)
+  template<MediaData::Type SampleType>
+  RefPtr<MediaDataPromise>
+  ProcessFirstSample(MediaData* aData)
   {
-    typedef typename PromiseSampleType<PromiseType>::Type DataType;
-    typedef typename PromiseType::Private PromisePrivate;
+    typedef typename MediaDataPromise::Private PromisePrivate;
     MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
 
     MaybeSetChannelStartTime<SampleType>(aData->mTime);
 
     RefPtr<PromisePrivate> p = new PromisePrivate(__func__);
-    RefPtr<DataType> data = aData;
+    RefPtr<MediaData> data = aData;
     RefPtr<StartTimeRendezvous> self = this;
     AwaitStartTime()->Then(
       mOwnerThread, __func__,
@@ -151,6 +144,8 @@ MediaDecoderReaderWrapper::MediaDecoderReaderWrapper(bool aIsRealTime,
   : mForceZeroStartTime(aIsRealTime || aReader->ForceZeroStartTime())
   , mOwnerThread(aOwnerThread)
   , mReader(aReader)
+  , mAudioCallbackID("AudioCallbackID")
+  , mVideoCallbackID("VideoCallbackID")
 {}
 
 MediaDecoderReaderWrapper::~MediaDecoderReaderWrapper()
@@ -185,34 +180,66 @@ MediaDecoderReaderWrapper::AwaitStartTime()
   return mStartTimeRendezvous->AwaitStartTime();
 }
 
-RefPtr<MediaDecoderReaderWrapper::AudioDataPromise>
+void
+MediaDecoderReaderWrapper::CancelAudioCallback(CallbackID aID)
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  MOZ_ASSERT(aID == mAudioCallbackID);
+  ++mAudioCallbackID;
+  mRequestAudioDataCB = nullptr;
+}
+
+void
+MediaDecoderReaderWrapper::CancelVideoCallback(CallbackID aID)
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  MOZ_ASSERT(aID == mVideoCallbackID);
+  ++mVideoCallbackID;
+  mRequestVideoDataCB = nullptr;
+}
+
+void
 MediaDecoderReaderWrapper::RequestAudioData()
 {
   MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
   MOZ_ASSERT(!mShutdown);
+  MOZ_ASSERT(mRequestAudioDataCB, "Request audio data without callback!");
 
   auto p = InvokeAsync(mReader->OwnerThread(), mReader.get(), __func__,
                        &MediaDecoderReader::RequestAudioData);
 
   if (!mStartTimeRendezvous->HaveStartTime()) {
     p = p->Then(mOwnerThread, __func__, mStartTimeRendezvous.get(),
-                &StartTimeRendezvous::ProcessFirstSample<AudioDataPromise, MediaData::AUDIO_DATA>,
+                &StartTimeRendezvous::ProcessFirstSample<MediaData::AUDIO_DATA>,
                 &StartTimeRendezvous::FirstSampleRejected<MediaData::AUDIO_DATA>)
          ->CompletionPromise();
   }
 
-  return p->Then(mOwnerThread, __func__, this,
-                 &MediaDecoderReaderWrapper::OnSampleDecoded,
-                 &MediaDecoderReaderWrapper::OnNotDecoded)
-          ->CompletionPromise();
+  RefPtr<MediaDecoderReaderWrapper> self = this;
+  mAudioDataRequest.Begin(p->Then(mOwnerThread, __func__,
+    [self] (MediaData* aAudioSample) {
+      MOZ_ASSERT(self->mRequestAudioDataCB);
+      self->mAudioDataRequest.Complete();
+      self->OnSampleDecoded(self->mRequestAudioDataCB.get(), aAudioSample, TimeStamp());
+    },
+    [self] (MediaDecoderReader::NotDecodedReason aReason) {
+      MOZ_ASSERT(self->mRequestAudioDataCB);
+      self->mAudioDataRequest.Complete();
+      self->OnNotDecoded(self->mRequestAudioDataCB.get(), aReason);
+    }));
 }
 
-RefPtr<MediaDecoderReaderWrapper::VideoDataPromise>
+void
 MediaDecoderReaderWrapper::RequestVideoData(bool aSkipToNextKeyframe,
                                             media::TimeUnit aTimeThreshold)
 {
   MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
   MOZ_ASSERT(!mShutdown);
+  MOZ_ASSERT(mRequestVideoDataCB, "Request video data without callback!");
+
+  // Time the video decode and send this value back to callbacks who accept
+  // a TimeStamp as its second parameter.
+  TimeStamp videoDecodeStartTime = TimeStamp::Now();
 
   if (aTimeThreshold.ToMicroseconds() > 0 &&
       mStartTimeRendezvous->HaveStartTime()) {
@@ -225,15 +252,37 @@ MediaDecoderReaderWrapper::RequestVideoData(bool aSkipToNextKeyframe,
 
   if (!mStartTimeRendezvous->HaveStartTime()) {
     p = p->Then(mOwnerThread, __func__, mStartTimeRendezvous.get(),
-                &StartTimeRendezvous::ProcessFirstSample<VideoDataPromise, MediaData::VIDEO_DATA>,
+                &StartTimeRendezvous::ProcessFirstSample<MediaData::VIDEO_DATA>,
                 &StartTimeRendezvous::FirstSampleRejected<MediaData::VIDEO_DATA>)
          ->CompletionPromise();
   }
 
-  return p->Then(mOwnerThread, __func__, this,
-                 &MediaDecoderReaderWrapper::OnSampleDecoded,
-                 &MediaDecoderReaderWrapper::OnNotDecoded)
-          ->CompletionPromise();
+  RefPtr<MediaDecoderReaderWrapper> self = this;
+  mVideoDataRequest.Begin(p->Then(mOwnerThread, __func__,
+    [self, videoDecodeStartTime] (MediaData* aVideoSample) {
+      MOZ_ASSERT(self->mRequestVideoDataCB);
+      self->mVideoDataRequest.Complete();
+      self->OnSampleDecoded(self->mRequestVideoDataCB.get(), aVideoSample, videoDecodeStartTime);
+    },
+    [self] (MediaDecoderReader::NotDecodedReason aReason) {
+      MOZ_ASSERT(self->mRequestVideoDataCB);
+      self->mVideoDataRequest.Complete();
+      self->OnNotDecoded(self->mRequestVideoDataCB.get(), aReason);
+    }));
+}
+
+bool
+MediaDecoderReaderWrapper::IsRequestingAudioData() const
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  return mAudioDataRequest.Exists();
+}
+
+bool
+MediaDecoderReaderWrapper::IsRequestingVideoData() const
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  return mVideoDataRequest.Exists();
 }
 
 RefPtr<MediaDecoderReader::SeekPromise>
@@ -246,15 +295,71 @@ MediaDecoderReaderWrapper::Seek(SeekTarget aTarget, media::TimeUnit aEndTime)
                      aEndTime.ToMicroseconds());
 }
 
+RefPtr<MediaDecoderReaderWrapper::WaitForDataPromise>
+MediaDecoderReaderWrapper::WaitForData(MediaData::Type aType)
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  return InvokeAsync(mReader->OwnerThread(), mReader.get(), __func__,
+                     &MediaDecoderReader::WaitForData, aType);
+}
+
+RefPtr<MediaDecoderReaderWrapper::BufferedUpdatePromise>
+MediaDecoderReaderWrapper::UpdateBufferedWithPromise()
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  return InvokeAsync(mReader->OwnerThread(), mReader.get(), __func__,
+                     &MediaDecoderReader::UpdateBufferedWithPromise);
+}
+
 void
+MediaDecoderReaderWrapper::ReleaseMediaResources()
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  nsCOMPtr<nsIRunnable> r =
+    NewRunnableMethod(mReader, &MediaDecoderReader::ReleaseMediaResources);
+  mReader->OwnerThread()->Dispatch(r.forget());
+}
+
+void
+MediaDecoderReaderWrapper::SetIdle()
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  nsCOMPtr<nsIRunnable> r =
+    NewRunnableMethod(mReader, &MediaDecoderReader::SetIdle);
+  mReader->OwnerThread()->Dispatch(r.forget());
+}
+
+void
+MediaDecoderReaderWrapper::ResetDecode(TargetQueues aQueues)
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+
+  mAudioDataRequest.DisconnectIfExists();
+  mVideoDataRequest.DisconnectIfExists();
+
+  nsCOMPtr<nsIRunnable> r =
+    NewRunnableMethod<TargetQueues>(mReader,
+                                    &MediaDecoderReader::ResetDecode,
+                                    aQueues);
+  mReader->OwnerThread()->Dispatch(r.forget());
+}
+
+RefPtr<ShutdownPromise>
 MediaDecoderReaderWrapper::Shutdown()
 {
   MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  MOZ_ASSERT(!mRequestAudioDataCB);
+  MOZ_ASSERT(!mRequestVideoDataCB);
+  MOZ_ASSERT(!mAudioDataRequest.Exists());
+  MOZ_ASSERT(!mVideoDataRequest.Exists());
+
   mShutdown = true;
   if (mStartTimeRendezvous) {
     mStartTimeRendezvous->Destroy();
     mStartTimeRendezvous = nullptr;
   }
+  return InvokeAsync(mReader->OwnerThread(), mReader.get(), __func__,
+                     &MediaDecoderReader::Shutdown);
 }
 
 void
@@ -285,12 +390,25 @@ MediaDecoderReaderWrapper::OnMetadataRead(MetadataHolder* aMetadata)
 }
 
 void
-MediaDecoderReaderWrapper::OnSampleDecoded(MediaData* aSample)
+MediaDecoderReaderWrapper::OnSampleDecoded(CallbackBase* aCallback,
+                                           MediaData* aSample,
+                                           TimeStamp aDecodeStartTime)
 {
   MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
-  if (!mShutdown) {
-    aSample->AdjustForStartTime(StartTime().ToMicroseconds());
-  }
+  MOZ_ASSERT(!mShutdown);
+
+  aSample->AdjustForStartTime(StartTime().ToMicroseconds());
+  aCallback->OnResolved(aSample, aDecodeStartTime);
+}
+
+void
+MediaDecoderReaderWrapper::OnNotDecoded(CallbackBase* aCallback,
+                                        MediaDecoderReader::NotDecodedReason aReason)
+{
+  MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
+  MOZ_ASSERT(!mShutdown);
+
+  aCallback->OnRejected(aReason);
 }
 
 } // namespace mozilla

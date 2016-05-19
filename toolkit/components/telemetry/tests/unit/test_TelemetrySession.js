@@ -365,10 +365,8 @@ function checkPayload(payload, reason, successfulPings, savedPings) {
 
   Assert.ok("keyedHistograms" in payload);
   let keyedHistograms = payload.keyedHistograms;
-  Assert.ok(TELEMETRY_TEST_KEYED_FLAG in keyedHistograms);
+  Assert.ok(!(TELEMETRY_TEST_KEYED_FLAG in keyedHistograms));
   Assert.ok(TELEMETRY_TEST_KEYED_COUNT in keyedHistograms);
-
-  Assert.deepEqual({}, keyedHistograms[TELEMETRY_TEST_KEYED_FLAG]);
 
   const expected_keyed_count = {
     "a": {
@@ -643,10 +641,8 @@ add_task(function* test_checkSubsessionHistograms() {
   Assert.equal(subsession.info.reason, "environment-change");
   Assert.ok(!(COUNT_ID in classic.histograms));
   Assert.ok(!(COUNT_ID in subsession.histograms));
-  Assert.ok(KEYED_ID in classic.keyedHistograms);
-  Assert.ok(KEYED_ID in subsession.keyedHistograms);
-  Assert.deepEqual(classic.keyedHistograms[KEYED_ID], {});
-  Assert.deepEqual(subsession.keyedHistograms[KEYED_ID], {});
+  Assert.ok(!(KEYED_ID in classic.keyedHistograms));
+  Assert.ok(!(KEYED_ID in subsession.keyedHistograms));
 
   checkHistograms(classic.histograms, subsession.histograms);
   checkKeyedHistograms(classic.keyedHistograms, subsession.keyedHistograms);
@@ -677,9 +673,8 @@ add_task(function* test_checkSubsessionHistograms() {
 
   Assert.ok(!(COUNT_ID in classic.histograms));
   Assert.ok(!(COUNT_ID in subsession.histograms));
-  Assert.ok(KEYED_ID in classic.keyedHistograms);
-  Assert.ok(KEYED_ID in subsession.keyedHistograms);
-  Assert.deepEqual(classic.keyedHistograms[KEYED_ID], {});
+  Assert.ok(!(KEYED_ID in classic.keyedHistograms));
+  Assert.ok(!(KEYED_ID in subsession.keyedHistograms));
 
   checkHistograms(classic.histograms, subsession.histograms);
   checkKeyedHistograms(classic.keyedHistograms, subsession.keyedHistograms);
@@ -725,10 +720,9 @@ add_task(function* test_checkSubsessionHistograms() {
   Assert.equal(subsession.histograms[COUNT_ID].sum, 0);
 
   Assert.ok(KEYED_ID in classic.keyedHistograms);
-  Assert.ok(KEYED_ID in subsession.keyedHistograms);
+  Assert.ok(!(KEYED_ID in subsession.keyedHistograms));
   Assert.equal(classic.keyedHistograms[KEYED_ID]["a"].sum, 1);
   Assert.equal(classic.keyedHistograms[KEYED_ID]["b"].sum, 1);
-  Assert.deepEqual(subsession.keyedHistograms[KEYED_ID], {});
 
   // Adding values should get picked up in both again.
   count.add(1);
@@ -872,7 +866,7 @@ add_task(function* test_dailyCollection() {
   Assert.equal(subsessionStartDate.toISOString(), expectedDate.toISOString());
 
   Assert.equal(ping.payload.histograms[COUNT_ID].sum, 0);
-  Assert.deepEqual(ping.payload.keyedHistograms[KEYED_ID], {});
+  Assert.ok(!(KEYED_ID in ping.payload.keyedHistograms));
 
   // Trigger and collect another daily ping, with the histograms being set again.
   count.add(1);
@@ -1079,7 +1073,7 @@ add_task(function* test_environmentChange() {
   Assert.equal(subsessionStartDate.toISOString(), startDay.toISOString());
 
   Assert.equal(ping.payload.histograms[COUNT_ID].sum, 0);
-  Assert.deepEqual(ping.payload.keyedHistograms[KEYED_ID], {});
+  Assert.ok(!(KEYED_ID in ping.payload.keyedHistograms));
 });
 
 add_task(function* test_savedPingsOnShutdown() {
@@ -1473,24 +1467,43 @@ add_task(function* test_schedulerComputerSleep() {
   yield OS.File.removeDir(DATAREPORTING_PATH, { ignoreAbsent: true });
 
   // Set a fake current date and start Telemetry.
-  let nowDate = new Date(2009, 10, 18, 0, 0, 0);
-  fakeNow(nowDate);
+  let nowDate = fakeNow(2009, 10, 18, 0, 0, 0);
   let schedulerTickCallback = null;
   fakeSchedulerTimer(callback => schedulerTickCallback = callback, () => {});
   yield TelemetrySession.reset();
 
   // Set the current time 3 days in the future at midnight, before running the callback.
-  let future = futureDate(nowDate, MS_IN_ONE_DAY * 3);
-  fakeNow(future);
+  nowDate = fakeNow(futureDate(nowDate, 3 * MS_IN_ONE_DAY));
   Assert.ok(!!schedulerTickCallback);
   // Execute one scheduler tick.
   yield schedulerTickCallback();
 
   let dailyPing = yield PingServer.promiseNextPing();
-  Assert.equal(dailyPing.payload.info.reason, REASON_DAILY);
+  Assert.equal(dailyPing.payload.info.reason, REASON_DAILY,
+               "The wake notification should have triggered a daily ping.");
+  Assert.equal(dailyPing.creationDate, nowDate.toISOString(),
+               "The daily ping date should be correct.");
 
   Assert.ok((yield OS.File.exists(ABORTED_FILE)),
             "There must be an aborted session ping.");
+
+  // Now also test if we are sending a daily ping if we wake up on the next
+  // day even when the timer doesn't trigger.
+  // This can happen due to timeouts not running out during sleep times,
+  // see bug 1262386, bug 1204823 et al.
+  // Note that we don't get wake notifications on Linux due to bug 758848.
+  nowDate = fakeNow(futureDate(nowDate, 1 * MS_IN_ONE_DAY));
+
+  // We emulate the mentioned timeout behavior by sending the wake notification
+  // instead of triggering the timeout callback.
+  // This should trigger a daily ping, because we passed midnight.
+  Services.obs.notifyObservers(null, "wake_notification", null);
+
+  dailyPing = yield PingServer.promiseNextPing();
+  Assert.equal(dailyPing.payload.info.reason, REASON_DAILY,
+               "The wake notification should have triggered a daily ping.");
+  Assert.equal(dailyPing.creationDate, nowDate.toISOString(),
+               "The daily ping date should be correct.");
 
   // TODO: Remove the TelemetrySend manual shutdown when bug 1145188 lands.
   yield TelemetrySend.shutdown();

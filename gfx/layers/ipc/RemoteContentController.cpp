@@ -25,6 +25,8 @@
 namespace mozilla {
 namespace layers {
 
+static std::map<uint64_t, RefPtr<RemoteContentController>> sDestroyedControllers;
+
 RemoteContentController::RemoteContentController(uint64_t aLayersId,
                                                  dom::TabParent* aBrowserParent)
   : mUILoop(MessageLoop::current())
@@ -37,9 +39,6 @@ RemoteContentController::RemoteContentController(uint64_t aLayersId,
 
 RemoteContentController::~RemoteContentController()
 {
-  if (mBrowserParent) {
-    Unused << PAPZParent::Send__delete__(this);
-  }
 }
 
 void
@@ -52,24 +51,6 @@ RemoteContentController::RequestContentRepaint(const FrameMetrics& aFrameMetrics
 }
 
 void
-RemoteContentController::AcknowledgeScrollUpdate(const FrameMetrics::ViewID& aScrollId,
-                                                 const uint32_t& aScrollGeneration)
-{
-  if (MessageLoop::current() != mUILoop) {
-    // We have to send this message from the "UI thread" (main
-    // thread).
-    mUILoop->PostTask(
-      FROM_HERE,
-      NewRunnableMethod(this, &RemoteContentController::AcknowledgeScrollUpdate,
-                        aScrollId, aScrollGeneration));
-    return;
-  }
-  if (CanSend()) {
-    Unused << SendAcknowledgeScrollUpdate(aScrollId, aScrollGeneration);
-  }
-}
-
-void
 RemoteContentController::HandleDoubleTap(const CSSPoint& aPoint,
                                          Modifiers aModifiers,
                                          const ScrollableLayerGuid& aGuid)
@@ -77,10 +58,11 @@ RemoteContentController::HandleDoubleTap(const CSSPoint& aPoint,
   if (MessageLoop::current() != mUILoop) {
     // We have to send this message from the "UI thread" (main
     // thread).
-    mUILoop->PostTask(
-      FROM_HERE,
-      NewRunnableMethod(this, &RemoteContentController::HandleDoubleTap,
-                        aPoint, aModifiers, aGuid));
+    mUILoop->PostTask(NewRunnableMethod<CSSPoint,
+                                        Modifiers,
+                                        ScrollableLayerGuid>(this,
+                                                             &RemoteContentController::HandleDoubleTap,
+                                                             aPoint, aModifiers, aGuid));
     return;
   }
   if (CanSend()) {
@@ -97,10 +79,11 @@ RemoteContentController::HandleSingleTap(const CSSPoint& aPoint,
   if (MessageLoop::current() != mUILoop) {
     // We have to send this message from the "UI thread" (main
     // thread).
-    mUILoop->PostTask(
-      FROM_HERE,
-      NewRunnableMethod(this, &RemoteContentController::HandleSingleTap,
-                        aPoint, aModifiers, aGuid));
+    mUILoop->PostTask(NewRunnableMethod<CSSPoint,
+                                        Modifiers,
+                                        ScrollableLayerGuid>(this,
+                                                             &RemoteContentController::HandleSingleTap,
+                                                             aPoint, aModifiers, aGuid));
     return;
   }
 
@@ -131,10 +114,12 @@ RemoteContentController::HandleLongTap(const CSSPoint& aPoint,
   if (MessageLoop::current() != mUILoop) {
     // We have to send this message from the "UI thread" (main
     // thread).
-    mUILoop->PostTask(
-      FROM_HERE,
-      NewRunnableMethod(this, &RemoteContentController::HandleLongTap,
-                        aPoint, aModifiers, aGuid, aInputBlockId));
+    mUILoop->PostTask(NewRunnableMethod<CSSPoint,
+                                        Modifiers,
+                                        ScrollableLayerGuid,
+                                        uint64_t>(this,
+                                                  &RemoteContentController::HandleLongTap,
+                                                  aPoint, aModifiers, aGuid, aInputBlockId));
     return;
   }
   if (CanSend()) {
@@ -144,13 +129,13 @@ RemoteContentController::HandleLongTap(const CSSPoint& aPoint,
 }
 
 void
-RemoteContentController::PostDelayedTask(Task* aTask, int aDelayMs)
+RemoteContentController::PostDelayedTask(already_AddRefed<Runnable> aTask, int aDelayMs)
 {
 #ifdef MOZ_ANDROID_APZ
-  AndroidBridge::Bridge()->PostTaskToUiThread(aTask, aDelayMs);
+  AndroidBridge::Bridge()->PostTaskToUiThread(Move(aTask), aDelayMs);
 #else
   (MessageLoop::current() ? MessageLoop::current() : mUILoop)->
-     PostDelayedTask(FROM_HERE, aTask, aDelayMs);
+    PostDelayedTask(Move(aTask), aDelayMs);
 #endif
 }
 
@@ -172,10 +157,11 @@ RemoteContentController::NotifyAPZStateChange(const ScrollableLayerGuid& aGuid,
                                               int aArg)
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(
-      FROM_HERE,
-      NewRunnableMethod(this, &RemoteContentController::NotifyAPZStateChange,
-                        aGuid, aChange, aArg));
+    mUILoop->PostTask(NewRunnableMethod<ScrollableLayerGuid,
+                                        APZStateChange,
+                                        int>(this,
+                                             &RemoteContentController::NotifyAPZStateChange,
+                                             aGuid, aChange, aArg));
     return;
   }
   if (CanSend()) {
@@ -188,10 +174,10 @@ RemoteContentController::NotifyMozMouseScrollEvent(const FrameMetrics::ViewID& a
                                                    const nsString& aEvent)
 {
   if (MessageLoop::current() != mUILoop) {
-    mUILoop->PostTask(
-      FROM_HERE,
-      NewRunnableMethod(this, &RemoteContentController::NotifyMozMouseScrollEvent,
-                        aScrollId, aEvent));
+    mUILoop->PostTask(NewRunnableMethod<FrameMetrics::ViewID,
+                                        nsString>(this,
+                                                  &RemoteContentController::NotifyMozMouseScrollEvent,
+                                                  aScrollId, aEvent));
     return;
   }
 
@@ -241,9 +227,11 @@ RemoteContentController::RecvContentReceivedInputBlock(const ScrollableLayerGuid
     return false;
   }
   if (RefPtr<APZCTreeManager> apzcTreeManager = GetApzcTreeManager()) {
-    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
-        apzcTreeManager.get(), &APZCTreeManager::ContentReceivedInputBlock,
-        aInputBlockId, aPreventDefault));
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod<uint64_t,
+                                                            bool>(apzcTreeManager,
+                                                                  &APZCTreeManager::ContentReceivedInputBlock,
+                                                                  aInputBlockId, aPreventDefault));
+
   }
   return true;
 }
@@ -255,10 +243,11 @@ RemoteContentController::RecvStartScrollbarDrag(const AsyncDragMetrics& aDragMet
     ScrollableLayerGuid guid(mLayersId, aDragMetrics.mPresShellId,
                              aDragMetrics.mViewId);
 
-    APZThreadUtils::RunOnControllerThread(
-      NewRunnableMethod(apzcTreeManager.get(),
-                        &APZCTreeManager::StartScrollbarDrag,
-                        guid, aDragMetrics));
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod
+                                          <ScrollableLayerGuid,
+                                           AsyncDragMetrics>(apzcTreeManager,
+                                                             &APZCTreeManager::StartScrollbarDrag,
+                                                             guid, aDragMetrics));
   }
   return true;
 }
@@ -278,9 +267,11 @@ RemoteContentController::RecvSetTargetAPZC(const uint64_t& aInputBlockId,
     // need a local var to disambiguate between the SetTargetAPZC overloads.
     void (APZCTreeManager::*setTargetApzcFunc)(uint64_t, const nsTArray<ScrollableLayerGuid>&)
         = &APZCTreeManager::SetTargetAPZC;
-    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
-        apzcTreeManager.get(), setTargetApzcFunc,
-        aInputBlockId, aTargets));
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod
+                                          <uint64_t,
+                                           StoreCopyPassByRRef<nsTArray<ScrollableLayerGuid>>>
+                                          (apzcTreeManager, setTargetApzcFunc, aInputBlockId, aTargets));
+
   }
   return true;
 }
@@ -290,9 +281,12 @@ RemoteContentController::RecvSetAllowedTouchBehavior(const uint64_t& aInputBlock
                                                      nsTArray<TouchBehaviorFlags>&& aFlags)
 {
   if (RefPtr<APZCTreeManager> apzcTreeManager = GetApzcTreeManager()) {
-    APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
-        apzcTreeManager.get(), &APZCTreeManager::SetAllowedTouchBehavior,
-        aInputBlockId, Move(aFlags)));
+    APZThreadUtils::RunOnControllerThread(NewRunnableMethod
+                                          <uint64_t,
+                                           StoreCopyPassByRRef<nsTArray<TouchBehaviorFlags>>>
+                                          (apzcTreeManager,
+                                           &APZCTreeManager::SetAllowedTouchBehavior,
+                                           aInputBlockId, Move(aFlags)));
   }
   return true;
 }
@@ -317,17 +311,13 @@ RemoteContentController::ActorDestroy(ActorDestroyReason aWhy)
     mApzcTreeManager = nullptr;
   }
   mBrowserParent = nullptr;
-}
 
-// TODO: Remove once upgraded to GCC 4.8+ on linux. Calling a static member
-//       function (like PAPZParent::Send__delete__) in a lambda leads to a bogus
-//       error: "'this' was not captured for this lambda function".
-//
-//       (see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=51494)
-static void
-DeletePAPZParent(PAPZParent* aPAPZ)
-{
-  Unused << PAPZParent::Send__delete__(aPAPZ);
+  uint64_t key = mLayersId;
+  NS_DispatchToMainThread(NS_NewRunnableFunction([key]() {
+    // sDestroyedControllers may or may not contain the key, depending on
+    // whether or not SendDestroy() was successfully sent out or not.
+    sDestroyedControllers.erase(key);
+  }));
 }
 
 void
@@ -336,7 +326,15 @@ RemoteContentController::Destroy()
   RefPtr<RemoteContentController> controller = this;
   NS_DispatchToMainThread(NS_NewRunnableFunction([controller] {
     if (controller->CanSend()) {
-      DeletePAPZParent(controller);
+      // Gfx code is done with this object, and it will probably get destroyed
+      // soon. However, if CanSend() is true, ActorDestroy has not yet been
+      // called, which means IPC code still has a handle to this object. We need
+      // to keep it alive until we get the ActorDestroy call, either via the
+      // __delete__ message or via IPC shutdown on our end.
+      uint64_t key = controller->mLayersId;
+      MOZ_ASSERT(sDestroyedControllers.find(key) == sDestroyedControllers.end());
+      sDestroyedControllers[key] = controller;
+      Unused << controller->SendDestroy();
     }
   }));
 }

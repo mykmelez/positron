@@ -18,7 +18,8 @@ namespace mozilla {
 namespace a11y {
 
 bool
-DocAccessibleParent::RecvShowEvent(const ShowEventData& aData)
+DocAccessibleParent::RecvShowEvent(const ShowEventData& aData,
+                                   const bool& aFromUser)
 {
   if (mShutdown)
     return true;
@@ -45,8 +46,15 @@ DocAccessibleParent::RecvShowEvent(const ShowEventData& aData)
     return true;
   }
 
-  DebugOnly<uint32_t> consumed = AddSubtree(parent, aData.NewTree(), 0, newChildIdx);
+  uint32_t consumed = AddSubtree(parent, aData.NewTree(), 0, newChildIdx);
   MOZ_ASSERT(consumed == aData.NewTree().Length());
+
+  // XXX This shouldn't happen, but if we failed to add children then the below
+  // is pointless and can crash.
+  if (!consumed) {
+    return true;
+  }
+
 #ifdef DEBUG
   for (uint32_t i = 0; i < consumed; i++) {
     uint64_t id = aData.NewTree()[i].ID();
@@ -56,6 +64,7 @@ DocAccessibleParent::RecvShowEvent(const ShowEventData& aData)
 
   MOZ_DIAGNOSTIC_ASSERT(CheckDocTree());
 
+  ProxyShowHideEvent(parent->ChildAt(newChildIdx), parent, true, aFromUser);
   return true;
 }
 
@@ -103,7 +112,8 @@ DocAccessibleParent::AddSubtree(ProxyAccessible* aParent,
 }
 
 bool
-DocAccessibleParent::RecvHideEvent(const uint64_t& aRootID)
+DocAccessibleParent::RecvHideEvent(const uint64_t& aRootID,
+                                   const bool& aFromUser)
 {
   if (mShutdown)
     return true;
@@ -130,6 +140,7 @@ DocAccessibleParent::RecvHideEvent(const uint64_t& aRootID)
   }
 
   ProxyAccessible* parent = root->Parent();
+  ProxyShowHideEvent(root, parent, false, aFromUser);
   parent->RemoveChild(root);
   root->Shutdown();
 
@@ -245,11 +256,37 @@ DocAccessibleParent::RecvTextChangeEvent(const uint64_t& aID,
 
   xpcAccessibleGeneric* xpcAcc = GetXPCAccessible(target);
   xpcAccessibleDocument* doc = GetAccService()->GetXPCDocument(this);
-  uint32_t type = nsIAccessibleEvent::EVENT_TEXT_CHANGED;
+  uint32_t type = aIsInsert ? nsIAccessibleEvent::EVENT_TEXT_INSERTED :
+                              nsIAccessibleEvent::EVENT_TEXT_REMOVED;
   nsIDOMNode* node = nullptr;
   RefPtr<xpcAccTextChangeEvent> event =
     new xpcAccTextChangeEvent(type, xpcAcc, doc, node, aFromUser, aStart, aLen,
                               aIsInsert, aStr);
+  nsCoreUtils::DispatchAccEvent(Move(event));
+
+  return true;
+}
+
+bool
+DocAccessibleParent::RecvSelectionEvent(const uint64_t& aID,
+                                        const uint64_t& aWidgetID,
+                                        const uint32_t& aType)
+{
+  ProxyAccessible* target = GetAccessible(aID);
+  ProxyAccessible* widget = GetAccessible(aWidgetID);
+  if (!target || !widget) {
+    NS_ERROR("invalid id in selection event");
+    return true;
+  }
+
+  ProxySelectionEvent(target, widget, aType);
+  if (!nsCoreUtils::AccEventObserversExist()) {
+    return true;
+  }
+  xpcAccessibleGeneric* xpcTarget = GetXPCAccessible(target);
+  xpcAccessibleDocument* xpcDoc = GetAccService()->GetXPCDocument(this);
+  RefPtr<xpcAccEvent> event = new xpcAccEvent(aType, xpcTarget, xpcDoc,
+                                              nullptr, false);
   nsCoreUtils::DispatchAccEvent(Move(event));
 
   return true;

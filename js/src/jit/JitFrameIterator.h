@@ -257,6 +257,8 @@ class JitFrameIterator
 
     inline BaselineFrame* baselineFrame() const;
 
+    // This function isn't used, but we keep it here (debug-only) because it is
+    // helpful when chasing issues with the jitcode map.
 #ifdef DEBUG
     bool verifyReturnAddressUsingNativeToBytecodeMap();
 #else
@@ -709,7 +711,7 @@ class InlineFrameIterator
 
         // Read return value.
         if (rval)
-            *rval = s.read();
+            *rval = s.maybeRead(fallback);
         else
             s.skip();
 

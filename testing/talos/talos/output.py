@@ -175,6 +175,10 @@ class PerfherderOutput(Output):
                     'name': test.name(),
                     'subtests': subtests,
                 }
+
+                if self.results.extra_options:
+                    suite['extraOptions'] = self.results.extra_options
+
                 suites.append(suite)
                 vals = []
                 replicates = {}
@@ -279,4 +283,4 @@ class PerfherderOutput(Output):
         return test_results
 
 # available output formats
-formats = {'datazilla_urls': PerfherderOutput}
+formats = {'output_urls': PerfherderOutput}

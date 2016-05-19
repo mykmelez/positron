@@ -128,3 +128,42 @@ wasmEvalText(`(module (func
   )
  )
 ))`);
+
+wasmEvalText(`
+(module
+  (func $func$0
+   (select
+    (if
+     (i32.const 0)
+     (f32.const 0)
+     (i32.const 0)
+    )
+    (if
+     (i32.const 0)
+     (f32.const 0)
+     (i32.const 0)
+    )
+    (i32.const 0)
+   )
+  )
+)
+`);
+
+wasmEvalText(`
+(module
+ (func
+  (i32.add
+   (block $outer
+    (block $middle
+     (block $inner
+      (br_table $middle $outer $inner (i32.const 42) (i32.const 1))
+     )
+     (nop)
+    )
+    (i32.const 0)
+   )
+   (i32.const 13)
+  )
+ )
+)
+`);

@@ -424,6 +424,11 @@ DocAccessible::Shutdown()
     logging::DocDestroy("document shutdown", mDocumentNode, this);
 #endif
 
+  // Mark the document as shutdown before AT is notified about the document
+  // removal from its container (valid for root documents on ATK and due to
+  // some reason for MSAA, refer to bug 757392 for details).
+  mStateFlags |= eIsDefunct;
+
   if (mNotificationController) {
     mNotificationController->Shutdown();
     mNotificationController = nullptr;
@@ -431,10 +436,6 @@ DocAccessible::Shutdown()
 
   RemoveEventListeners();
 
-  // Mark the document as shutdown before AT is notified about the document
-  // removal from its container (valid for root documents on ATK and due to
-  // some reason for MSAA, refer to bug 757392 for details).
-  mStateFlags |= eIsDefunct;
   nsCOMPtr<nsIDocument> kungFuDeathGripDoc = mDocumentNode;
   mDocumentNode = nullptr;
 
@@ -1761,7 +1762,6 @@ DocAccessible::ProcessContentInserted(Accessible* aContainer,
                     aContainer);
 #endif
 
-  uint32_t updateFlags = 0;
   TreeMutation mt(aContainer);
   do {
     Accessible* parent = iter.Child()->Parent();
@@ -1790,7 +1790,7 @@ DocAccessible::ProcessContentInserted(Accessible* aContainer,
 #endif
 
       mt.AfterInsertion(iter.Child());
-      updateFlags |= UpdateTreeInternal(iter.Child(), true);
+      CreateSubtree(iter.Child());
       continue;
     }
 
@@ -1804,7 +1804,7 @@ DocAccessible::ProcessContentInserted(Accessible* aContainer,
                     aContainer);
 #endif
 
-  FireEventsOnInsertion(aContainer, updateFlags);
+  FireEventsOnInsertion(aContainer);
 }
 
 void
@@ -1827,25 +1827,18 @@ DocAccessible::ProcessContentInserted(Accessible* aContainer, nsIContent* aNode)
       mt.AfterInsertion(child);
       mt.Done();
 
-      uint32_t flags = UpdateTreeInternal(child, true);
-      FireEventsOnInsertion(aContainer, flags);
+      CreateSubtree(child);
+      FireEventsOnInsertion(aContainer);
     }
   }
 }
 
 void
-DocAccessible::FireEventsOnInsertion(Accessible* aContainer,
-                                     uint32_t aUpdateFlags)
+DocAccessible::FireEventsOnInsertion(Accessible* aContainer)
 {
-  // Content insertion did not cause an accessible tree change.
-  if (aUpdateFlags == eNoAccessible) {
-    return;
-  }
-
   // Check to see if change occurred inside an alert, and fire an EVENT_ALERT
   // if it did.
-  if (!(aUpdateFlags & eAlertAccessible) &&
-      (aContainer->IsAlert() || aContainer->IsInsideAlert())) {
+  if (aContainer->IsAlert() || aContainer->IsInsideAlert()) {
     Accessible* ancestor = aContainer;
     do {
       if (ancestor->IsAlert()) {
@@ -1855,8 +1848,6 @@ DocAccessible::FireEventsOnInsertion(Accessible* aContainer,
     }
     while ((ancestor = ancestor->Parent()));
   }
-
-  MaybeNotifyOfValueChange(aContainer);
 }
 
 void
@@ -1878,80 +1869,24 @@ DocAccessible::UpdateTreeOnRemoval(Accessible* aContainer, nsIContent* aChildNod
   }
 #endif
 
-  uint32_t updateFlags = eNoAccessible;
   TreeMutation mt(aContainer);
-
   if (child) {
     mt.BeforeRemoval(child);
-    updateFlags |= UpdateTreeInternal(child, false);
+    MOZ_ASSERT(aContainer == child->Parent(), "Wrong parent");
+    aContainer->RemoveChild(child);
+    UncacheChildrenInSubtree(child);
+    mt.Done();
+    return;
   }
-  else {
-    TreeWalker walker(aContainer, aChildNode, TreeWalker::eWalkCache);
-    Accessible* child = walker.Next();
-    if (child) {
-      do {
-        mt.BeforeRemoval(child);
-        updateFlags |= UpdateTreeInternal(child, false);
-      }
-      while ((child = walker.Next()));
-    }
+
+  TreeWalker walker(aContainer, aChildNode, TreeWalker::eWalkCache);
+  while (Accessible* child = walker.Next()) {
+    mt.BeforeRemoval(child);
+    MOZ_ASSERT(aContainer == child->Parent(), "Wrong parent");
+    aContainer->RemoveChild(child);
+    UncacheChildrenInSubtree(child);
   }
   mt.Done();
-
-  // Content insertion/removal is not cause of accessible tree change.
-  if (updateFlags != eNoAccessible) {
-    MaybeNotifyOfValueChange(aContainer);
-  }
-}
-
-uint32_t
-DocAccessible::UpdateTreeInternal(Accessible* aChild, bool aIsInsert)
-{
-  uint32_t updateFlags = eAccessible;
-
-  // If a focused node has been shown then it could mean its frame was recreated
-  // while the node stays focused and we need to fire focus event on
-  // the accessible we just created. If the queue contains a focus event for
-  // this node already then it will be suppressed by this one.
-  Accessible* focusedAcc = nullptr;
-
-  if (aIsInsert) {
-    // Create accessible tree for shown accessible.
-    CacheChildrenInSubtree(aChild, &focusedAcc);
-  }
-
-  if (aIsInsert) {
-    roles::Role ariaRole = aChild->ARIARole();
-    if (ariaRole == roles::MENUPOPUP) {
-      // Fire EVENT_MENUPOPUP_START if ARIA menu appears.
-      FireDelayedEvent(nsIAccessibleEvent::EVENT_MENUPOPUP_START, aChild);
-
-    } else if (ariaRole == roles::ALERT) {
-      // Fire EVENT_ALERT if ARIA alert appears.
-      updateFlags = eAlertAccessible;
-      FireDelayedEvent(nsIAccessibleEvent::EVENT_ALERT, aChild);
-    }
-  } else {
-    // Update the tree for content removal.
-    // The accessible parent may differ from container accessible if
-    // the parent doesn't have own DOM node like list accessible for HTML
-    // selects.
-    Accessible* parent = aChild->Parent();
-    NS_ASSERTION(parent, "No accessible parent?!");
-    if (parent)
-      parent->RemoveChild(aChild);
-
-    UncacheChildrenInSubtree(aChild);
-  }
-
-  // XXX: do we really want to send focus to focused DOM node not taking into
-  // account active item?
-  if (focusedAcc) {
-    FocusMgr()->DispatchFocusEvent(this, focusedAcc);
-    SelectionMgr()->SetControlSelectionListener(focusedAcc->GetNode()->AsElement());
-  }
-
-  return updateFlags;
 }
 
 bool
@@ -2053,8 +1988,8 @@ DocAccessible::DoARIAOwnsRelocation(Accessible* aOwner)
           insertIdx = child->IndexInParent() + 1;
           arrayIdx++;
 
-          uint32_t flags = UpdateTreeInternal(child, true);
-          FireEventsOnInsertion(aOwner, flags);
+          CreateSubtree(child);
+          FireEventsOnInsertion(aOwner);
         }
       }
       continue;
@@ -2171,9 +2106,7 @@ DocAccessible::MoveChild(Accessible* aChild, Accessible* aNewParent,
 
   if (curParent == aNewParent) {
     MOZ_ASSERT(aChild->IndexInParent() != aIdxInParent, "No move case");
-
     curParent->MoveChild(aIdxInParent, aChild);
-    MaybeNotifyOfValueChange(curParent);
 
 #ifdef A11Y_LOG
     logging::TreeInfo("move child: parent tree after",
@@ -2191,8 +2124,6 @@ DocAccessible::MoveChild(Accessible* aChild, Accessible* aNewParent,
   curParent->RemoveChild(aChild);
   rmut.Done();
 
-  MaybeNotifyOfValueChange(curParent);
-
   // No insertion point for the child.
   if (aIdxInParent == -1) {
     return true;
@@ -2202,8 +2133,6 @@ DocAccessible::MoveChild(Accessible* aChild, Accessible* aNewParent,
   aNewParent->InsertChildAt(aIdxInParent, aChild);
   imut.AfterInsertion(aChild);
   imut.Done();
-
-  MaybeNotifyOfValueChange(aNewParent);
 
 #ifdef A11Y_LOG
   logging::TreeInfo("move child: old parent tree after",
@@ -2247,12 +2176,26 @@ DocAccessible::CacheChildrenInSubtree(Accessible* aRoot,
     mt.Done();
   }
 
-  // Fire document load complete on ARIA documents.
-  // XXX: we should delay an event if the ARIA document has aria-busy.
-  if (aRoot->HasARIARole() && !aRoot->IsDoc()) {
-    a11y::role role = aRoot->ARIARole();
-    if (role == roles::DIALOG || role == roles::DOCUMENT)
-      FireDelayedEvent(nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE, aRoot);
+  // Fire events for ARIA elements.
+  if (!aRoot->HasARIARole()) {
+    return;
+  }
+
+  roles::Role role = aRoot->ARIARole();
+  if (role == roles::MENUPOPUP) {
+    FireDelayedEvent(nsIAccessibleEvent::EVENT_MENUPOPUP_START, aRoot);
+    return;
+  }
+
+  if (role == roles::ALERT) {
+    FireDelayedEvent(nsIAccessibleEvent::EVENT_ALERT, aRoot);
+    return;
+  }
+
+  // XXX: we should delay document load complete event if the ARIA document
+  // has aria-busy.
+  if (!aRoot->IsDoc() && (role == roles::DIALOG || role == roles::DOCUMENT)) {
+    FireDelayedEvent(nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE, aRoot);
   }
 }
 

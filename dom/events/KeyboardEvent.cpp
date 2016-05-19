@@ -190,12 +190,15 @@ KeyboardEvent::CharCode()
   switch (mEvent->mMessage) {
   case eBeforeKeyDown:
   case eKeyDown:
+  case eKeyDownOnPlugin:
   case eAfterKeyDown:
   case eBeforeKeyUp:
   case eKeyUp:
+  case eKeyUpOnPlugin:
   case eAfterKeyUp:
     return 0;
   case eKeyPress:
+  case eAccessKeyNotFound:
     return mEvent->AsKeyboardEvent()->charCode;
   default:
     break;
@@ -236,9 +239,11 @@ KeyboardEvent::Which()
   switch (mEvent->mMessage) {
     case eBeforeKeyDown:
     case eKeyDown:
+    case eKeyDownOnPlugin:
     case eAfterKeyDown:
     case eBeforeKeyUp:
     case eKeyUp:
+    case eKeyUpOnPlugin:
     case eAfterKeyUp:
       return KeyCode();
     case eKeyPress:

@@ -190,7 +190,8 @@ MediaEngineRemoteVideoSource::Start(SourceMediaStream* aStream, TrackID aID,
   if (mState == kStarted) {
     return NS_OK;
   }
-  mImageContainer = layers::LayerManager::CreateImageContainer();
+  mImageContainer =
+    layers::LayerManager::CreateImageContainer(layers::ImageContainer::ASYNCHRONOUS);
 
   mState = kStarted;
   mTrackID = aID;
@@ -342,7 +343,7 @@ MediaEngineRemoteVideoSource::DeliverFrame(unsigned char* buffer,
   data.mPicSize = IntSize(mWidth, mHeight);
   data.mStereoMode = StereoMode::MONO;
 
-  if (!image->SetData(data)) {
+  if (!image->CopyData(data)) {
     MOZ_ASSERT(false);
     return 0;
   }

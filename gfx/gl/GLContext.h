@@ -95,6 +95,7 @@ enum class GLFeature {
     element_index_uint,
     ES2_compatibility,
     ES3_compatibility,
+    EXT_color_buffer_float,
     frag_color_float,
     frag_depth,
     framebuffer_blit,
@@ -341,7 +342,6 @@ public:
     }
 
 protected:
-    bool mInitialized;
     bool mIsOffscreen;
     bool mContextLost;
 
@@ -359,8 +359,8 @@ protected:
     GLRenderer mRenderer;
 
     void SetProfileVersion(ContextProfile profile, uint32_t version) {
-        MOZ_ASSERT(!mInitialized, "SetProfileVersion can only be called before"
-                                  " initialization!");
+        MOZ_ASSERT(!mSymbols.fBindFramebuffer,
+                   "SetProfileVersion can only be called before initialization!");
         MOZ_ASSERT(profile != ContextProfile::Unknown &&
                    profile != ContextProfile::OpenGL,
                    "Invalid `profile` for SetProfileVersion");
@@ -479,6 +479,7 @@ public:
         NV_geometry_program4,
         NV_half_float,
         NV_instanced_arrays,
+        NV_texture_barrier,
         NV_transform_feedback,
         NV_transform_feedback2,
         OES_EGL_image,
@@ -554,23 +555,16 @@ private:
 
 // -----------------------------------------------------------------------------
 // Robustness handling
-public:
-    bool HasRobustness() const {
-        return mHasRobustness;
-    }
-
+private:
     /**
      * The derived class is expected to provide information on whether or not it
      * supports robustness.
      */
     virtual bool SupportsRobustness() const = 0;
 
-private:
-    bool mHasRobustness;
-
+public:
 // -----------------------------------------------------------------------------
 // Error handling
-public:
     static const char* GLErrorToString(GLenum aError) {
         switch (aError) {
             case LOCAL_GL_INVALID_ENUM:
@@ -2221,8 +2215,6 @@ public:
     }
 
     GLenum fGetGraphicsResetStatus() {
-        MOZ_ASSERT(mHasRobustness);
-
         BEFORE_GL_CALL;
         ASSERT_SYMBOL_PRESENT(fGetGraphicsResetStatus);
         GLenum ret = mSymbols.fGetGraphicsResetStatus();
@@ -2889,6 +2881,17 @@ public:
         AFTER_GL_CALL;
     }
 
+// -----------------------------------------------------------------------------
+// Extension NV_texture_barrier
+public:
+    void fTextureBarrier()
+    {
+        ASSERT_SYMBOL_PRESENT(fTextureBarrier);
+        BEFORE_GL_CALL;
+        mSymbols.fTextureBarrier();
+        AFTER_GL_CALL;
+    }
+
 // Core GL & Extension ARB_copy_buffer
 public:
     void fCopyBufferSubData(GLenum readtarget, GLenum writetarget,
@@ -3422,7 +3425,6 @@ public:
 
 protected:
     SurfaceCaps mCaps;
-    nsAutoPtr<GLFormats> mGLFormats;
 
 public:
     const SurfaceCaps& Caps() const {
@@ -3431,14 +3433,6 @@ public:
 
     // Only varies based on bpp16 and alpha.
     GLFormats ChooseGLFormats(const SurfaceCaps& caps) const;
-    void UpdateGLFormats(const SurfaceCaps& caps) {
-        mGLFormats = new GLFormats(ChooseGLFormats(caps));
-    }
-
-    const GLFormats& GetGLFormats() const {
-        MOZ_ASSERT(mGLFormats);
-        return *mGLFormats;
-    }
 
     bool IsFramebufferComplete(GLuint fb, GLenum* status = nullptr);
 
@@ -3458,8 +3452,6 @@ public:
 protected:
     friend class GLScreenBuffer;
     UniquePtr<GLScreenBuffer> mScreen;
-
-    void DestroyScreenBuffer();
 
     SharedSurface* mLockedSurface;
 
@@ -3510,8 +3502,17 @@ public:
     bool IsOffscreenSizeAllowed(const gfx::IntSize& aSize) const;
 
 protected:
-    bool InitWithPrefix(const char *prefix, bool trygl);
+    bool InitWithPrefix(const char* prefix, bool trygl);
 
+private:
+    bool InitWithPrefixImpl(const char* prefix, bool trygl);
+    void LoadMoreSymbols(const char* prefix, bool trygl);
+    bool LoadExtSymbols(const char* prefix, bool trygl, const SymLoadStruct* list,
+                        GLExtensions ext);
+    bool LoadFeatureSymbols(const char* prefix, bool trygl, const SymLoadStruct* list,
+                            GLFeature feature);
+
+protected:
     void InitExtensions();
 
     GLint mViewportRect[4];

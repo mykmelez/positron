@@ -59,6 +59,8 @@ public:
 
   NS_IMETHOD Traverse(void* aPtr, nsCycleCollectionTraversalCallback& aCb)
     override;
+
+  NS_DECL_CYCLE_COLLECTION_CLASS_NAME_METHOD(JSGCThingParticipant)
 };
 
 class JSZoneParticipant : public nsCycleCollectionParticipant
@@ -90,6 +92,8 @@ public:
 
   NS_IMETHOD Traverse(void* aPtr, nsCycleCollectionTraversalCallback& aCb)
     override;
+
+  NS_DECL_CYCLE_COLLECTION_CLASS_NAME_METHOD(JSZoneParticipant)
 };
 
 class IncrementalFinalizeRunnable;
@@ -321,6 +325,10 @@ public:
     return mJSRuntime;
   }
 
+protected:
+  JSRuntime* MaybeRuntime() const { return mJSRuntime; }
+
+public:
   // nsThread entrypoints
   virtual void BeforeProcessTask(bool aMightBlock) { };
   virtual void AfterProcessTask(uint32_t aRecursionDepth);

@@ -38,9 +38,6 @@ EXPORTS += [
     'gfxQuad.h',
     'gfxQuaternion.h',
     'gfxRect.h',
-    'gfxReusableImageSurfaceWrapper.h',
-    'gfxReusableSharedImageSurfaceWrapper.h',
-    'gfxReusableSurfaceWrapper.h',
     'gfxSharedImageSurface.h',
     'gfxSharedQuartzSurface.h',
     'gfxSkipChars.h',
@@ -232,8 +229,6 @@ UNIFIED_SOURCES += [
     'gfxPattern.cpp',
     'gfxPlatformFontList.cpp',
     'gfxRect.cpp',
-    'gfxReusableImageSurfaceWrapper.cpp',
-    'gfxReusableSharedImageSurfaceWrapper.cpp',
     'gfxScriptItemizer.cpp',
     'gfxSkipChars.cpp',
     'gfxSVGGlyphs.cpp',
@@ -260,9 +255,6 @@ if CONFIG['ENABLE_INTL_API']:
     USE_LIBS += [
         'icu',
     ]
-
-if CONFIG['GNU_CXX']:
-    CXXFLAGS += ['-Wshadow']
 
 include('/ipc/chromium/chromium-config.mozbuild')
 

@@ -183,13 +183,15 @@ public:
 
   static void GetAccessKeyLabelPrefix(dom::Element* aElement, nsAString& aPrefix);
 
-  bool HandleAccessKey(nsPresContext* aPresContext,
+  bool HandleAccessKey(WidgetKeyboardEvent* aEvent,
+                       nsPresContext* aPresContext,
                        nsTArray<uint32_t>& aAccessCharCodes,
-                       bool aIsTrusted,
-                       int32_t aModifierMask)
+                       int32_t aModifierMask,
+                       bool aMatchesContentAccessKey)
   {
-    return HandleAccessKey(aPresContext, aAccessCharCodes, aIsTrusted,
-                           nullptr, eAccessKeyProcessingNormal, aModifierMask);
+    return HandleAccessKey(aEvent, aPresContext, aAccessCharCodes,
+                           aMatchesContentAccessKey, nullptr,
+                           eAccessKeyProcessingNormal, aModifierMask);
   }
 
   nsresult SetCursor(int32_t aCursor, imgIContainer* aContainer,
@@ -435,9 +437,10 @@ protected:
    * on descendant docshells first, then on the ancestor (with |aBubbledFrom|
    * set to the docshell associated with |this|), until something matches.
    *
+   * @param aEvent the keyboard event triggering the acccess key
    * @param aPresContext the presentation context
    * @param aAccessCharCodes list of charcode candidates
-   * @param aIsTrusted true if triggered by a trusted key event
+   * @param aMatchesContentAccessKey true if the content accesskey modifier is pressed
    * @param aBubbledFrom is used by an ancestor to avoid calling HandleAccessKey()
    *        on the child the call originally came from, i.e. this is the child
    *        that recursively called us in its Up phase. The initial caller
@@ -447,15 +450,16 @@ protected:
    *        processing children and Up when recursively calling its ancestor.
    * @param aModifierMask modifier mask for the key event
    */
-  bool HandleAccessKey(nsPresContext* aPresContext,
-                     nsTArray<uint32_t>& aAccessCharCodes,
-                     bool aIsTrusted,
-                     nsIDocShellTreeItem* aBubbledFrom,
-                     ProcessingAccessKeyState aAccessKeyState,
-                     int32_t aModifierMask);
+  bool HandleAccessKey(WidgetKeyboardEvent* aEvent,
+                       nsPresContext* aPresContext,
+                       nsTArray<uint32_t>& aAccessCharCodes,
+                       bool aMatchesContentAccessKey,
+                       nsIDocShellTreeItem* aBubbledFrom,
+                       ProcessingAccessKeyState aAccessKeyState,
+                       int32_t aModifierMask);
 
   bool ExecuteAccessKey(nsTArray<uint32_t>& aAccessCharCodes,
-                          bool aIsTrustedEvent);
+                        bool aIsTrustedEvent);
 
   //---------------------------------------------
   // DocShell Focus Traversal Methods
@@ -870,7 +874,7 @@ protected:
   /**
    * Set the fields of aEvent to reflect the mouse position and modifier keys
    * that were set when the user first pressed the mouse button (stored by
-   * BeginTrackingDragGesture). aEvent->widget must be
+   * BeginTrackingDragGesture). aEvent->mWidget must be
    * mCurrentTarget->GetNearestWidget().
    */
   void FillInEventFromGestureDown(WidgetMouseEvent* aEvent);
@@ -907,12 +911,12 @@ private:
   int32_t     mLockCursor;
   bool mLastFrameConsumedSetCursor;
 
-  // Last mouse event refPoint (the offset from the widget's origin in
+  // Last mouse event mRefPoint (the offset from the widget's origin in
   // device pixels) when mouse was locked, used to restore mouse position
   // after unlocking.
   LayoutDeviceIntPoint mPreLockPoint;
 
-  // Stores the refPoint of the last synthetic mouse move we dispatched
+  // Stores the mRefPoint of the last synthetic mouse move we dispatched
   // to re-center the mouse when we were pointer locked. If this is (-1,-1) it
   // means we've not recently dispatched a centering event. We use this to
   // detect when we receive the synth event, so we can cancel and not send it
@@ -923,7 +927,7 @@ private:
   nsCOMPtr<nsIContent> mCurrentTargetContent;
   static nsWeakFrame sLastDragOverFrame;
 
-  // Stores the refPoint (the offset from the widget's origin in device
+  // Stores the mRefPoint (the offset from the widget's origin in device
   // pixels) of the last mouse event.
   static LayoutDeviceIntPoint sLastRefPoint;
 

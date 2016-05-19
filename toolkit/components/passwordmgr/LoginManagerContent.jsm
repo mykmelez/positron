@@ -5,6 +5,7 @@
 "use strict";
 
 this.EXPORTED_SYMBOLS = [ "LoginManagerContent",
+                          "FormLikeFactory",
                           "UserAutoCompleteResult" ];
 
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
@@ -25,6 +26,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
 XPCOMUtils.defineLazyServiceGetter(this, "gContentSecurityManager",
                                    "@mozilla.org/contentsecuritymanager;1",
                                    "nsIContentSecurityManager");
+XPCOMUtils.defineLazyServiceGetter(this, "gScriptSecurityManager",
+                                   "@mozilla.org/scriptsecuritymanager;1",
+                                   "nsIScriptSecurityManager");
 XPCOMUtils.defineLazyServiceGetter(this, "gNetUtil",
                                    "@mozilla.org/network/util;1",
                                    "nsINetUtil");
@@ -175,25 +179,11 @@ var LoginManagerContent = {
   },
 
   receiveMessage: function (msg, window) {
-    // Convert an array of logins in simple JS-object form to an array of
-    // nsILoginInfo objects.
-    function jsLoginsToXPCOM(logins) {
-      return logins.map(login => {
-        var formLogin = Cc["@mozilla.org/login-manager/loginInfo;1"].
-                      createInstance(Ci.nsILoginInfo);
-        formLogin.init(login.hostname, login.formSubmitURL,
-                       login.httpRealm, login.username,
-                       login.password, login.usernameField,
-                       login.passwordField);
-        return formLogin;
-      });
-    }
-
     if (msg.name == "RemoteLogins:fillForm") {
       this.fillForm({
         topDocument: window.document,
         loginFormOrigin: msg.data.loginFormOrigin,
-        loginsFound: jsLoginsToXPCOM(msg.data.logins),
+        loginsFound: LoginHelper.vanillaObjectsToLogins(msg.data.logins),
         recipes: msg.data.recipes,
         inputElement: msg.objects.inputElement,
       });
@@ -203,7 +193,7 @@ var LoginManagerContent = {
     let request = this._takeRequest(msg);
     switch (msg.name) {
       case "RemoteLogins:loginsFound": {
-        let loginsFound = jsLoginsToXPCOM(msg.data.logins);
+        let loginsFound = LoginHelper.vanillaObjectsToLogins(msg.data.logins);
         request.promise.resolve({
           form: request.form,
           loginsFound: loginsFound,
@@ -213,8 +203,15 @@ var LoginManagerContent = {
       }
 
       case "RemoteLogins:loginsAutoCompleted": {
-        let loginsFound = jsLoginsToXPCOM(msg.data.logins);
-        request.promise.resolve(loginsFound);
+        let loginsFound =
+          LoginHelper.vanillaObjectsToLogins(msg.data.logins);
+        // If we're in the parent process, don't pass a message manager so our
+        // autocomplete result objects know they can remove the login from the
+        // login manager directly.
+        let messageManager =
+          (Services.appinfo.processType === Services.appinfo.PROCESS_TYPE_CONTENT) ?
+            msg.target : undefined;
+        request.promise.resolve({ logins: loginsFound, messageManager });
         break;
       }
     }
@@ -261,11 +258,16 @@ var LoginManagerContent = {
     let remote = (Services.appinfo.processType ===
                   Services.appinfo.PROCESS_TYPE_CONTENT);
 
+    let previousResult = aPreviousResult ?
+                           { searchString: aPreviousResult.searchString,
+                             logins: LoginHelper.loginsToVanillaObjects(aPreviousResult.logins) } :
+                           null;
+
     let requestData = {};
     let messageData = { formOrigin: formOrigin,
                         actionOrigin: actionOrigin,
                         searchString: aSearchString,
-                        previousResult: aPreviousResult,
+                        previousResult: previousResult,
                         rect: aRect,
                         remote: remote };
 
@@ -1124,8 +1126,8 @@ var LoginManagerContent = {
    *        The document whose principal and URI are to be considered.
    */
   isDocumentSecure(document) {
-    let docPrincipal = document.nodePrincipal;
-    if (docPrincipal.isSystemPrincipal) {
+    let principal = document.nodePrincipal;
+    if (principal.isSystemPrincipal) {
       return true;
     }
 
@@ -1135,11 +1137,13 @@ var LoginManagerContent = {
     // insecure while they are secure, for example sandboxed documents created
     // using a "javascript:" or "data:" URI from an HTTPS page. See bug 1162772
     // for defining "window.isSecureContext", that may help in these cases.
-    let uri = docPrincipal.isCodebasePrincipal ? docPrincipal.URI
-                                               : document.documentURIObject;
+    if (!principal.isCodebasePrincipal) {
+      principal =
+        gScriptSecurityManager.getCodebasePrincipal(document.documentURIObject);
+    }
 
     // These checks include "file", "resource", HTTPS, and HTTP to "localhost".
-    return gContentSecurityManager.isURIPotentiallyTrustworthy(uri);
+    return gContentSecurityManager.isOriginPotentiallyTrustworthy(principal);
   },
 };
 
@@ -1179,7 +1183,7 @@ var LoginUtils = {
 };
 
 // nsIAutoCompleteResult implementation
-function UserAutoCompleteResult (aSearchString, matchingLogins) {
+function UserAutoCompleteResult (aSearchString, matchingLogins, messageManager) {
   function loginSort(a,b) {
     var userA = a.username.toLowerCase();
     var userB = b.username.toLowerCase();
@@ -1196,6 +1200,7 @@ function UserAutoCompleteResult (aSearchString, matchingLogins) {
   this.searchString = aSearchString;
   this.logins = matchingLogins.sort(loginSort);
   this.matchCount = matchingLogins.length;
+  this._messageManager = messageManager;
 
   if (this.matchCount > 0) {
     this.searchResult = Ci.nsIAutoCompleteResult.RESULT_SUCCESS;
@@ -1261,9 +1266,13 @@ UserAutoCompleteResult.prototype = {
       this.defaultIndex--;
 
     if (removeFromDB) {
-      var pwmgr = Cc["@mozilla.org/login-manager;1"].
-                  getService(Ci.nsILoginManager);
-      pwmgr.removeLogin(removedLogin);
+      if (this._messageManager) {
+        let vanilla = LoginHelper.loginToVanillaObject(removedLogin);
+        this._messageManager.sendAsyncMessage("RemoteLogins:removeLogin",
+                                              { login: vanilla });
+      } else {
+        Services.logins.removeLogin(removedLogin);
+      }
     }
   }
 };

@@ -51,6 +51,7 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/ContentChild.h"
+#include "nsIObserverService.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -808,7 +809,7 @@ AndroidBridge::OpenGraphicsLibraries()
 }
 
 namespace mozilla {
-    class TracerRunnable : public nsRunnable{
+    class TracerRunnable : public Runnable{
     public:
         TracerRunnable() {
             mTracerLock = new Mutex("TracerRunnable");
@@ -1578,10 +1579,12 @@ NS_IMPL_ISUPPORTS(nsAndroidBridge, nsIAndroidBridge)
 
 nsAndroidBridge::nsAndroidBridge()
 {
+  AddObservers();
 }
 
 nsAndroidBridge::~nsAndroidBridge()
 {
+  RemoveObservers();
 }
 
 NS_IMETHODIMP nsAndroidBridge::HandleGeckoMessage(JS::HandleValue val,
@@ -1633,6 +1636,45 @@ NS_IMETHODIMP nsAndroidBridge::IsContentDocumentDisplayed(bool *aRet)
 {
     *aRet = AndroidBridge::Bridge()->IsContentDocumentDisplayed();
     return NS_OK;
+}
+
+NS_IMETHODIMP
+nsAndroidBridge::Observe(nsISupports* aSubject, const char* aTopic,
+                         const char16_t* aData)
+{
+  if (!strcmp(aTopic, "xpcom-shutdown")) {
+    RemoveObservers();
+  } else if (!strcmp(aTopic, "audio-playback")) {
+    ALOG_BRIDGE("nsAndroidBridge::Observe, get audio-playback event.");
+    nsAutoString activeStr(aData);
+    if (activeStr.EqualsLiteral("active")) {
+      AudioFocusAgent::NotifyStartedPlaying();
+    } else {
+      AudioFocusAgent::NotifyStoppedPlaying();
+    }
+  }
+
+  return NS_OK;
+}
+
+void
+nsAndroidBridge::AddObservers()
+{
+  nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+  if (obs) {
+    obs->AddObserver(this, "xpcom-shutdown", false);
+    obs->AddObserver(this, "audio-playback", false);
+  }
+}
+
+void
+nsAndroidBridge::RemoveObservers()
+{
+  nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+  if (obs) {
+    obs->RemoveObserver(this, "xpcom-shutdown");
+    obs->RemoveObserver(this, "audio-playback");
+  }
 }
 
 uint32_t
@@ -2059,12 +2101,12 @@ class AndroidBridge::DelayedTask
     using TimeDuration = mozilla::TimeDuration;
 
 public:
-    DelayedTask(Task* aTask)
+    DelayedTask(already_AddRefed<Runnable> aTask)
         : mTask(aTask)
         , mRunTime() // Null timestamp representing no delay.
     {}
 
-    DelayedTask(Task* aTask, int aDelayMs)
+    DelayedTask(already_AddRefed<Runnable> aTask, int aDelayMs)
         : mTask(aTask)
         , mRunTime(TimeStamp::Now() + TimeDuration::FromMilliseconds(aDelayMs))
     {}
@@ -2087,25 +2129,25 @@ public:
         return 0;
     }
 
-    UniquePtr<Task>&& GetTask()
+    already_AddRefed<Runnable> TakeTask()
     {
-        return static_cast<UniquePtr<Task>&&>(mTask);
+        return mTask.forget();
     }
 
 private:
-    UniquePtr<Task> mTask;
+    RefPtr<Runnable> mTask;
     const TimeStamp mRunTime;
 };
 
 
 void
-AndroidBridge::PostTaskToUiThread(Task* aTask, int aDelayMs)
+AndroidBridge::PostTaskToUiThread(already_AddRefed<Runnable> aTask, int aDelayMs)
 {
     // add the new task into the mUiTaskQueue, sorted with
     // the earliest task first in the queue
     size_t i;
-    DelayedTask newTask(aDelayMs ? DelayedTask(aTask, aDelayMs)
-                                 : DelayedTask(aTask));
+    DelayedTask newTask(aDelayMs ? DelayedTask(mozilla::Move(aTask), aDelayMs)
+                                 : DelayedTask(mozilla::Move(aTask)));
 
     {
         MutexAutoLock lock(mUiTaskQueueLock);
@@ -2146,7 +2188,7 @@ AndroidBridge::RunDelayedUiThreadTasks()
         }
 
         // Retrieve task before unlocking/running.
-        const UniquePtr<Task> nextTask(mUiTaskQueue[0].GetTask());
+        RefPtr<Runnable> nextTask(mUiTaskQueue[0].TakeTask());
         mUiTaskQueue.RemoveElementAt(0);
 
         // Unlock to allow posting new tasks reentrantly.

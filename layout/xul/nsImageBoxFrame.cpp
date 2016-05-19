@@ -60,7 +60,7 @@ using namespace mozilla::gfx;
 using namespace mozilla::image;
 using namespace mozilla::layers;
 
-class nsImageBoxFrameEvent : public nsRunnable
+class nsImageBoxFrameEvent : public Runnable
 {
 public:
   nsImageBoxFrameEvent(nsIContent *content, EventMessage message)
@@ -233,15 +233,13 @@ nsImageBoxFrame::UpdateImage()
                                               src,
                                               doc,
                                               baseURI);
+    if (uri) {
+      nsresult rv = nsContentUtils::LoadImage(uri, mContent, doc, mContent->NodePrincipal(),
+                                              doc->GetDocumentURI(), doc->GetReferrerPolicy(),
+                                              mListener, mLoadFlags,
+                                              EmptyString(), getter_AddRefs(mImageRequest));
 
-    if (uri && nsContentUtils::CanLoadImage(uri, mContent, doc,
-                                            mContent->NodePrincipal())) {
-      nsContentUtils::LoadImage(uri, mContent, doc, mContent->NodePrincipal(),
-                                doc->GetDocumentURI(), doc->GetReferrerPolicy(),
-                                mListener, mLoadFlags,
-                                EmptyString(), getter_AddRefs(mImageRequest));
-
-      if (mImageRequest) {
+      if (NS_SUCCEEDED(rv) && mImageRequest) {
         nsLayoutUtils::RegisterImageRequestIfAnimated(presContext,
                                                       mImageRequest,
                                                       &mRequestRegistered);
@@ -329,7 +327,7 @@ nsImageBoxFrame::PaintImage(nsRenderingContext& aRenderingContext,
                             uint32_t aFlags)
 {
   nsRect constraintRect;
-  GetClientRect(constraintRect);
+  GetXULClientRect(constraintRect);
 
   constraintRect += aPt;
 
@@ -476,7 +474,7 @@ nsDisplayXULImage::GetDestRect()
   nsImageBoxFrame* imageFrame = static_cast<nsImageBoxFrame*>(mFrame);
 
   nsRect clientRect;
-  imageFrame->GetClientRect(clientRect);
+  imageFrame->GetXULClientRect(clientRect);
 
   return clientRect + ToReferenceFrame();
 }
@@ -545,7 +543,7 @@ nsImageBoxFrame::GetImageSize()
  * Ok return our dimensions
  */
 nsSize
-nsImageBoxFrame::GetPrefSize(nsBoxLayoutState& aState)
+nsImageBoxFrame::GetXULPrefSize(nsBoxLayoutState& aState)
 {
   nsSize size(0,0);
   DISPLAY_PREF_SIZE(this, size);
@@ -560,17 +558,17 @@ nsImageBoxFrame::GetPrefSize(nsBoxLayoutState& aState)
   nsSize intrinsicSize = size;
 
   nsMargin borderPadding(0,0,0,0);
-  GetBorderAndPadding(borderPadding);
+  GetXULBorderAndPadding(borderPadding);
   size.width += borderPadding.LeftRight();
   size.height += borderPadding.TopBottom();
 
   bool widthSet, heightSet;
-  nsIFrame::AddCSSPrefSize(this, size, widthSet, heightSet);
+  nsIFrame::AddXULPrefSize(this, size, widthSet, heightSet);
   NS_ASSERTION(size.width != NS_INTRINSICSIZE && size.height != NS_INTRINSICSIZE,
                "non-intrinsic size expected");
 
-  nsSize minSize = GetMinSize(aState);
-  nsSize maxSize = GetMaxSize(aState);
+  nsSize minSize = GetXULMinSize(aState);
+  nsSize maxSize = GetXULMaxSize(aState);
 
   if (!widthSet && !heightSet) {
     if (minSize.width != NS_INTRINSICSIZE)
@@ -623,21 +621,21 @@ nsImageBoxFrame::GetPrefSize(nsBoxLayoutState& aState)
 }
 
 nsSize
-nsImageBoxFrame::GetMinSize(nsBoxLayoutState& aState)
+nsImageBoxFrame::GetXULMinSize(nsBoxLayoutState& aState)
 {
   // An image can always scale down to (0,0).
   nsSize size(0,0);
   DISPLAY_MIN_SIZE(this, size);
   AddBorderAndPadding(size);
   bool widthSet, heightSet;
-  nsIFrame::AddCSSMinSize(aState, this, size, widthSet, heightSet);
+  nsIFrame::AddXULMinSize(aState, this, size, widthSet, heightSet);
   return size;
 }
 
 nscoord
-nsImageBoxFrame::GetBoxAscent(nsBoxLayoutState& aState)
+nsImageBoxFrame::GetXULBoxAscent(nsBoxLayoutState& aState)
 {
-  return GetPrefSize(aState).height;
+  return GetXULPrefSize(aState).height;
 }
 
 nsIAtom*
@@ -717,7 +715,7 @@ nsresult
 nsImageBoxFrame::OnDecodeComplete(imgIRequest* aRequest)
 {
   nsBoxLayoutState state(PresContext());
-  this->Redraw(state);
+  this->XULRedraw(state);
   return NS_OK;
 }
 

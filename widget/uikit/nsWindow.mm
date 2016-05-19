@@ -143,8 +143,8 @@ private:
     WidgetMouseEvent event(true, aType, aWindow,
                            WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
 
-    event.refPoint = aPoint;
-    event.clickCount = 1;
+    event.mRefPoint = aPoint;
+    event.mClickCount = 1;
     event.button = WidgetMouseEvent::eLeftButton;
     event.mTime = PR_IntervalNow();
     event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
@@ -182,7 +182,7 @@ private:
         }
         int id = reinterpret_cast<int>(value);
         RefPtr<Touch> t = new Touch(id, loc, radius, 0.0f, 1.0f);
-        event.refPoint = loc;
+        event.mRefPoint = loc;
         event.mTouches.AppendElement(t);
     }
     aWindow->DispatchInputEvent(&event);
@@ -821,7 +821,7 @@ nsWindow::DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
                         nsEventStatus& aStatus)
 {
   aStatus = nsEventStatus_eIgnore;
-  nsCOMPtr<nsIWidget> kungFuDeathGrip = do_QueryInterface(aEvent->widget);
+  nsCOMPtr<nsIWidget> kungFuDeathGrip(aEvent->mWidget);
 
   if (mWidgetListener)
     aStatus = mWidgetListener->HandleEvent(aEvent, mUseAttachedEvents);

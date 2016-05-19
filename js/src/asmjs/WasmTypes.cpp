@@ -49,7 +49,7 @@ __aeabi_uidivmod(int, int);
 static void
 WasmReportOverRecursed()
 {
-    ReportOverRecursed(JSRuntime::innermostWasmActivation()->cx());
+    ReportOverRecursed(JSRuntime::innermostWasmActivation()->cx(), JSMSG_WASM_OVERRECURSED);
 }
 
 static bool
@@ -59,31 +59,41 @@ WasmHandleExecutionInterrupt()
 }
 
 static void
-OnOutOfBounds()
+HandleTrap(int32_t trapIndex)
 {
     JSContext* cx = JSRuntime::innermostWasmActivation()->cx();
-    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_BAD_INDEX);
-}
 
-static void
-OnImpreciseConversion()
-{
-    JSContext* cx = JSRuntime::innermostWasmActivation()->cx();
-    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_SIMD_FAILED_CONVERSION);
-}
+    MOZ_ASSERT(trapIndex < int32_t(Trap::Limit) && trapIndex >= 0);
+    Trap trap = Trap(trapIndex);
 
-static void
-BadIndirectCall()
-{
-    JSContext* cx = JSRuntime::innermostWasmActivation()->cx();
-    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_WASM_BAD_IND_CALL);
-}
+    unsigned errorNumber;
+    switch (trap) {
+      case Trap::Unreachable:
+        errorNumber = JSMSG_WASM_UNREACHABLE;
+        break;
+      case Trap::IntegerOverflow:
+        errorNumber = JSMSG_WASM_INTEGER_OVERFLOW;
+        break;
+      case Trap::InvalidConversionToInteger:
+        errorNumber = JSMSG_WASM_INVALID_CONVERSION;
+        break;
+      case Trap::IntegerDivideByZero:
+        errorNumber = JSMSG_WASM_INT_DIVIDE_BY_ZERO;
+        break;
+      case Trap::BadIndirectCall:
+        errorNumber = JSMSG_WASM_BAD_IND_CALL;
+        break;
+      case Trap::ImpreciseSimdConversion:
+        errorNumber = JSMSG_SIMD_FAILED_CONVERSION;
+        break;
+      case Trap::OutOfBounds:
+        errorNumber = JSMSG_BAD_INDEX;
+        break;
+      default:
+        MOZ_CRASH("unexpected trap");
+    }
 
-static void
-UnreachableTrap()
-{
-    JSContext* cx = JSRuntime::innermostWasmActivation()->cx();
-    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_WASM_UNREACHABLE);
+    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, errorNumber);
 }
 
 static int32_t
@@ -115,7 +125,7 @@ CoerceInPlace_ToNumber(MutableHandleValue val)
 // Use an int32_t return type instead of bool since bool does not have a
 // specified width and the caller is assuming a word-sized return.
 static int32_t
-InvokeImport_Void(int32_t importIndex, int32_t argc, Value* argv)
+InvokeImport_Void(int32_t importIndex, int32_t argc, uint64_t* argv)
 {
     WasmActivation* activation = JSRuntime::innermostWasmActivation();
     JSContext* cx = activation->cx();
@@ -127,7 +137,7 @@ InvokeImport_Void(int32_t importIndex, int32_t argc, Value* argv)
 // Use an int32_t return type instead of bool since bool does not have a
 // specified width and the caller is assuming a word-sized return.
 static int32_t
-InvokeImport_I32(int32_t importIndex, int32_t argc, Value* argv)
+InvokeImport_I32(int32_t importIndex, int32_t argc, uint64_t* argv)
 {
     WasmActivation* activation = JSRuntime::innermostWasmActivation();
     JSContext* cx = activation->cx();
@@ -140,14 +150,57 @@ InvokeImport_I32(int32_t importIndex, int32_t argc, Value* argv)
     if (!ToInt32(cx, rval, &i32))
         return false;
 
-    argv[0] = Int32Value(i32);
+    argv[0] = i32;
+    return true;
+}
+
+bool
+js::wasm::ReadI64Object(JSContext* cx, HandleValue v, int64_t* i64)
+{
+    if (!v.isObject()) {
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_WASM_FAIL,
+                             "i64 JS value must be an object");
+        return false;
+    }
+
+    RootedObject obj(cx, &v.toObject());
+
+    int32_t* i32 = (int32_t*)i64;
+
+    RootedValue val(cx);
+    if (!JS_GetProperty(cx, obj, "low", &val))
+        return false;
+    if (!ToInt32(cx, val, &i32[0]))
+        return false;
+
+    if (!JS_GetProperty(cx, obj, "high", &val))
+        return false;
+    if (!ToInt32(cx, val, &i32[1]))
+        return false;
+
+    return true;
+}
+
+static int32_t
+InvokeImport_I64(int32_t importIndex, int32_t argc, uint64_t* argv)
+{
+    WasmActivation* activation = JSRuntime::innermostWasmActivation();
+    JSContext* cx = activation->cx();
+
+    RootedValue rval(cx);
+    if (!activation->module().callImport(cx, importIndex, argc, argv, &rval))
+        return false;
+
+    if (!ReadI64Object(cx, rval, (int64_t*)argv))
+        return false;
+
     return true;
 }
 
 // Use an int32_t return type instead of bool since bool does not have a
 // specified width and the caller is assuming a word-sized return.
 static int32_t
-InvokeImport_F64(int32_t importIndex, int32_t argc, Value* argv)
+InvokeImport_F64(int32_t importIndex, int32_t argc, uint64_t* argv)
 {
     WasmActivation* activation = JSRuntime::innermostWasmActivation();
     JSContext* cx = activation->cx();
@@ -160,7 +213,7 @@ InvokeImport_F64(int32_t importIndex, int32_t argc, Value* argv)
     if (!ToNumber(cx, rval, &dbl))
         return false;
 
-    argv[0] = DoubleValue(dbl);
+    ((double*)argv)[0] = dbl;
     return true;
 }
 
@@ -187,20 +240,16 @@ wasm::AddressOf(SymbolicAddress imm, ExclusiveContext* cx)
         return cx->stackLimitAddressForJitCode(StackForUntrustedScript);
       case SymbolicAddress::ReportOverRecursed:
         return FuncCast(WasmReportOverRecursed, Args_General0);
-      case SymbolicAddress::OnOutOfBounds:
-        return FuncCast(OnOutOfBounds, Args_General0);
-      case SymbolicAddress::OnImpreciseConversion:
-        return FuncCast(OnImpreciseConversion, Args_General0);
-      case SymbolicAddress::BadIndirectCall:
-        return FuncCast(BadIndirectCall, Args_General0);
-      case SymbolicAddress::UnreachableTrap:
-        return FuncCast(UnreachableTrap, Args_General0);
       case SymbolicAddress::HandleExecutionInterrupt:
         return FuncCast(WasmHandleExecutionInterrupt, Args_General0);
+      case SymbolicAddress::HandleTrap:
+        return FuncCast(HandleTrap, Args_General1);
       case SymbolicAddress::InvokeImport_Void:
         return FuncCast(InvokeImport_Void, Args_General3);
       case SymbolicAddress::InvokeImport_I32:
         return FuncCast(InvokeImport_I32, Args_General3);
+      case SymbolicAddress::InvokeImport_I64:
+        return FuncCast(InvokeImport_I64, Args_General3);
       case SymbolicAddress::InvokeImport_F64:
         return FuncCast(InvokeImport_F64, Args_General3);
       case SymbolicAddress::CoerceInPlace_ToInt32:

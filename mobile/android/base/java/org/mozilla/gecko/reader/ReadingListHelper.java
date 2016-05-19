@@ -44,7 +44,7 @@ public final class ReadingListHelper implements NativeEventListener {
     @Override
     public void handleMessage(final String event, final NativeJSObject message,
                               final EventCallback callback) {
-        switch(event) {
+        switch (event) {
             case "Reader:FaviconRequest": {
                 handleReaderModeFaviconRequest(callback, message.getString("url"));
                 break;
@@ -91,7 +91,7 @@ public final class ReadingListHelper implements NativeEventListener {
         rch.put(url, path, size);
     }
 
-    public static void cacheReaderItem(final String url, Context context) {
+    public static void cacheReaderItem(final String url, final int tabID, Context context) {
         if (AboutPages.isAboutReader(url)) {
             throw new IllegalArgumentException("Page url must be original (not about:reader) url");
         }
@@ -99,7 +99,7 @@ public final class ReadingListHelper implements NativeEventListener {
         SavedReaderViewHelper rch = SavedReaderViewHelper.getSavedReaderViewHelper(context);
 
         if (!rch.isURLCached(url)) {
-            GeckoAppShell.notifyObservers("Reader:AddToCache", url);
+            GeckoAppShell.notifyObservers("Reader:AddToCache", Integer.toString(tabID));
         }
     }
 

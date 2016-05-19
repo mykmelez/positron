@@ -8,15 +8,14 @@
 #include "AnimationUtils.h"
 #include "mozilla/dom/AnimationBinding.h"
 #include "mozilla/dom/AnimationPlaybackEvent.h"
+#include "mozilla/AnimationTarget.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/AsyncEventDispatcher.h" // For AsyncEventDispatcher
 #include "mozilla/Maybe.h" // For Maybe
-#include "mozilla/NonOwningAnimationTarget.h"
 #include "nsAnimationManager.h" // For CSSAnimation
 #include "nsDOMMutationObserver.h" // For nsAutoAnimationMutationBatch
 #include "nsIDocument.h" // For nsIDocument
 #include "nsIPresShell.h" // For nsIPresShell
-#include "nsLayoutUtils.h" // For PostRestyleEvent (remove after bug 1073336)
 #include "nsThreadUtils.h" // For nsRunnableMethod and nsRevocableEventPtr
 #include "nsTransitionManager.h" // For CSSTransition
 #include "PendingAnimationTracker.h" // For PendingAnimationTracker
@@ -94,14 +93,14 @@ Animation::Constructor(const GlobalObject& aGlobal,
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
   RefPtr<Animation> animation = new Animation(global);
 
-  if (!aTimeline) {
-    // Bug 1096776: We do not support null timeline yet.
-    aRv.Throw(NS_ERROR_FAILURE);
-    return nullptr;
-  }
   if (!aEffect) {
     // Bug 1049975: We do not support null effect yet.
-    aRv.Throw(NS_ERROR_FAILURE);
+    aRv.Throw(NS_ERROR_DOM_ANIM_NO_EFFECT_ERR);
+    return nullptr;
+  }
+  if (!aTimeline) {
+    // Bug 1096776: We do not support null timeline yet.
+    aRv.Throw(NS_ERROR_DOM_ANIM_NO_TIMELINE_ERR);
     return nullptr;
   }
 
@@ -199,7 +198,7 @@ Animation::SetStartTime(const Nullable<TimeDuration>& aNewStartTime)
     mReady->MaybeResolve(this);
   }
 
-  UpdateTiming(SeekFlag::NoSeek, SyncNotifyFlag::Async);
+  UpdateTiming(SeekFlag::DidSeek, SyncNotifyFlag::Async);
   if (IsRelevant()) {
     nsNodeUtils::AnimationChanged(this);
   }
@@ -1204,7 +1203,7 @@ Animation::EffectEnd() const
     return StickyTimeDuration(0);
   }
 
-  return mEffect->GetComputedTiming().mEndTime;
+  return mEffect->SpecifiedTiming().EndTime();
 }
 
 nsIDocument*
@@ -1236,7 +1235,7 @@ Animation::DoFinishNotification(SyncNotifyFlag aSyncNotifyFlag)
     DoFinishNotificationImmediately();
   } else if (!mFinishNotificationTask.IsPending()) {
     RefPtr<nsRunnableMethod<Animation>> runnable =
-      NS_NewRunnableMethod(this, &Animation::DoFinishNotificationImmediately);
+      NewRunnableMethod(this, &Animation::DoFinishNotificationImmediately);
     runtime->DispatchToMicroTask(runnable);
     mFinishNotificationTask = runnable;
   }

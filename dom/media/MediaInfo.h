@@ -14,7 +14,7 @@
 #include "nsTArray.h"
 #include "ImageTypes.h"
 #include "MediaData.h"
-#include "StreamBuffer.h" // for TrackID
+#include "StreamTracks.h" // for TrackID
 #include "TimeUnits.h"
 
 namespace mozilla {
@@ -33,6 +33,9 @@ public:
   nsCString mKey;
   nsCString mValue;
 };
+
+  // Maximum channel number we can currently handle (7.1)
+#define MAX_AUDIO_CHANNELS 8
 
 class TrackInfo {
 public:
@@ -184,9 +187,10 @@ public:
                 EmptyString(), EmptyString(), true, 2)
     , mDisplay(nsIntSize(aWidth, aHeight))
     , mStereoMode(StereoMode::MONO)
-    , mImage(nsIntRect(0, 0, aWidth, aHeight))
+    , mImage(nsIntSize(aWidth, aHeight))
     , mCodecSpecificConfig(new MediaByteBuffer)
     , mExtraData(new MediaByteBuffer)
+    , mImageRect(nsIntRect(0, 0, aWidth, aHeight))
   {
   }
 
@@ -197,6 +201,7 @@ public:
     , mImage(aOther.mImage)
     , mCodecSpecificConfig(aOther.mCodecSpecificConfig)
     , mExtraData(aOther.mExtraData)
+    , mImageRect(aOther.mImageRect)
   {
   }
 
@@ -220,6 +225,40 @@ public:
     return MakeUnique<VideoInfo>(*this);
   }
 
+  nsIntRect ImageRect() const
+  {
+    if (mImageRect.width < 0 || mImageRect.height < 0) {
+      return nsIntRect(0, 0, mImage.width, mImage.height);
+    }
+    return mImageRect;
+  }
+
+  void SetImageRect(const nsIntRect& aRect)
+  {
+    mImageRect = aRect;
+  }
+
+  // Returned the crop rectangle scaled to aWidth/aHeight size relative to
+  // mImage size.
+  // If aWidth and aHeight are identical to the original mImage.width/mImage.height
+  // then the scaling ratio will be 1.
+  // This is used for when the frame size is different from what the container
+  // reports. This is legal in WebM, and we will preserve the ratio of the crop
+  // rectangle as it was reported relative to the picture size reported by the
+  // container.
+  nsIntRect ScaledImageRect(int64_t aWidth, int64_t aHeight) const
+  {
+    if (aWidth == mImage.width && aHeight == mImage.height) {
+      return ImageRect();
+    }
+    nsIntRect imageRect = ImageRect();
+    imageRect.x = (imageRect.x * aWidth) / mImage.width;
+    imageRect.y = (imageRect.y * aHeight) / mImage.height;
+    imageRect.width = (aWidth * imageRect.width) / mImage.width;
+    imageRect.height = (aHeight * imageRect.height) / mImage.height;
+    return imageRect;
+  }
+
   // Size in pixels at which the video is rendered. This is after it has
   // been scaled by its aspect ratio.
   nsIntSize mDisplay;
@@ -227,10 +266,16 @@ public:
   // Indicates the frame layout for single track stereo videos.
   StereoMode mStereoMode;
 
-  // Visible area of the decoded video's image.
-  nsIntRect mImage;
+  // Size of the decoded video's image.
+  nsIntSize mImage;
+
   RefPtr<MediaByteBuffer> mCodecSpecificConfig;
   RefPtr<MediaByteBuffer> mExtraData;
+
+private:
+  // mImage may be cropped; currently only used with the WebM container.
+  // A negative width or height indicate that no cropping is to occur.
+  nsIntRect mImageRect;
 };
 
 class AudioInfo : public TrackInfo {
@@ -260,9 +305,12 @@ public:
   {
   }
 
+  static const uint32_t MAX_RATE = 640000;
+
   bool IsValid() const override
   {
-    return mChannels > 0 && mRate > 0;
+    return mChannels > 0 && mChannels <= MAX_AUDIO_CHANNELS
+           && mRate > 0 && mRate <= MAX_RATE;
   }
 
   AudioInfo* GetAsAudioInfo() override
@@ -474,9 +522,6 @@ public:
   const nsCString& mMimeType;
 };
 
-// Maximum channel number we can currently handle (7.1)
-#define MAX_AUDIO_CHANNELS 8
-
 class AudioConfig {
 public:
   enum Channel {
@@ -503,7 +548,12 @@ public:
       : ChannelLayout(aChannels, SMPTEDefault(aChannels))
     {}
     ChannelLayout(uint32_t aChannels, const Channel* aConfig)
+      : ChannelLayout()
     {
+      if (!aConfig) {
+        mValid = false;
+        return;
+      }
       mChannels.AppendElements(aConfig, aChannels);
       UpdateChannelMap();
     }
@@ -599,6 +649,21 @@ public:
   bool Interleaved() const
   {
     return mInterleaved;
+  }
+  bool operator==(const AudioConfig& aOther) const
+  {
+    return mChannelLayout == aOther.mChannelLayout &&
+      mRate == aOther.mRate && mFormat == aOther.mFormat &&
+      mInterleaved == aOther.mInterleaved;
+  }
+  bool operator!=(const AudioConfig& aOther) const
+  {
+    return !(*this == aOther);
+  }
+
+  bool IsValid() const
+  {
+    return mChannelLayout.IsValid() && Format() != FORMAT_NONE && Rate() > 0;
   }
 
   static const char* FormatToString(SampleFormat aFormat);

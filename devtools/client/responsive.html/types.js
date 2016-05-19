@@ -32,8 +32,11 @@ const device = {
   // Whether or not it is a touch device
   touch: PropTypes.bool,
 
-  //  The operating system of the device
+  // The operating system of the device
   os: PropTypes.String,
+
+  // Whether or not the device is displayed in the device selector
+  displayed: PropTypes.bool,
 
 };
 
@@ -63,6 +66,9 @@ exports.devices = {
   // An array of watch devices
   watches: PropTypes.arrayOf(PropTypes.shape(device)),
 
+  // Whether or not the device modal is open
+  isModalOpen: PropTypes.bool,
+
 };
 
 /**
@@ -76,6 +82,16 @@ exports.location = PropTypes.string;
 exports.screenshot = {
 
   isCapturing: PropTypes.bool.isRequired,
+
+};
+
+/**
+ * Touch simulation.
+ */
+exports.touchSimulation = {
+
+  // Whether or not the touch simulation is enabled
+  enabled: PropTypes.bool.isRequired,
 
 };
 

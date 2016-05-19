@@ -13,7 +13,6 @@
 #include "gfx2DGlue.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Endian.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/SharedThreadPool.h"
 #include "MediaDataDemuxer.h"
 #include "nsAutoRef.h"
@@ -340,7 +339,8 @@ WebMDemuxer::ReadMetadata()
       mHasVideo = true;
 
       mInfo.mVideo.mDisplay = displaySize;
-      mInfo.mVideo.mImage = pictureRect;
+      mInfo.mVideo.mImage = frameSize;
+      mInfo.mVideo.SetImageRect(pictureRect);
 
       switch (params.stereo_mode) {
         case NESTEGG_VIDEO_MONO:
@@ -581,11 +581,7 @@ WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType, MediaRawDataQueue *aSampl
         if (mLastSeenFrameWidth.isSome() && mLastSeenFrameHeight.isSome() &&
             (si.w != mLastSeenFrameWidth.value() ||
              si.h != mLastSeenFrameHeight.value())) {
-          // We ignore cropping information on resizes during streams.
-          // Cropping alone is rare, and we do not consider cropping to
-          // still be valid after a resolution change
           mInfo.mVideo.mDisplay = nsIntSize(si.w, si.h);
-          mInfo.mVideo.mImage = nsIntRect(0, 0, si.w, si.h);
           mSharedVideoTrackInfo = new SharedTrackInfo(mInfo.mVideo, ++sStreamSourceID);
         }
         mLastSeenFrameWidth = Some(si.w);

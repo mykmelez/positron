@@ -127,7 +127,7 @@ public:
   }
   void GetReferrerPolicy(nsAString& aReferrer)
   {
-    GetHTMLAttr(nsGkAtoms::referrerpolicy, aReferrer);
+    GetEnumAttr(nsGkAtoms::referrerpolicy, EmptyCString().get(), aReferrer);
   }
   nsDOMTokenList* RelList();
   void GetHreflang(DOMString& aValue)
@@ -226,6 +226,8 @@ public:
   {
     GetHref(aResult);
   }
+
+  static DOMTokenListSupportedToken sSupportedRelValues[];
 
 protected:
   virtual ~HTMLAnchorElement();

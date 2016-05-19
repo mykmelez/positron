@@ -122,7 +122,7 @@ NSPoint nsCocoaUtils::ScreenLocationForEvent(NSEvent* anEvent)
   if (IsMomentumScrollEvent(anEvent))
     return ChildViewMouseTracker::sLastScrollEventScreenLocation;
 
-  return [[anEvent window] convertBaseToScreen:[anEvent locationInWindow]];
+  return nsCocoaUtils::ConvertPointToScreen([anEvent window], [anEvent locationInWindow]);
 
   NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NSMakePoint(0.0, 0.0));
 }
@@ -140,7 +140,7 @@ NSPoint nsCocoaUtils::EventLocationForWindow(NSEvent* anEvent, NSWindow* aWindow
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
 
-  return [aWindow convertScreenToBase:ScreenLocationForEvent(anEvent)];
+  return nsCocoaUtils::ConvertPointFromScreen(aWindow, ScreenLocationForEvent(anEvent));
 
   NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(NSMakePoint(0.0, 0.0));
 }
@@ -494,7 +494,8 @@ nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer *aImage, ui
 
     mozilla::image::DrawResult res =
       aImage->Draw(context, scaledSize, ImageRegion::Create(scaledSize),
-                   aWhichFrame, Filter::POINT, Nothing(),
+                   aWhichFrame, Filter::POINT,
+                   /* no SVGImageContext */ Nothing(),
                    imgIContainer::FLAG_SYNC_DECODE);
 
     if (res != mozilla::image::DrawResult::SUCCESS) {

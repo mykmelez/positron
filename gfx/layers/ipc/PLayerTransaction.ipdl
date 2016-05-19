@@ -17,12 +17,10 @@ include "mozilla/GfxMessageUtils.h";
 
 using struct mozilla::layers::TextureInfo from "mozilla/layers/CompositorTypes.h";
 using struct mozilla::void_t from "ipc/IPCMessageUtils.h";
-using mozilla::layers::TextureFlags from "mozilla/layers/CompositorTypes.h";
 using class mozilla::layers::APZTestData from "mozilla/layers/APZTestData.h";
 using mozilla::layers::FrameMetrics::ViewID from "FrameMetrics.h";
 using struct mozilla::layers::ScrollableLayerGuid from "FrameMetrics.h";
 using mozilla::layers::LayersBackend from "mozilla/layers/LayersTypes.h";
-using mozilla::CSSPoint from "Units.h";
 
 /**
  * The layers protocol is spoken between thread contexts that manage
@@ -44,7 +42,6 @@ sync protocol PLayerTransaction {
   manager PCompositorBridge;
   manages PLayer;
   manages PCompositable;
-  manages PTexture;
 
 child:
   async ParentAsyncMessages(AsyncParentMessageData[] aMessages);
@@ -52,7 +49,6 @@ child:
 parent:
   async PLayer();
   async PCompositable(TextureInfo aTextureInfo);
-  async PTexture(SurfaceDescriptor aSharedData, LayersBackend aBackend, TextureFlags aTextureFlags);
 
   // The isFirstPaint flag can be used to indicate that this is the first update
   // for a particular document.
@@ -89,10 +85,6 @@ parent:
   // pixels. If the layer is not transformed by animation, the return value will
   // be void_t.
   sync GetAnimationTransform(PLayer layer) returns (MaybeTransform transform);
-
-  // Updates the scroll offset and generation counter on the APZC for the
-  // given scroll id.
-  sync UpdateScrollOffset(ViewID id, uint32_t generation, CSSPoint offset);
 
   // The next time the layer tree is composited, add this async scroll offset in
   // CSS pixels for the given ViewID.

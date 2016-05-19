@@ -348,8 +348,7 @@ GetCertFingerprintByOidTag(nsIX509Cert *aCert,
                            SECOidTag aOidTag, 
                            nsCString &fp)
 {
-
-  ScopedCERTCertificate nsscert(aCert->GetCert());
+  UniqueCERTCertificate nsscert(aCert->GetCert());
   if (!nsscert) {
     return NS_ERROR_FAILURE;
   }
@@ -369,32 +368,29 @@ nsCertOverrideService::RememberValidityOverride(const nsACString& aHostName,
   if (aPort < -1)
     return NS_ERROR_INVALID_ARG;
 
-  ScopedCERTCertificate nsscert(aCert->GetCert());
+  UniqueCERTCertificate nsscert(aCert->GetCert());
   if (!nsscert) {
     return NS_ERROR_FAILURE;
   }
 
-  char* nickname = DefaultServerNicknameForCert(nsscert.get());
-  if (!aTemporary && nickname && *nickname)
-  {
-    ScopedPK11SlotInfo slot(PK11_GetInternalKeySlot());
+  nsAutoCString nickname;
+  nsresult rv = DefaultServerNicknameForCert(nsscert.get(), nickname);
+  if (!aTemporary && NS_SUCCEEDED(rv)) {
+    UniquePK11SlotInfo slot(PK11_GetInternalKeySlot());
     if (!slot) {
-      PR_Free(nickname);
       return NS_ERROR_FAILURE;
     }
-  
-    SECStatus srv = PK11_ImportCert(slot, nsscert.get(), CK_INVALID_HANDLE,
-                                    nickname, false);
+
+    SECStatus srv = PK11_ImportCert(slot.get(), nsscert.get(), CK_INVALID_HANDLE,
+                                    nickname.get(), false);
     if (srv != SECSuccess) {
-      PR_Free(nickname);
       return NS_ERROR_FAILURE;
     }
   }
-  PR_FREEIF(nickname);
 
   nsAutoCString fpStr;
-  nsresult rv = GetCertFingerprintByOidTag(nsscert.get(),
-                  mOidTagForStoringNewHashes, fpStr);
+  rv = GetCertFingerprintByOidTag(nsscert.get(), mOidTagForStoringNewHashes,
+                                  fpStr);
   if (NS_FAILED(rv))
     return rv;
 

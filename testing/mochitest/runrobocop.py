@@ -16,7 +16,7 @@ sys.path.insert(
 
 from automation import Automation
 from remoteautomation import RemoteAutomation, fennecLogcatFilters
-from runtests import MochitestDesktop, MessageLogger
+from runtests import KeyValueParseError, MochitestDesktop, MessageLogger, parseKeyValue
 from mochitest_options import MochitestArgumentParser
 
 from manifestparser import TestManifest
@@ -403,6 +403,17 @@ class RobocopTestRunner(MochitestDesktop):
         browserEnv["MOZ_LOG_FILE"] = os.path.join(
             self.remoteMozLog,
             self.mozLogName)
+
+        try:
+            browserEnv.update(
+                dict(
+                    parseKeyValue(
+                        self.options.environment,
+                        context='--setenv')))
+        except KeyValueParseError as e:
+            self.log.error(str(e))
+            return None
+
         return browserEnv
 
     def runSingleTest(self, test):
@@ -443,9 +454,12 @@ class RobocopTestRunner(MochitestDesktop):
         log_result = -1
         try:
             self.dm.recordLogcat()
+            timeout = self.options.timeout
+            if not timeout:
+                timeout = self.NO_OUTPUT_TIMEOUT
             result = self.auto.runApp(
                 None, browserEnv, "am", self.localProfile, browserArgs,
-                timeout=self.NO_OUTPUT_TIMEOUT, symbolsPath=self.options.symbolsPath)
+                timeout=timeout, symbolsPath=self.options.symbolsPath)
             self.log.debug("runApp completes with status %d" % result)
             if result != 0:
                 self.log.error("runApp() exited with code %s" % result)

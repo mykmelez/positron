@@ -19,15 +19,18 @@ module.exports = createClass({
   displayName: "TargetList",
 
   render() {
-    let { client, debugDisabled, targetClass } = this.props;
-    let targets = this.props.targets.sort(LocaleCompare).map(target => {
+    let { client, debugDisabled, targetClass, targets, sort } = this.props;
+    if (sort) {
+      targets = targets.sort(LocaleCompare);
+    }
+    targets = targets.map(target => {
       return targetClass({ client, target, debugDisabled });
     });
 
     return dom.div({ id: this.props.id, className: "targets" },
-      dom.h4(null, this.props.name),
+      dom.h2(null, this.props.name),
       targets.length > 0 ?
-        targets :
+        dom.ul({ className: "target-list" }, targets) :
         dom.p(null, Strings.GetStringFromName("nothing"))
     );
   },

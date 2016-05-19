@@ -220,7 +220,7 @@ function setMasterPassword(enable) {
 
   var pk11db = Cc["@mozilla.org/security/pk11tokendb;1"].getService(Ci.nsIPK11TokenDB);
   var token = pk11db.findTokenByName("");
-  ok(true, "change from " + oldPW + " to " + newPW);
+  info("MP change from " + oldPW + " to " + newPW);
   token.changePassword(oldPW, newPW);
 }
 
@@ -283,6 +283,7 @@ function promiseFormsProcessed(expectedCount = 1) {
 }
 
 function loadRecipes(recipes) {
+  info("Loading recipes");
   return new Promise(resolve => {
     chromeScript.addMessageListener("loadedRecipes", function loaded() {
       chromeScript.removeMessageListener("loadedRecipes", loaded);
@@ -293,6 +294,7 @@ function loadRecipes(recipes) {
 }
 
 function resetRecipes() {
+  info("Resetting recipes");
   return new Promise(resolve => {
     chromeScript.addMessageListener("recipesReset", function reset() {
       chromeScript.removeMessageListener("recipesReset", reset);
@@ -300,6 +302,24 @@ function resetRecipes() {
     });
     chromeScript.sendAsyncMessage("resetRecipes");
   });
+}
+
+function promiseStorageChanged(expectedChangeTypes) {
+  return new Promise((resolve, reject) => {
+    function onStorageChanged({ topic, data }) {
+      let changeType = expectedChangeTypes.shift();
+      is(data, changeType, "Check expected passwordmgr-storage-changed type");
+      if (expectedChangeTypes.length === 0) {
+        chromeScript.removeMessageListener("storageChanged", onStorageChanged);
+        resolve();
+      }
+    }
+    chromeScript.addMessageListener("storageChanged", onStorageChanged);
+  });
+}
+
+function countLogins(chromeScript, formOrigin, submitOrigin, httpRealm) {
+  return chromeScript.sendSyncMessage("countLogins", {formOrigin, submitOrigin, httpRealm})[0][0];
 }
 
 /**
@@ -341,7 +361,16 @@ if (this.addMessageListener) {
   // Ignore ok/is in commonInit since they aren't defined in a chrome script.
   ok = is = () => {}; // eslint-disable-line no-native-reassign
 
+  Cu.import("resource://gre/modules/Services.jsm");
   Cu.import("resource://gre/modules/Task.jsm");
+
+  function onStorageChanged(subject, topic, data) {
+    sendAsyncMessage("storageChanged", {
+      topic,
+      data,
+    });
+  }
+  Services.obs.addObserver(onStorageChanged, "passwordmgr-storage-changed", false);
 
   addMessageListener("setupParent", ({selfFilling = false} = {selfFilling: false}) => {
     commonInit(selfFilling);
@@ -361,6 +390,10 @@ if (this.addMessageListener) {
     yield recipeParent.reset();
     sendAsyncMessage("recipesReset");
   }));
+
+  addMessageListener("countLogins", ({formOrigin, submitOrigin, httpRealm}) => {
+    return Services.logins.countLogins(formOrigin, submitOrigin, httpRealm);
+  });
 
   var globalMM = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
   globalMM.addMessageListener("RemoteLogins:onFormSubmit", function onFormSubmit(message) {

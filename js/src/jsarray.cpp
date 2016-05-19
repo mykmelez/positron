@@ -828,26 +828,33 @@ ObjectMayHaveExtraIndexedOwnProperties(JSObject* obj)
                              obj->getClass(), INT_TO_JSID(0), obj);
 }
 
+/*
+ * Whether obj may have indexed properties anywhere besides its dense
+ * elements. This includes other indexed properties in its shape hierarchy, and
+ * indexed properties or elements along its prototype chain.
+ */
 bool
 js::ObjectMayHaveExtraIndexedProperties(JSObject* obj)
 {
-    /*
-     * Whether obj may have indexed properties anywhere besides its dense
-     * elements. This includes other indexed properties in its shape hierarchy,
-     * and indexed properties or elements along its prototype chain.
-     */
+    MOZ_ASSERT_IF(obj->hasDynamicPrototype(), !obj->isNative());
 
     if (ObjectMayHaveExtraIndexedOwnProperties(obj))
         return true;
 
-    while ((obj = obj->getProto()) != nullptr) {
+    do {
+        MOZ_ASSERT(obj->hasStaticPrototype(),
+                   "dynamic-prototype objects must be non-native, ergo must "
+                   "have failed ObjectMayHaveExtraIndexedOwnProperties");
+
+        obj = obj->staticPrototype();
+        if (!obj)
+            return false; // no extra indexed properties found
+
         if (ObjectMayHaveExtraIndexedOwnProperties(obj))
             return true;
         if (GetAnyBoxedOrUnboxedInitializedLength(obj) != 0)
             return true;
-    }
-
-    return false;
+    } while (true);
 }
 
 static bool
@@ -923,6 +930,9 @@ IsArraySpecies(JSContext* cx, HandleObject origArray)
     if (!GetGetterPure(cx, ctorObj, speciesId, &getter))
         return false;
 
+    if (!getter)
+        return false;
+
     return IsSelfHostedFunctionWithName(getter, cx->names().ArraySpecies);
 }
 
@@ -931,19 +941,21 @@ ArraySpeciesCreate(JSContext* cx, HandleObject origArray, uint32_t length, Mutab
 {
     RootedId createId(cx, NameToId(cx->names().ArraySpeciesCreate));
     RootedFunction create(cx, JS::GetSelfHostedFunction(cx, "ArraySpeciesCreate", createId, 2));
+    if (!create)
+        return false;
 
     FixedInvokeArgs<2> args(cx);
 
-    args.setCallee(ObjectValue(*create));
-    args.setThis(UndefinedValue());
     args[0].setObject(*origArray);
     args[1].set(NumberValue(length));
 
-    if (!Invoke(cx, args))
+    RootedValue callee(cx, ObjectValue(*create));
+    RootedValue rval(cx);
+    if (!Call(cx, callee, UndefinedHandleValue, args, &rval))
         return false;
 
-    MOZ_ASSERT(args.rval().isObject());
-    arr.set(&args.rval().toObject());
+    MOZ_ASSERT(rval.isObject());
+    arr.set(&rval.toObject());
     return true;
 }
 
@@ -1144,7 +1156,8 @@ ArrayJoinKernel(JSContext* cx, SeparatorOp sepOp, HandleObject obj, uint32_t len
                     RootedValue fun(cx);
                     if (!GetProperty(cx, v, cx->names().toLocaleString, &fun))
                         return false;
-                    if (!Invoke(cx, v, fun, 0, nullptr, &v))
+
+                    if (!Call(cx, fun, v, &v))
                         return false;
                 }
                 if (!ValueToStringBuffer(cx, v, sb))
@@ -1389,8 +1402,8 @@ ArrayReverseDenseKernel(JSContext* cx, HandleObject obj, uint32_t length)
 DefineBoxedOrUnboxedFunctor3(ArrayReverseDenseKernel,
                              JSContext*, HandleObject, uint32_t);
 
-static bool
-array_reverse(JSContext* cx, unsigned argc, Value* vp)
+bool
+js::array_reverse(JSContext* cx, unsigned argc, Value* vp)
 {
     AutoSPSEntry pseudoFrame(cx->runtime(), "Array.prototype.reverse");
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1715,9 +1728,9 @@ MatchNumericComparator(JSContext* cx, const Value& v)
 
 template <typename K, typename C>
 static inline bool
-MergeSortByKey(K keys, size_t len, K scratch, C comparator, AutoValueVector* vec)
+MergeSortByKey(K keys, size_t len, K scratch, C comparator, MutableHandle<GCVector<Value>> vec)
 {
-    MOZ_ASSERT(vec->length() >= len);
+    MOZ_ASSERT(vec.length() >= len);
 
     /* Sort keys. */
     if (!MergeSort(keys, len, scratch, comparator))
@@ -1741,18 +1754,18 @@ MergeSortByKey(K keys, size_t len, K scratch, C comparator, AutoValueVector* vec
             continue; // fixed point
 
         MOZ_ASSERT(j > i, "Everything less than |i| should be in the right place!");
-        Value tv = (*vec)[j];
+        Value tv = vec[j];
         do {
             size_t k = keys[j].elementIndex;
             keys[j].elementIndex = j;
-            (*vec)[j].set((*vec)[k]);
+            vec[j].set(vec[k]);
             j = k;
         } while (j != i);
 
         // We could assert the loop invariant that |i == keys[i].elementIndex|
         // here if we synced |keys[i].elementIndex|.  But doing so would render
         // the assertion vacuous, so don't bother, even in debug builds.
-        (*vec)[i].set(tv);
+        vec[i].set(tv);
     }
 
     return true;
@@ -1765,9 +1778,9 @@ MergeSortByKey(K keys, size_t len, K scratch, C comparator, AutoValueVector* vec
  * to strings at once, then sorts the elements by these cached strings.
  */
 static bool
-SortLexicographically(JSContext* cx, AutoValueVector* vec, size_t len)
+SortLexicographically(JSContext* cx, MutableHandle<GCVector<Value>> vec, size_t len)
 {
-    MOZ_ASSERT(vec->length() >= len);
+    MOZ_ASSERT(vec.length() >= len);
 
     StringBuffer sb(cx);
     Vector<StringifiedElement, 0, TempAllocPolicy> strElements(cx);
@@ -1782,7 +1795,7 @@ SortLexicographically(JSContext* cx, AutoValueVector* vec, size_t len)
         if (!CheckForInterrupt(cx))
             return false;
 
-        if (!ValueToStringBuffer(cx, (*vec)[i], sb))
+        if (!ValueToStringBuffer(cx, vec[i], sb))
             return false;
 
         strElements[i] = { cursor, sb.length(), i };
@@ -1801,9 +1814,10 @@ SortLexicographically(JSContext* cx, AutoValueVector* vec, size_t len)
  * numerics at once, then sorts the elements by these cached numerics.
  */
 static bool
-SortNumerically(JSContext* cx, AutoValueVector* vec, size_t len, ComparatorMatchResult comp)
+SortNumerically(JSContext* cx, MutableHandle<GCVector<Value>> vec, size_t len,
+                ComparatorMatchResult comp)
 {
-    MOZ_ASSERT(vec->length() >= len);
+    MOZ_ASSERT(vec.length() >= len);
 
     Vector<NumericElement, 0, TempAllocPolicy> numElements(cx);
 
@@ -1817,7 +1831,7 @@ SortNumerically(JSContext* cx, AutoValueVector* vec, size_t len, ComparatorMatch
             return false;
 
         double dv;
-        if (!ToNumber(cx, (*vec)[i], &dv))
+        if (!ToNumber(cx, vec[i], &dv))
             return false;
 
         numElements[i] = { dv, i };
@@ -1833,8 +1847,7 @@ js::array_sort(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    RootedValue fvalRoot(cx);
-    Value& fval = fvalRoot.get();
+    RootedValue fval(cx);
 
     if (args.hasDefined(0)) {
         if (args[0].isPrimitive()) {
@@ -1871,20 +1884,7 @@ js::array_sort(JSContext* cx, unsigned argc, Value* vp)
         MOZ_ASSERT(selfHostedSortValue.isObject());
         MOZ_ASSERT(selfHostedSortValue.toObject().is<JSFunction>());
 
-        InvokeArgs iargs(cx);
-
-        if (!iargs.init(1))
-            return false;
-
-        iargs.setCallee(selfHostedSortValue);
-        iargs.setThis(args.thisv());
-        iargs[0].set(fval);
-
-        if (!Invoke(cx, iargs))
-            return false;
-
-        args.rval().set(iargs.rval());
-        return true;
+        return Call(cx, selfHostedSortValue, args.thisv(), fval, args.rval());
     }
 
     uint32_t len;
@@ -1920,7 +1920,7 @@ js::array_sort(JSContext* cx, unsigned argc, Value* vp)
      */
     size_t n, undefs;
     {
-        AutoValueVector vec(cx);
+        Rooted<GCVector<Value>> vec(cx, GCVector<Value>(cx));
         if (!vec.reserve(2 * size_t(len)))
             return false;
 
@@ -2394,8 +2394,8 @@ CanOptimizeForDenseStorage(HandleObject arr, uint32_t startingIndex, uint32_t co
 }
 
 /* ES 2016 draft Mar 25, 2016 22.1.3.26. */
-static bool
-array_splice(JSContext* cx, unsigned argc, Value* vp)
+bool
+js::array_splice(JSContext* cx, unsigned argc, Value* vp)
 {
     return array_splice_impl(cx, argc, vp, true);
 }
@@ -2703,7 +2703,7 @@ GetIndexedPropertiesInRange(JSContext* cx, HandleObject obj, uint32_t begin, uin
     do {
         if (!pobj->isNative() || pobj->getClass()->getResolve() || pobj->getOpsLookupProperty())
             return true;
-    } while ((pobj = pobj->getProto()));
+    } while ((pobj = pobj->staticPrototype()));
 
     // Collect indexed property names.
     pobj = obj;
@@ -2748,7 +2748,7 @@ GetIndexedPropertiesInRange(JSContext* cx, HandleObject obj, uint32_t begin, uin
                     return false;
             }
         }
-    } while ((pobj = pobj->getProto()));
+    } while ((pobj = pobj->staticPrototype()));
 
     // Sort the indexes.
     Vector<uint32_t> tmp(cx);
@@ -3095,8 +3095,6 @@ array_of(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-#define GENERIC JSFUN_GENERIC_NATIVE
-
 static const JSFunctionSpec array_methods[] = {
 #if JS_HAS_TOSOURCE
     JS_FN(js_toSource_str,      array_toSource,     0,0),
@@ -3105,18 +3103,18 @@ static const JSFunctionSpec array_methods[] = {
     JS_FN(js_toLocaleString_str,       array_toLocaleString, 0,0),
 
     /* Perl-ish methods. */
-    JS_INLINABLE_FN("join",     array_join,         1,JSFUN_GENERIC_NATIVE, ArrayJoin),
-    JS_FN("reverse",            array_reverse,      0,JSFUN_GENERIC_NATIVE),
-    JS_FN("sort",               array_sort,         1,JSFUN_GENERIC_NATIVE),
-    JS_INLINABLE_FN("push",     array_push,         1,JSFUN_GENERIC_NATIVE, ArrayPush),
-    JS_INLINABLE_FN("pop",      array_pop,          0,JSFUN_GENERIC_NATIVE, ArrayPop),
-    JS_INLINABLE_FN("shift",    array_shift,        0,JSFUN_GENERIC_NATIVE, ArrayShift),
-    JS_FN("unshift",            array_unshift,      1,JSFUN_GENERIC_NATIVE),
-    JS_INLINABLE_FN("splice",   array_splice,       2,JSFUN_GENERIC_NATIVE, ArraySplice),
+    JS_INLINABLE_FN("join",     array_join,         1,0, ArrayJoin),
+    JS_FN("reverse",            array_reverse,      0,0),
+    JS_FN("sort",               array_sort,         1,0),
+    JS_INLINABLE_FN("push",     array_push,         1,0, ArrayPush),
+    JS_INLINABLE_FN("pop",      array_pop,          0,0, ArrayPop),
+    JS_INLINABLE_FN("shift",    array_shift,        0,0, ArrayShift),
+    JS_FN("unshift",            array_unshift,      1,0),
+    JS_INLINABLE_FN("splice",   array_splice,       2,0, ArraySplice),
 
     /* Pythonic sequence methods. */
     JS_SELF_HOSTED_FN("concat",      "ArrayConcat",      1,0),
-    JS_INLINABLE_FN("slice",    array_slice,        2,JSFUN_GENERIC_NATIVE, ArraySlice),
+    JS_INLINABLE_FN("slice",    array_slice,        2,0, ArraySlice),
 
     JS_SELF_HOSTED_FN("lastIndexOf", "ArrayLastIndexOf", 1,0),
     JS_SELF_HOSTED_FN("indexOf",     "ArrayIndexOf",     1,0),
@@ -3157,6 +3155,15 @@ static const JSFunctionSpec array_static_methods[] = {
     JS_SELF_HOSTED_FN("some",        "ArrayStaticSome",  2,0),
     JS_SELF_HOSTED_FN("reduce",      "ArrayStaticReduce", 2,0),
     JS_SELF_HOSTED_FN("reduceRight", "ArrayStaticReduceRight", 2,0),
+    JS_SELF_HOSTED_FN("join",        "ArrayStaticJoin", 2,0),
+    JS_SELF_HOSTED_FN("reverse",     "ArrayStaticReverse", 1,0),
+    JS_SELF_HOSTED_FN("sort",        "ArrayStaticSort", 2,0),
+    JS_SELF_HOSTED_FN("push",        "ArrayStaticPush", 2,0),
+    JS_SELF_HOSTED_FN("pop",         "ArrayStaticPop", 1,0),
+    JS_SELF_HOSTED_FN("shift",       "ArrayStaticShift", 1,0),
+    JS_SELF_HOSTED_FN("unshift",     "ArrayStaticUnshift", 2,0),
+    JS_SELF_HOSTED_FN("splice",      "ArrayStaticSplice", 3,0),
+    JS_SELF_HOSTED_FN("slice",       "ArrayStaticSlice", 3,0),
     JS_SELF_HOSTED_FN("from",        "ArrayFrom", 3,0),
     JS_FN("of",                 array_of,           0,0),
 
@@ -3168,15 +3175,20 @@ const JSPropertySpec array_static_props[] = {
     JS_PS_END
 };
 
-/* ES5 15.4.2 */
-bool
-js::ArrayConstructor(JSContext* cx, unsigned argc, Value* vp)
+static inline bool
+ArrayConstructorImpl(JSContext* cx, CallArgs& args, bool isConstructor)
 {
-    CallArgs args = CallArgsFromVp(argc, vp);
-
     RootedObject proto(cx);
-    if (!GetPrototypeFromCallableConstructor(cx, args, &proto))
-        return false;
+    if (isConstructor) {
+        if (!GetPrototypeFromCallableConstructor(cx, args, &proto))
+            return false;
+    } else {
+        // We're emulating |new Array(n)| with |std_Array(n)| in self-hosted JS,
+        // and the proto should be %ArrayPrototype% regardless of the callee.
+        proto = GlobalObject::getOrCreateArrayPrototype(cx, cx->global());
+        if (!proto)
+            return false;
+    }
 
     if (args.length() != 1 || !args[0].isNumber())
         return ArrayFromCallArgs(cx, args, proto);
@@ -3204,6 +3216,24 @@ js::ArrayConstructor(JSContext* cx, unsigned argc, Value* vp)
 
     args.rval().setObject(*obj);
     return true;
+}
+
+/* ES5 15.4.2 */
+bool
+js::ArrayConstructor(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    return ArrayConstructorImpl(cx, args, /* isConstructor = */ true);
+}
+
+bool
+js::array_construct(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(!args.isConstructing());
+    MOZ_ASSERT(args.length() == 1);
+    MOZ_ASSERT(args[0].isNumber());
+    return ArrayConstructorImpl(cx, args, /* isConstructor = */ false);
 }
 
 JSObject*
@@ -3582,7 +3612,7 @@ NewArrayTryReuseGroup(JSContext* cx, JSObject* obj, size_t length,
     if (!obj->is<ArrayObject>() && !obj->is<UnboxedArrayObject>())
         return NewArray<maxLength>(cx, length, nullptr, newKind);
 
-    if (obj->getProto() != cx->global()->maybeGetArrayPrototype())
+    if (obj->staticPrototype() != cx->global()->maybeGetArrayPrototype())
         return NewArray<maxLength>(cx, length, nullptr, newKind);
 
     RootedObjectGroup group(cx, obj->getGroup(cx));

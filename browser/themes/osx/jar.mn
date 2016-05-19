@@ -49,7 +49,6 @@ browser.jar:
   skin/classic/browser/pointerLock-16@2x.png
   skin/classic/browser/pointerLock-64.png
   skin/classic/browser/pointerLock-64@2x.png
-  skin/classic/browser/Privacy-16.png
   skin/classic/browser/privatebrowsing-mask.png
   skin/classic/browser/privatebrowsing-mask@2x.png
   skin/classic/browser/privatebrowsing-mask-short.png
@@ -145,7 +144,6 @@ browser.jar:
 * skin/classic/browser/preferences/in-content/preferences.css (preferences/in-content/preferences.css)
 * skin/classic/browser/preferences/in-content/dialog.css      (preferences/in-content/dialog.css)
   skin/classic/browser/preferences/applications.css         (preferences/applications.css)
-  skin/classic/browser/preferences/search.css               (preferences/search.css)
   skin/classic/browser/preferences/checkbox.png             (preferences/checkbox.png)
   skin/classic/browser/preferences/checkbox@2x.png          (preferences/checkbox@2x.png)
   skin/classic/browser/yosemite/preferences/checkbox.png    (preferences/checkbox-yosemite.png)
@@ -195,10 +193,10 @@ browser.jar:
   skin/classic/browser/sync-32.png
   skin/classic/browser/sync-bg.png
   skin/classic/browser/sync-128.png
-  skin/classic/browser/sync-desktopIcon.png
+  skin/classic/browser/sync-desktopIcon.svg  (../shared/sync-desktopIcon.svg)
   skin/classic/browser/sync-horizontalbar.png
   skin/classic/browser/sync-horizontalbar@2x.png
-  skin/classic/browser/sync-mobileIcon.png
+  skin/classic/browser/sync-mobileIcon.svg  (../shared/sync-mobileIcon.svg)
   skin/classic/browser/sync-notification-24.png
   skin/classic/browser/syncSetup.css
   skin/classic/browser/syncCommon.css
