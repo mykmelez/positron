@@ -105,8 +105,6 @@ function ModuleLoader(processType, window) {
     moduleGlobalObj.global = this.global;
 
     if (processType === 'renderer') {
-      moduleGlobalObj.window = window;
-      moduleGlobalObj.document = window.document;
       // We shouldn't really inject this into every module, and we won't
       // actually need it once we make web-view depend on mozbrowser.
       // But we inject it here for now to work around a web-view error.
@@ -236,8 +234,6 @@ function ModuleLoader(processType, window) {
   //
   if (processType === 'renderer') {
     this.require({}, 'resource:///modules/renderer/init.js');
-    this.require({}, 'resource:///modules/renderer/web-view/web-view.js');
-    this.require({}, 'resource:///modules/renderer/web-view/web-view-attributes.js');
   } else {
     this.require({}, 'resource:///modules/browser/rpc-server.js');
   }
