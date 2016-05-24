@@ -264,10 +264,11 @@ var WebViewImpl = (function() {
 // Registers browser plugin <object> custom element.
 var registerBrowserPluginElement = function() {
   var proto;
-  proto = Object.create(HTMLObjectElement.prototype);
+  proto = Object.create(HTMLIFrameElement.prototype);
   proto.createdCallback = function() {
-    this.setAttribute('type', 'application/browser-plugin');
+    // this.setAttribute('type', 'application/browser-plugin');
     this.setAttribute('id', 'browser-plugin-' + getNextId());
+    this.setAttribute('mozbrowser', 'true');
 
     // The <object> node fills in the <webview> container.
     return this.style.flex = '1 1 auto';
@@ -285,7 +286,7 @@ var registerBrowserPluginElement = function() {
     return this.nonExistentAttribute;
   };
   WebViewImpl.BrowserPlugin = document.registerElement('browserplugin-', {
-    "extends": 'object',
+    "extends": 'iframe',
     prototype: proto
   });
   delete proto.createdCallback;
