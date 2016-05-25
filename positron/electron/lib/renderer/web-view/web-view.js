@@ -266,12 +266,19 @@ var registerBrowserPluginElement = function() {
   var proto;
   proto = Object.create(HTMLIFrameElement.prototype);
   proto.createdCallback = function() {
-    // this.setAttribute('type', 'application/browser-plugin');
-    this.setAttribute('id', 'browser-plugin-' + getNextId());
-    this.setAttribute('mozbrowser', 'true');
+    // XXX Explain why we do these attribute modifications in a timeout.
+    window.setTimeout(() => {
+      const id = getNextId();
+      // this.setAttribute('type', 'application/browser-plugin');
+      this.setAttribute('id', 'browser-plugin-' + id);
+      this.setAttribute('mozbrowser', 'true');
 
-    // The <object> node fills in the <webview> container.
-    return this.style.flex = '1 1 auto';
+      // XXX Unclear where this should be.  Figure that out.
+      this.setAttribute(webViewConstants.ATTRIBUTE_INTERNALINSTANCEID, id);
+
+      // The <object> node fills in the <webview> container.
+      return this.style.flex = '1 1 auto';
+    }, 0);
   };
   proto.attributeChangedCallback = function(name, oldValue, newValue) {
     var internal;
