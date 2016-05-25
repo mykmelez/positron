@@ -35,7 +35,9 @@ let WebContents_prototype = {
   },
 
   getURL: function() {
-    if (this._browserWindow._domWindow) {
+    // XXX We might want to warn here if !this._browserWindow (or at least
+    // figure out if that's expectable).
+    if (this._browserWindow && this._browserWindow._domWindow) {
       return this._browserWindow._domWindow.location;
     }
     return null;
