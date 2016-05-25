@@ -22,6 +22,10 @@ exports._setWrapWebContents = function(aWrapWebContents) {
 // to collect the set of properties that should be assigned to the instance.
 //
 let WebContents_prototype = {
+  _send: function(channel, args) {
+    this._browserWindow._send(channel, args);
+  },
+
   // In Electron, this is implemented via GetRenderProcessHost()->GetID(),
   // which appears to return the process ID of the renderer process.  We don't
   // actually create a unique process for each renderer, so we simply give

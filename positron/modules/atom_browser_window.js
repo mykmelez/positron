@@ -75,6 +75,11 @@ BrowserWindow.prototype = {
     /* stub */
     return false;
   },
+
+  _send: function(channel, args) {
+    ppmm.broadcastAsyncMessage('ipc-message', [channel].concat(args), { window: this._domWindow });
+  },
+
 };
 
 // nsIMessageListener
