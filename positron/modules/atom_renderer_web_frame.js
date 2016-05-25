@@ -4,4 +4,13 @@
 
 'use strict';
 
-exports.webFrame = { /* stub */ };
+/* stub */
+
+exports.webFrame = {
+  registerElementResizeCallback: function() {
+    /* stub */
+  },
+  attachGuest: function() {
+    /* stub */
+  },
+};
