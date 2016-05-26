@@ -6,11 +6,11 @@
 
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
-exports.addGuest = function(guestInstanceId, elementInstanceId, embedder, guest, webPreferences) {
-  /* stub */
-};
+const positronUtil = process.binding('positron_util');
+
+exports.addGuest = positronUtil.makeStub('atom_browser_web_view_manager.addGuest',
+  function(guestInstanceId, elementInstanceId, embedder, guest, webPreferences) {});
 
 // Destroy an existing guest instance.
-exports.removeGuest = function(embedder, id) {
-  /* stub */
-};
+exports.removeGuest = positronUtil.makeStub('atom_browser_web_view_manager.removeGuest',
+  function(embedder, id) {});
