@@ -67,8 +67,8 @@ function BrowserWindow(options) {
 }
 
 BrowserWindow.prototype = {
-  isVisible: positronUtil.makeStub('BrowserWindow.isVisible', true),
-  isMinimized: positronUtil.makeStub('BrowserWindow.isMinimized', false),
+  isVisible: positronUtil.makeStub('BrowserWindow.isVisible', { returnValue: true }),
+  isMinimized: positronUtil.makeStub('BrowserWindow.isMinimized', { returnValue: false }),
 
   _send: function(channel, args) {
     ppmm.broadcastAsyncMessage('ipc-message', [channel].concat(args), { window: this._domWindow });
