@@ -4,13 +4,9 @@
 
 'use strict';
 
-/* stub */
+const positronUtil = process.binding('positron_util');
 
 exports.webFrame = {
-  registerElementResizeCallback: function() {
-    /* stub */
-  },
-  attachGuest: function() {
-    /* stub */
-  },
+  registerElementResizeCallback: positronUtil.makeStub('webFrame.registerElementResizeCallback'),
+  attachGuest: positronUtil.makeStub('webFrame.attachGuest'),
 };
