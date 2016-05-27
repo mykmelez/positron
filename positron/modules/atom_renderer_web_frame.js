@@ -6,5 +6,9 @@
 
 const positronUtil = process.binding('positron_util');
 
-exports.webFrame = {};
+exports.webFrame = {
+  registerEmbedderCustomElement: function(name, options) {
+    return document.registerElement(name, options);
+  }
+};
 positronUtil.makeStub('atom_renderer_web_frame.webFrame')();
