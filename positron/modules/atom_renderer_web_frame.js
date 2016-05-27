@@ -7,6 +7,9 @@
 const positronUtil = process.binding('positron_util');
 
 exports.webFrame = {
-  registerElementResizeCallback: positronUtil.makeStub('webFrame.registerElementResizeCallback'),
   attachGuest: positronUtil.makeStub('webFrame.attachGuest'),
+  registerElementResizeCallback: positronUtil.makeStub('webFrame.registerElementResizeCallback'),
+  registerEmbedderCustomElement: function(name, options) {
+    return document.registerElement(name, options);
+  },
 };
