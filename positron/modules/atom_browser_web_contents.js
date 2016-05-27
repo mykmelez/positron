@@ -120,6 +120,14 @@ function WebContents(options) {
 
   Object.assign(this, WebContents_prototype);
   this._getURL = this.getURL;
+
+  // createGuest in guest-view-manager.js passes these properties, and both
+  // `isGuest` and `embedder` are accessed on WebContents objects.  I can't find
+  // a place where `partition` is accessed, but presumably it too is accessed
+  // somewhere (although perhaps only in the original native implementation).
+  this.isGuest = !!options.isGuest;
+  this.partition = options.partition;
+  this.embedder = options.embedder;
 }
 
 exports.create = function(options) {
