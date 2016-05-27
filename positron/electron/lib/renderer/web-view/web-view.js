@@ -292,7 +292,7 @@ var registerBrowserPluginElement = function() {
     // Load the plugin immediately.
     return this.nonExistentAttribute;
   };
-  WebViewImpl.BrowserPlugin = document.registerElement('browserplugin-', {
+  WebViewImpl.BrowserPlugin = webFrame.registerEmbedderCustomElement('browserplugin', {
     "extends": 'iframe',
     prototype: proto
   });
@@ -445,7 +445,7 @@ var registerWebViewElement = function() {
 
   // Deprecated.
   deprecate.rename(proto, 'getUrl', 'getURL');
-  window.WebView = document.registerElement('webview-', {
+  window.WebView = webFrame.registerEmbedderCustomElement('webview', {
     prototype: proto
   });
 
