@@ -228,7 +228,9 @@ function ModuleLoader(processType, window) {
 
   this.global.Buffer = this.require({}, 'resource:///modules/node/buffer.js').Buffer;
 
-  // XXX Also define setImmediate, clearImmediate, and other Node globals.
+  // XXX Also define clearImmediate, and other Node globals.
+  const timers = this.require({}, 'resource:///modules/node/timers.js');
+  this.global.setImmediate = timers.setImmediate;
 
   // Require the Electron init.js script for the given process type.
   //
