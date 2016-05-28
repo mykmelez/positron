@@ -48,6 +48,11 @@ let WebContents_prototype = {
     return null;
   },
 
+  _isGuest: false,
+  isGuest: function() {
+    return this._isGuest;
+  },
+
   loadURL: function(url) {
     this._browserWindow._domWindow.location = url;
   },
@@ -130,7 +135,7 @@ function WebContents(options) {
   // `isGuest` and `embedder` are accessed on WebContents objects.  I can't find
   // a place where `partition` is accessed, but presumably it too is accessed
   // somewhere (although perhaps only in the original native implementation).
-  this.isGuest = !!options.isGuest;
+  this._isGuest = !!options.isGuest;
   this.partition = options.partition;
   this.embedder = options.embedder;
 }
