@@ -270,13 +270,14 @@ var registerBrowserPluginElement = function() {
   var proto;
   proto = Object.create(HTMLIFrameElement.prototype);
   proto.createdCallback = function() {
+    this.setAttribute('mozbrowser', 'true');
+    this.setAttribute('remote', 'true');
+
     // XXX Explain why we do these attribute modifications in a timeout.
     window.setTimeout(() => {
       const id = getNextId();
       // this.setAttribute('type', 'application/browser-plugin');
       this.setAttribute('id', 'browser-plugin-' + id);
-      this.setAttribute('mozbrowser', 'true');
-      this.setAttribute('remote', 'true');
 
       // XXX Unclear where this should be.  Figure that out.
       this.setAttribute(webViewConstants.ATTRIBUTE_INTERNALINSTANCEID, id);
