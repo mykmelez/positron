@@ -9,8 +9,14 @@ const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 const positronUtil = process.binding('positron_util');
 
 exports.addGuest = positronUtil.makeStub('atom_browser_web_view_manager.addGuest',
-  function(guestInstanceId, elementInstanceId, embedder, guest, webPreferences) {});
+  { returnValue: function(guestInstanceId, elementInstanceId, embedder, guest, webPreferences) {
+    // We get called by guest-view-manager.attachGuest(), which then finishes
+    // configuring `guest` by setting its `attachParams`.  But the "did-attach"
+    // handler in guest-view-manager accesses that property.  So we need to emit
+    // that event asynchronously to ensure the property is set before
+    // the handler accesses it.
+    setImmediate(() => guest.emit('did-attach'));
+  } });
 
 // Destroy an existing guest instance.
-exports.removeGuest = positronUtil.makeStub('atom_browser_web_view_manager.removeGuest',
-  function(embedder, id) {});
+exports.removeGuest = positronUtil.makeStub('atom_browser_web_view_manager.removeGuest');

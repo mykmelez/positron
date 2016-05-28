@@ -109,6 +109,11 @@ let WebContents_prototype = {
     toolsWindow.addEventListener("load", onLoad);
     this._browserWindow.on("closed", onBrowserClosed);
   },
+
+  // This appears to be an internal API that gets called by the did-attach
+  // handler in guest-view-manager.js and that calls guest_delegate_->SetSize
+  // in atom_api_web_contents.cc.
+  setSize: positronUtil.makeStub('WebContents.setSize'),
 };
 
 let lastWebContentsID = 0;
