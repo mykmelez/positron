@@ -54,7 +54,11 @@ let WebContents_prototype = {
   },
 
   loadURL: function(url) {
-    this._browserWindow._domWindow.location = url;
+    if (this.isGuest()) {
+      this.embedder._browserWindow._send(`POSITRON_RENDERER_WEB_FRAME_LOAD_URL-${this.viewInstanceId}`, [url]);
+    } else {
+      this._browserWindow._domWindow.location = url;
+    }
   },
 
   getTitle: positronUtil.makeStub('WebContents.getTitle', { returnValue: '' }),

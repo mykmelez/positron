@@ -257,6 +257,10 @@ var WebViewImpl = (function() {
     return guestViewInternal.attachGuest(this.internalInstanceId, this.guestInstanceId, this.buildParams());
   };
 
+  WebViewImpl.prototype.onLoadURL = function(url) {
+    this.browserPluginNode.setAttribute('src', url);
+  };
+
   return WebViewImpl;
 
 })();
@@ -323,6 +327,7 @@ var registerWebViewElement = function() {
     if (!internal) {
       return;
     }
+    webFrame.deregisterLoadURLEvent(internal.viewInstanceId);
     guestViewInternal.deregisterEvents(internal.viewInstanceId);
     internal.elementAttached = false;
     return internal.reset();
@@ -335,6 +340,7 @@ var registerWebViewElement = function() {
     }
     if (!internal.elementAttached) {
       guestViewInternal.registerEvents(internal, internal.viewInstanceId);
+      webFrame.registerLoadURLEvent(internal);
       internal.elementAttached = true;
       return internal.attributes[webViewConstants.ATTRIBUTE_SRC].parse();
     }
