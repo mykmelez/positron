@@ -27,6 +27,9 @@ const ppmm = Cc['@mozilla.org/parentprocessmessagemanager;1'].
 const windowWatcher = Cc['@mozilla.org/embedcomp/window-watcher;1'].
                       getService(Ci.nsIWindowWatcher);
 
+Cu.import('resource://gre/modules/Services.jsm');
+Cu.import('resource:///modules/ModuleLoader.jsm');
+
 const WebContents = require('electron').webContents;
 const app = process.atomBinding('app').app;
 const positronUtil = process.binding('positron_util');
@@ -74,6 +77,31 @@ BrowserWindow.prototype = {
     ppmm.broadcastAsyncMessage('ipc-message', [channel].concat(args), { window: this._domWindow });
   },
 
+  _loadURL: function(url) {
+    // Observe document-element-inserted and eagerly create the module loader,
+    // so <webview> is available by the time the document loads.
+    const observer = {
+      observe: (subject, topic, data) => {
+        // Although we add this observer right before loading the URL
+        // (and remove it right afterward), we're still notified asynchronously
+        // about the insertion, and we might get notified about others
+        // in the meantime, so we need to confirm that the document in question
+        // is ours.
+        if (subject.defaultView !== this._domWindow) {
+          return;
+        }
+
+        Services.obs.removeObserver(observer, 'document-element-inserted');
+
+        // Ignore the return value, since we're only calling getLoaderForWindow
+        // for its side-effect of creating a new loader for the window.
+        ModuleLoader.getLoaderForWindow(subject.defaultView);
+      },
+    };
+    Services.obs.addObserver(observer, 'document-element-inserted', false);
+
+    this._domWindow.location = url;
+  },
 };
 
 // nsIMessageListener
