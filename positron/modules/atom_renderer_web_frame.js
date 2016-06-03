@@ -4,12 +4,16 @@
 
 'use strict';
 
-const ipcRenderer = require('electron').ipcRenderer;
+const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
+const ipcRenderer = require('electron').ipcRenderer;
 const positronUtil = process.binding('positron_util');
+const v8Util = process.atomBinding('v8_util');
+const cpmm = Cc["@mozilla.org/childprocessmessagemanager;1"].
+             getService(Ci.nsISyncMessageSender);
 
 exports.webFrame = {
-  attachGuest: positronUtil.makeStub('webFrame.attachGuest', { returnValue: function(elementInstanceId) {
+  attachGuest: positronUtil.makeStub('webFrame.attachGuest', { returnValue: function(elementInstanceId, webView) {
     // webViewManager.addGuest emits the "did-attach" event on the guest,
     // but we should probably do that here, since that function gets called
     // before the event can be emitted, so it has to emit it asynchronously.
@@ -23,6 +27,7 @@ exports.webFrame = {
     // we could define a handler that retrieves the embedder (WebContents) ID
     // from the BrowserWindow and passes it and `elementInstanceId` to an API
     // in webViewManager that emits the event.
+    cpmm.sendSyncMessage('positron-register-web-view', null, { window, webView });
   }}),
   registerElementResizeCallback: positronUtil.makeStub('webFrame.registerElementResizeCallback'),
   registerEmbedderCustomElement: function(name, options) {

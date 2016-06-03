@@ -131,7 +131,7 @@ var WebViewImpl = (function() {
       if (!this.guestInstanceId) {
         return;
       }
-      return guestViewInternal.attachGuest(this.internalInstanceId, this.guestInstanceId, this.buildParams());
+      return guestViewInternal.attachGuest(this.internalInstanceId, this.guestInstanceId, this.buildParams(), this);
     }
   };
 
@@ -257,7 +257,7 @@ var WebViewImpl = (function() {
     if (!this.internalInstanceId) {
       return true;
     }
-    return guestViewInternal.attachGuest(this.internalInstanceId, this.guestInstanceId, this.buildParams());
+    return guestViewInternal.attachGuest(this.internalInstanceId, this.guestInstanceId, this.buildParams(), this);
   };
 
   WebViewImpl.prototype.onLoadURL = function(url) {
@@ -277,6 +277,19 @@ var registerBrowserPluginElement = function() {
     // This breaks loading a page in the mozbrowser when we give the app page
     // the system principal, so we've temporarily disabled it.
     // this.setAttribute('remote', 'true');
+
+    this.addEventListener('mozbrowserloadend', function(event) {
+      console.log('mozbrowserloadend');
+
+      var internal;
+      internal = v8Util.getHiddenValue(this, 'internal');
+      if (!internal) {
+        return;
+      }
+
+      ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
+                       event, 'did-finish-load');
+    }, false);
 
     // XXX Explain why we do these attribute modifications in a timeout.
     window.setTimeout(() => {
@@ -300,6 +313,9 @@ var registerBrowserPluginElement = function() {
     return internal.handleBrowserPluginAttributeMutation(name, oldValue, newValue);
   };
   proto.attachedCallback = function() {
+    var internal = v8Util.getHiddenValue(this, 'internal');
+    console.log('proto.attachedCallback: ' + internal);
+
     // Load the plugin immediately.
     return this.nonExistentAttribute;
   };

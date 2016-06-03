@@ -42,12 +42,57 @@ let WebContents_prototype = {
   },
 
   getURL: function() {
-    // XXX We might want to warn here if !this._browserWindow (or at least
-    // figure out if that's expectable).
-    if (this._browserWindow && this._browserWindow._domWindow) {
-      return this._browserWindow._domWindow.location;
+    if (this.isGuest()) {
+      if (this._webView) {
+        return this._webView.browserPluginNode.getAttribute('src');
+      }
+      console.warn('cannot get URL for guest WebContents');
+    } else {
+      if (this._browserWindow && this._browserWindow._domWindow) {
+        return this._browserWindow._domWindow.location;
+      }
+      console.warn('cannot get URL for non-guest WebContents');
     }
     return null;
+  },
+
+  canGoBack() {
+    if (this.isGuest()) {
+      if (!this._webView) {
+        console.warn('too soon!');
+        return false;
+      }
+
+      let returnValue = null;
+
+      this._webView.browserPluginNode.getCanGoBack()
+      .then(function(canGoBack) {
+        returnValue = !!canGoBack;
+      })
+      .catch(function(error) {
+        returnValue = false;
+        throw error;
+      });
+
+      const thread = Cc['@mozilla.org/thread-manager;1'].getService(Ci.nsIThreadManager).currentThread;
+      while (returnValue === null) {
+        thread.processNextEvent(true);
+      }
+
+      return returnValue;
+    } else {
+      console.warn('WebContents.canGoBack unimplemented for non-guest WebContents');
+    }
+  },
+
+  canGoForward() {
+    console.warn('canGoForward unimplemented');
+    return false;
+  },
+
+  _webView: null,
+  registerWebView(webView) {
+    this._webView = webView;
   },
 
   _isGuest: false,

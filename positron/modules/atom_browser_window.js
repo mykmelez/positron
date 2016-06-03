@@ -33,6 +33,7 @@ Cu.import('resource:///modules/ModuleLoader.jsm');
 const WebContents = require('electron').webContents;
 const app = process.atomBinding('app').app;
 const positronUtil = process.binding('positron_util');
+const webViewManager = process.atomBinding('web_view_manager');
 
 const DEFAULT_URL = 'chrome://positron/content/shell.html';
 const DEFAULT_WINDOW_FEATURES = [
@@ -67,6 +68,16 @@ function BrowserWindow(options) {
 
   this._domWindow = windowWatcher.openWindow(null, DEFAULT_URL, '_blank', features.join(','), null);
   browserWindows.set(this._domWindow, this);
+
+  ppmm.addMessageListener('positron-register-web-view', {
+    _domWindow: this._domWindow,
+    receiveMessage(message) {
+      if (message.objects.window !== this._domWindow) {
+        return;
+      }
+      webViewManager.registerWebView(message.objects.webView);
+    }
+  });
 }
 
 BrowserWindow.prototype = {

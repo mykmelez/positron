@@ -7,6 +7,7 @@
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
 const positronUtil = process.binding('positron_util');
+const guestViewManager = require('resource:///modules/browser/guest-view-manager.js');
 
 exports.addGuest = positronUtil.makeStub('atom_browser_web_view_manager.addGuest',
   { returnValue: function(guestInstanceId, elementInstanceId, embedder, guest, webPreferences) {
@@ -20,3 +21,8 @@ exports.addGuest = positronUtil.makeStub('atom_browser_web_view_manager.addGuest
 
 // Destroy an existing guest instance.
 exports.removeGuest = positronUtil.makeStub('atom_browser_web_view_manager.removeGuest');
+
+exports.registerWebView = function(webView) {
+  const guest = guestViewManager.getGuest(webView.guestInstanceId);
+  guest.registerWebView(webView);
+}
