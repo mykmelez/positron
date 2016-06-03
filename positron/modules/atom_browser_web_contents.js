@@ -59,7 +59,7 @@ let WebContents_prototype = {
   canGoBack() {
     if (this.isGuest()) {
       if (!this._webView) {
-        console.warn('too soon!');
+        console.warn('WebContents.canGoBack not yet available for guest WebContents');
         return false;
       }
 
@@ -82,6 +82,18 @@ let WebContents_prototype = {
       return returnValue;
     } else {
       console.warn('WebContents.canGoBack unimplemented for non-guest WebContents');
+    }
+  },
+
+  goBack() {
+    if (this.isGuest()) {
+      if (!this._webView) {
+        console.warn('WebContents.goBack not yet available for guest WebContents');
+        return;
+      }
+      return this._webView.browserPluginNode.goBack();
+    } else {
+      console.warn('WebContents.goBack unimplemented for non-guest WebContents');
     }
   },
 
