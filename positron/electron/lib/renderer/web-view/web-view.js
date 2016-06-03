@@ -274,7 +274,9 @@ var registerBrowserPluginElement = function() {
   proto = Object.create(HTMLIFrameElement.prototype);
   proto.createdCallback = function() {
     this.setAttribute('mozbrowser', 'true');
-    this.setAttribute('remote', 'true');
+    // This breaks loading a page in the mozbrowser when we give the app page
+    // the system principal, so we've temporarily disabled it.
+    // this.setAttribute('remote', 'true');
 
     // XXX Explain why we do these attribute modifications in a timeout.
     window.setTimeout(() => {
