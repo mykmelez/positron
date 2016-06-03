@@ -27,6 +27,8 @@ let WebContents_prototype = {
     this._browserWindow._send(channel, args);
   },
 
+  _printToPDF: positronUtil.makeStub('WebContents._printToPDF'),
+
   // In Electron, this is implemented via GetRenderProcessHost()->GetID(),
   // which appears to return the process ID of the renderer process.  We don't
   // actually create a unique process for each renderer, so we simply give
