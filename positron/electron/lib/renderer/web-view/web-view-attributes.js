@@ -43,10 +43,7 @@ class WebViewAttribute {
 
   // Defines this attribute as a property on the webview node.
   defineProperty() {
-    // Sadness.  We have to unwrap the node before defining properties on it,
-    // because the page isn't considered to be chrome, since it doesn't load
-    // from a chrome: URL.
-    return Object.defineProperty(XPCNativeWrapper.unwrap(this.webViewImpl.webviewNode), this.name, {
+    return Object.defineProperty(this.webViewImpl.webviewNode, this.name, {
       get: () => {
         return this.getValue();
       },
