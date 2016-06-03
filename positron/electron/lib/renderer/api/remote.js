@@ -93,7 +93,10 @@ var wrapArgs = function(args, visited) {
 // Populate object's members from descriptors.
 // This matches |getObjectMemebers| in rpc-server.
 let setObjectMembers = function(object, metaId, members) {
-  for (let member of members) {
+  for (let member2 of members) {
+    // Redeclare variable within block to work around Mozilla bug 449811.
+    let member = member2;
+
     if (object.hasOwnProperty(member.name))
       continue;
 
