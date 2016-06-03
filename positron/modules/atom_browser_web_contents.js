@@ -98,8 +98,44 @@ let WebContents_prototype = {
   },
 
   canGoForward() {
-    console.warn('canGoForward unimplemented');
-    return false;
+    if (this.isGuest()) {
+      if (!this._webView) {
+        console.warn('WebContents.canGoForward not yet available for guest WebContents');
+        return false;
+      }
+
+      let returnValue = null;
+
+      this._webView.browserPluginNode.getCanGoForward()
+      .then(function(canGoForward) {
+        returnValue = !!canGoForward;
+      })
+      .catch(function(error) {
+        returnValue = false;
+        throw error;
+      });
+
+      const thread = Cc['@mozilla.org/thread-manager;1'].getService(Ci.nsIThreadManager).currentThread;
+      while (returnValue === null) {
+        thread.processNextEvent(true);
+      }
+
+      return returnValue;
+    } else {
+      console.warn('WebContents.canGoForward unimplemented for non-guest WebContents');
+    }
+  },
+
+  goForward() {
+    if (this.isGuest()) {
+      if (!this._webView) {
+        console.warn('WebContents.goForward not yet available for guest WebContents');
+        return;
+      }
+      return this._webView.browserPluginNode.goForward();
+    } else {
+      console.warn('WebContents.goForward unimplemented for non-guest WebContents');
+    }
   },
 
   _webView: null,
