@@ -278,9 +278,7 @@ var registerBrowserPluginElement = function() {
     // the system principal, so we've temporarily disabled it.
     // this.setAttribute('remote', 'true');
 
-    this.addEventListener('mozbrowserloadend', function(event) {
-      console.log('mozbrowserloadend');
-
+    this.addEventListener('mozbrowserloadstart', function(event) {
       var internal;
       internal = v8Util.getHiddenValue(this, 'internal');
       if (!internal) {
@@ -288,7 +286,34 @@ var registerBrowserPluginElement = function() {
       }
 
       ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
+                       event, 'did-start-loading');
+    }, false);
+
+    this.addEventListener('mozbrowserloadend', function(event) {
+      var internal;
+      internal = v8Util.getHiddenValue(this, 'internal');
+      if (!internal) {
+        return;
+      }
+
+      ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
+                       event, 'did-stop-loading');
+      ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
                        event, 'did-finish-load');
+    }, false);
+
+    this.addEventListener('mozbrowsererror', function(event) {
+      var internal;
+      internal = v8Util.getHiddenValue(this, 'internal');
+      if (!internal) {
+        return;
+      }
+
+      ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
+                       event, 'did-stop-loading');
+      // TODO: support the 'did-fail-load' event properties.
+      ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
+                       event, 'did-fail-load');
     }, false);
 
     // XXX Explain why we do these attribute modifications in a timeout.
