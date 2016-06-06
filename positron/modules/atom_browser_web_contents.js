@@ -118,6 +118,14 @@ const BrowserWindowWebContentsPrototype = {
 
 };
 
+// A bunch of the GuestWebContentsPrototype methods check if (this._webView)
+// before acting, because they're sometimes called before this._webView
+// has been assigned.  We should ensure that it's defined before any of these
+// methods get called.
+//
+// TODO: ensure this._webView is defined before its methods are called.
+// https://github.com/mozilla/positron/issues/74
+
 const GuestWebContentsPrototype = {
   _webView: null,
   attachWebViewToGuest(webView) {
