@@ -33,8 +33,8 @@ var WebViewImpl = (function() {
     this.browserPluginNode = this.createBrowserPluginNode();
     shadowRoot = this.webviewNode.createShadowRoot();
     shadowRoot.innerHTML = '<style>:host { display: flex; }</style>';
-    // Gecko doesn't support :host yet, per bug 992245, so twiddle the display
-    // property directly.
+    // Gecko doesn't support :host yet, per Mozilla bug 992245, so twiddle
+    // the display property directly.
     webviewNode.style.display = "flex";
     this.setupWebViewAttributes();
     this.setupFocusPropagation();
