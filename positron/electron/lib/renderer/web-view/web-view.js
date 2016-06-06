@@ -274,6 +274,7 @@ var registerBrowserPluginElement = function() {
   proto = Object.create(HTMLIFrameElement.prototype);
   proto.createdCallback = function() {
     this.setAttribute('mozbrowser', 'true');
+
     // This breaks loading a page in the mozbrowser when we give the app page
     // the system principal, so we've temporarily disabled it.
     // this.setAttribute('remote', 'true');
@@ -293,9 +294,14 @@ var registerBrowserPluginElement = function() {
     // suggests that Google's load-commit is the equivalent of Mozilla's
     // mozbrowserloadend, while Mozilla's mozbrowserlocationchange doesn't have
     // a Google equivalent.  But I suspect that load-commit is actually
-    // similar to mozbrowserlocationchange.
+    // similar to mozbrowserlocationchange, at least for top-frame loads.
     //
-    // TODO: confirm this suspicion.
+    // However, load-commit also fires on sub-frame loads, which isn't the case
+    // for mozbrowserlocationchange.  This implementation also doesn't yet set
+    // the url and isMainFrame properties.
+    //
+    // TODO: complete support for the load-commit event.
+    // https://github.com/mozilla/positron/issues/70
     //
     this.addEventListener('mozbrowserlocationchange', function(event) {
       var internal;
@@ -304,8 +310,6 @@ var registerBrowserPluginElement = function() {
         return;
       }
 
-      // TODO: set the 'url' and 'isMainFrame' properties, per:
-      // https://github.com/electron/electron/blob/master/docs/api/web-view-tag.md#event-load-commit
       ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
                        event, 'load-commit');
     }, false);
