@@ -18,10 +18,10 @@ exports._setWrapWebContents = function(aWrapWebContents) {
 // WebContents.prototype, because wrapWebContents sets the instance's __proto__
 // property to EventEmitter.prototype.
 //
-// So instead we assign properties to a WebContents instance in its constructor
-// via Object.assign, assigning either BrowserWindowWebContentsPrototype
-// or GuestWebContentsPrototype depending on whether the WebContents is for
-// a BrowserWindow or a <webview> guest.
+// So instead we assign properties to a WebContents instance via Object.assign
+// in its constructor, assigning both WebContentsPrototype and either
+// BrowserWindowWebContentsPrototype or GuestWebContentsPrototype, depending on
+// whether the WebContents is for a BrowserWindow or a <webview> guest.
 
 const WebContentsPrototype = {
   // In Electron, this is implemented via GetRenderProcessHost()->GetID(),

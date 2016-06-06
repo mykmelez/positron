@@ -42,8 +42,12 @@ cpmm.addMessageListener("ipc-message", {
       return;
     }
 
-    // TODO: figure out what the event object should look like.
-    const event = {};
+    // Insert a stub 'event' object into the array of message values.
+    // This is clearly wrong, but it works for the single message we receive
+    // so far, which ignores this value.
+    // TODO: figure out what the 'event' object should really be.
+    // https://github.com/mozilla/positron/issues/72
+    const event = null;
     message.data.splice(1, 0, event);
 
     ipcRenderer.emit.apply(ipcRenderer, message.data);
