@@ -44,10 +44,7 @@ let WebContents_prototype = {
   getURL: function() {
     if (this.isGuest()) {
       if (this._webView) {
-        // TODO: return the correct URL after a goBack/goForward navigation,
-        // which doesn't update the 'src' attribute.  Probably we need to listen
-        // to locationchange events and keep track of the current URL ourselves.
-        return this._webView.browserPluginNode.getAttribute('src');
+        return this._webView.browserPluginNode.contentDocument.URL;
       }
       console.warn('cannot get URL for guest WebContents');
     } else {
