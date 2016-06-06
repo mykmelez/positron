@@ -13,23 +13,20 @@ const cpmm = Cc["@mozilla.org/childprocessmessagemanager;1"].
              getService(Ci.nsISyncMessageSender);
 
 exports.webFrame = {
-  attachGuest: positronUtil.makeStub('webFrame.attachGuest', { returnValue: function(elementInstanceId, webView) {
-    // webViewManager.addGuest emits the "did-attach" event on the guest,
+  attachGuest: function(elementInstanceId, webView) {
+    // webViewManager.addGuest emits the 'did-attach' event on the guest,
     // but we should probably do that here, since that function gets called
     // before the event can be emitted, so it has to emit it asynchronously.
     //
     // Whereas this function gets called after guestViewInternal.attachGuest
     // sends ATOM_SHELL_GUEST_VIEW_MANAGER_ATTACH_GUEST to the main process,
     // which is what triggers webViewManager.addGuest.
-    //
-    // However, it isn't obvious how to emit that event from here.  We could
-    // send `elementInstanceId` to the main process.  Then, in the main process,
-    // we could define a handler that retrieves the embedder (WebContents) ID
-    // from the BrowserWindow and passes it and `elementInstanceId` to an API
-    // in webViewManager that emits the event.
+
     cpmm.sendSyncMessage('positron-register-web-view', null, { window, webView });
-  }}),
+  },
+
   registerElementResizeCallback: positronUtil.makeStub('webFrame.registerElementResizeCallback'),
+
   registerEmbedderCustomElement: function(name, options) {
     return document.registerElement(name, options);
   },
