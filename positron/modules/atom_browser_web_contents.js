@@ -18,17 +18,12 @@ exports._setWrapWebContents = function(aWrapWebContents) {
 // WebContents.prototype, because wrapWebContents sets the instance's __proto__
 // property to EventEmitter.prototype.
 //
-// So instead we attach "prototype" properties directly to the instance itself
-// inside the WebContents constructor, using this WebContents_prototype object
-// to collect the set of properties that should be assigned to the instance.
-//
-let WebContents_prototype = {
-  _send: function(channel, args) {
-    this._browserWindow._send(channel, args);
-  },
+// So instead we assign properties to a WebContents instance in its constructor
+// via Object.assign, assigning either BrowserWindowWebContentsPrototype
+// or GuestWebContentsPrototype depending on whether the WebContents is for
+// a BrowserWindow or a <webview> guest.
 
-  _printToPDF: positronUtil.makeStub('WebContents._printToPDF'),
-
+const WebContentsPrototype = {
   // In Electron, this is implemented via GetRenderProcessHost()->GetID(),
   // which appears to return the process ID of the renderer process.  We don't
   // actually create a unique process for each renderer, so we simply give
@@ -36,133 +31,31 @@ let WebContents_prototype = {
   getId() {
     return this._id;
   },
+};
+
+const BrowserWindowWebContentsPrototype = {
+  _send: function(channel, args) {
+    this._browserWindow._send(channel, args);
+  },
+
+  isGuest() {
+    return false;
+  },
 
   getOwnerBrowserWindow() {
     return this._browserWindow;
   },
 
-  getURL: function() {
-    if (this.isGuest()) {
-      if (this._webView) {
-        return this._webView.browserPluginNode.contentDocument.URL;
-      }
-      console.warn('cannot get URL for guest WebContents');
-    } else {
-      if (this._browserWindow && this._browserWindow._domWindow) {
-        return this._browserWindow._domWindow.location;
-      }
-      console.warn('cannot get URL for non-guest WebContents');
+  getURL() {
+    if (this._browserWindow && this._browserWindow._domWindow) {
+      return this._browserWindow._domWindow.location;
     }
+    console.warn('cannot get URL for BrowserWindowWebContents');
     return null;
   },
 
-  canGoBack() {
-    if (this.isGuest()) {
-      if (!this._webView) {
-        console.warn('WebContents.canGoBack not yet available for guest WebContents');
-        return false;
-      }
-
-      let returnValue = null;
-
-      this._webView.browserPluginNode.getCanGoBack()
-      .then(function(canGoBack) {
-        returnValue = !!canGoBack;
-      })
-      .catch(function(error) {
-        returnValue = false;
-        throw error;
-      });
-
-      const thread = Cc['@mozilla.org/thread-manager;1'].getService(Ci.nsIThreadManager).currentThread;
-      while (returnValue === null) {
-        thread.processNextEvent(true);
-      }
-
-      return returnValue;
-    } else {
-      console.warn('WebContents.canGoBack unimplemented for non-guest WebContents');
-    }
-  },
-
-  goBack() {
-    if (this.isGuest()) {
-      if (!this._webView) {
-        console.warn('WebContents.goBack not yet available for guest WebContents');
-        return;
-      }
-      return this._webView.browserPluginNode.goBack();
-    } else {
-      console.warn('WebContents.goBack unimplemented for non-guest WebContents');
-    }
-  },
-
-  canGoForward() {
-    if (this.isGuest()) {
-      if (!this._webView) {
-        console.warn('WebContents.canGoForward not yet available for guest WebContents');
-        return false;
-      }
-
-      let returnValue = null;
-
-      this._webView.browserPluginNode.getCanGoForward()
-      .then(function(canGoForward) {
-        returnValue = !!canGoForward;
-      })
-      .catch(function(error) {
-        returnValue = false;
-        throw error;
-      });
-
-      const thread = Cc['@mozilla.org/thread-manager;1'].getService(Ci.nsIThreadManager).currentThread;
-      while (returnValue === null) {
-        thread.processNextEvent(true);
-      }
-
-      return returnValue;
-    } else {
-      console.warn('WebContents.canGoForward unimplemented for non-guest WebContents');
-    }
-  },
-
-  goForward() {
-    if (this.isGuest()) {
-      if (!this._webView) {
-        console.warn('WebContents.goForward not yet available for guest WebContents');
-        return;
-      }
-      return this._webView.browserPluginNode.goForward();
-    } else {
-      console.warn('WebContents.goForward unimplemented for non-guest WebContents');
-    }
-  },
-
-  _webView: null,
-  registerWebView(webView) {
-    this._webView = webView;
-  },
-
-  _isGuest: false,
-  isGuest: function() {
-    return this._isGuest;
-  },
-
-  loadURL: function(url) {
-    if (this.isGuest()) {
-      // Now that we have direct access to the webview element, we don't have
-      // to implement this via a message that we send via the message manager,
-      // so this could be as simple as:
-      //
-      //   this._webView.browserPluginNode.setAttribute('src', url);
-      //
-      // But it's useful to know how such a message passing API would look like,
-      // so I've left this one implementation in place (for now).
-      //
-      this.embedder._browserWindow._send(`POSITRON_RENDERER_WEB_FRAME_LOAD_URL-${this.viewInstanceId}`, [url]);
-    } else {
-      this._browserWindow._loadURL(url);
-    }
+  loadURL(url) {
+    this._browserWindow._loadURL(url);
   },
 
   getTitle: positronUtil.makeStub('WebContents.getTitle', { returnValue: '' }),
@@ -223,25 +116,116 @@ let WebContents_prototype = {
     this._browserWindow.on("closed", onBrowserClosed);
   },
 
+};
+
+const GuestWebContentsPrototype = {
+  _webView: null,
+  registerWebView(webView) {
+    this._webView = webView;
+  },
+
+  isGuest() { return true },
+
+  getURL: function() {
+    if (this._webView) {
+      return this._webView.browserPluginNode.contentDocument.URL;
+    }
+    console.warn('cannot get URL for guest WebContents');
+    return null;
+  },
+
+  loadURL: function(url) {
+    // Now that we have direct access to the webview element, we don't have
+    // to implement this via a message that we send via the message manager,
+    // so this could be as simple as:
+    //
+    //   this._webView.browserPluginNode.setAttribute('src', url);
+    //
+    // But it's useful to know how such a message passing API would look like,
+    // so I've left this one implementation in place (for now).
+    //
+    this.embedder._browserWindow._send(`POSITRON_RENDERER_WEB_FRAME_LOAD_URL-${this.viewInstanceId}`, [url]);
+  },
+
+  getTitle: positronUtil.makeStub('WebContents.getTitle', { returnValue: '' }),
+
   // This appears to be an internal API that gets called by the did-attach
   // handler in guest-view-manager.js and that calls guest_delegate_->SetSize
   // in atom_api_web_contents.cc.
   setSize: positronUtil.makeStub('WebContents.setSize'),
 
-  stop() {
-    if (this.isGuest()) {
-      return this._webView.browserPluginNode.stop();
-    } else {
-      console.warn('WebContents.stop unimplemented for non-guest WebContents');
+  canGoBack() {
+    if (!this._webView) {
+      console.warn('WebContents.canGoBack not yet available for guest WebContents');
+      return false;
     }
+
+    let returnValue = null;
+
+    this._webView.browserPluginNode.getCanGoBack()
+    .then(function(canGoBack) {
+      returnValue = !!canGoBack;
+    })
+    .catch(function(error) {
+      returnValue = false;
+      throw error;
+    });
+
+    const thread = Cc['@mozilla.org/thread-manager;1'].getService(Ci.nsIThreadManager).currentThread;
+    while (returnValue === null) {
+      thread.processNextEvent(true);
+    }
+
+    return returnValue;
+  },
+
+  goBack() {
+    if (!this._webView) {
+      console.warn('WebContents.goBack not yet available for guest WebContents');
+      return;
+    }
+    return this._webView.browserPluginNode.goBack();
+  },
+
+  canGoForward() {
+    if (!this._webView) {
+      console.warn('WebContents.canGoForward not yet available for guest WebContents');
+      return false;
+    }
+
+    let returnValue = null;
+
+    this._webView.browserPluginNode.getCanGoForward()
+    .then(function(canGoForward) {
+      returnValue = !!canGoForward;
+    })
+    .catch(function(error) {
+      returnValue = false;
+      throw error;
+    });
+
+    const thread = Cc['@mozilla.org/thread-manager;1'].getService(Ci.nsIThreadManager).currentThread;
+    while (returnValue === null) {
+      thread.processNextEvent(true);
+    }
+
+    return returnValue;
+  },
+
+  goForward() {
+    if (!this._webView) {
+      console.warn('WebContents.goForward not yet available for guest WebContents');
+      return;
+    }
+    return this._webView.browserPluginNode.goForward();
+  },
+
+  stop() {
+    return this._webView.browserPluginNode.stop();
   },
 
   reload() {
-    if (this.isGuest()) {
-      return this._webView.browserPluginNode.reload();
-    } else {
-      console.warn('WebContents.reload unimplemented for non-guest WebContents');
-    }
+    return this._webView.browserPluginNode.reload();
   },
 
 };
@@ -249,20 +233,20 @@ let WebContents_prototype = {
 let lastWebContentsID = 0;
 
 function WebContents(options) {
-  // XXX Consider using WeakMap to hide private properties from consumers.
-  this._browserWindow = options.browserWindow;
   this._id = ++lastWebContentsID;
 
-  Object.assign(this, WebContents_prototype);
-  this._getURL = this.getURL;
+  Object.assign(this, WebContentsPrototype);
 
-  // createGuest in guest-view-manager.js passes these properties, and both
-  // `isGuest` and `embedder` are accessed on WebContents objects.  I can't find
-  // a place where `partition` is accessed, but presumably it too is accessed
-  // somewhere (although perhaps only in the original native implementation).
-  this._isGuest = !!options.isGuest;
-  this.partition = options.partition;
-  this.embedder = options.embedder;
+  if (options.isGuest) {
+    Object.assign(this, GuestWebContentsPrototype);
+    this.partition = options.partition;
+    this.embedder = options.embedder;
+  } else {
+    Object.assign(this, BrowserWindowWebContentsPrototype);
+    this._browserWindow = options.browserWindow;
+  }
+
+  this._getURL = this.getURL;
 }
 
 exports.create = function(options) {
