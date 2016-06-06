@@ -289,16 +289,33 @@ var registerBrowserPluginElement = function() {
                        event, 'did-start-loading');
     }, false);
 
-    this.addEventListener('mozbrowserloadend', function(event) {
+    // https://wiki.mozilla.org/WebAPI/BrowserAPI/Common_Subset#DOM_Events
+    // suggests that Google's load-commit is the equivalent of Mozilla's
+    // mozbrowserloadend, while Mozilla's mozbrowserlocationchange doesn't have
+    // a Google equivalent.  But I suspect that load-commit is actually
+    // similar to mozbrowserlocationchange.
+    //
+    // TODO: confirm this suspicion.
+    //
+    this.addEventListener('mozbrowserlocationchange', function(event) {
       var internal;
       internal = v8Util.getHiddenValue(this, 'internal');
       if (!internal) {
         return;
       }
 
-      // TODO: Dispatch this event at the correct time.
+      // TODO: set the 'url' and 'isMainFrame' properties, per:
+      // https://github.com/electron/electron/blob/master/docs/api/web-view-tag.md#event-load-commit
       ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
                        event, 'load-commit');
+    }, false);
+
+    this.addEventListener('mozbrowserloadend', function(event) {
+      var internal;
+      internal = v8Util.getHiddenValue(this, 'internal');
+      if (!internal) {
+        return;
+      }
 
       ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
                        event, 'did-stop-loading');
