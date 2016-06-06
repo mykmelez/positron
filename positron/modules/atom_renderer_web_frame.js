@@ -14,14 +14,6 @@ const cpmm = Cc["@mozilla.org/childprocessmessagemanager;1"].
 
 exports.webFrame = {
   attachGuest: function(elementInstanceId, webView) {
-    // webViewManager.addGuest emits the 'did-attach' event on the guest,
-    // but we should probably do that here, since that function gets called
-    // before the event can be emitted, so it has to emit it asynchronously.
-    //
-    // Whereas this function gets called after guestViewInternal.attachGuest
-    // sends ATOM_SHELL_GUEST_VIEW_MANAGER_ATTACH_GUEST to the main process,
-    // which is what triggers webViewManager.addGuest.
-
     cpmm.sendSyncMessage('positron-register-web-view', null, { window, webView });
   },
 
