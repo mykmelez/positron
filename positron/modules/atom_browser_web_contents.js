@@ -145,6 +145,13 @@ const GuestWebContentsPrototype = {
   // in atom_api_web_contents.cc.
   setSize: positronUtil.makeStub('WebContents.setSize'),
 
+  // canGoBack and canGoForward are synchronous, but the mozbrowser equivalents
+  // are async, so we spin the event loop while waiting for the mozbrowser calls
+  // to return.
+  //
+  // TODO: figure out a better solution that doesn't require spinning the loop.
+  // https://github.com/mozilla/positron/issues/73
+
   canGoBack() {
     if (!this._webView) {
       console.warn('WebContents.canGoBack not yet available for guest WebContents');
