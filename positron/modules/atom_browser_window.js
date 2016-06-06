@@ -68,16 +68,6 @@ function BrowserWindow(options) {
 
   this._domWindow = windowWatcher.openWindow(null, DEFAULT_URL, '_blank', features.join(','), null);
   browserWindows.set(this._domWindow, this);
-
-  ppmm.addMessageListener('positron-register-web-view', {
-    _domWindow: this._domWindow,
-    receiveMessage(message) {
-      if (message.objects.window !== this._domWindow) {
-        return;
-      }
-      webViewManager.registerWebView(message.objects.webView);
-    }
-  });
 }
 
 BrowserWindow.prototype = {
@@ -183,6 +173,12 @@ windowWatcher.registerNotification(function observe(subject, topic, data) {
 
       break;
     }
+  }
+});
+
+ppmm.addMessageListener('positron-register-web-view', {
+  receiveMessage(message) {
+    webViewManager.attachWebViewToGuest(message.objects.webView);
   }
 });
 

@@ -15,8 +15,8 @@ exports.addGuest = function(guestInstanceId, elementInstanceId, embedder, guest,
 // Destroy an existing guest instance.
 exports.removeGuest = positronUtil.makeStub('atom_browser_web_view_manager.removeGuest');
 
-exports.registerWebView = function(webView) {
+exports.attachWebViewToGuest = function(webView) {
   const guest = guestViewManager.getGuest(webView.guestInstanceId);
-  guest.registerWebView(webView);
+  guest.attachWebViewToGuest(webView);
   guest.emit('did-attach');
 };

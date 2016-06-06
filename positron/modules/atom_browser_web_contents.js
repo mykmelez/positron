@@ -120,7 +120,7 @@ const BrowserWindowWebContentsPrototype = {
 
 const GuestWebContentsPrototype = {
   _webView: null,
-  registerWebView(webView) {
+  attachWebViewToGuest(webView) {
     this._webView = webView;
   },
 
