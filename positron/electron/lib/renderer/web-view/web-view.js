@@ -341,18 +341,25 @@ var registerBrowserPluginElement = function() {
                        event, 'did-fail-load');
     }, false);
 
-    // XXX Explain why we do these attribute modifications in a timeout.
+    // this.setAttribute('type', 'application/browser-plugin');
+
+    const id = getNextId();
+    this.setAttribute('id', 'browser-plugin-' + id);
+
+    // For some reason, setting the 'internalinstanceid' attribute immediately
+    // prevents the webview from loading the initial URL.  Setting it
+    // in a timeout works, but that seems coincidental and brittle.  We should
+    // figure out where/when to really set it.
+    //
+    // TODO: figure out where/when to really set it.
+    // https://github.com/mozilla/positron/issues/71
+    //
     window.setTimeout(() => {
-      const id = getNextId();
-      // this.setAttribute('type', 'application/browser-plugin');
-      this.setAttribute('id', 'browser-plugin-' + id);
-
-      // XXX Unclear where this should be.  Figure that out.
       this.setAttribute(webViewConstants.ATTRIBUTE_INTERNALINSTANCEID, id);
-
-      // The <object> node fills in the <webview> container.
-      return this.style.flex = '1 1 auto';
     }, 0);
+
+    // The <object> node fills in the <webview> container.
+    return this.style.flex = '1 1 auto';
   };
   proto.attributeChangedCallback = function(name, oldValue, newValue) {
     var internal;
