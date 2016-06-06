@@ -296,6 +296,10 @@ var registerBrowserPluginElement = function() {
         return;
       }
 
+      // TODO: Dispatch this event at the correct time.
+      ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
+                       event, 'load-commit');
+
       ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
                        event, 'did-stop-loading');
       ipcRenderer.emit("ATOM_SHELL_GUEST_VIEW_INTERNAL_DISPATCH_EVENT-" + internal.viewInstanceId,
