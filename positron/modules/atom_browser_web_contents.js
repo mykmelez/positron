@@ -218,6 +218,23 @@ let WebContents_prototype = {
   // handler in guest-view-manager.js and that calls guest_delegate_->SetSize
   // in atom_api_web_contents.cc.
   setSize: positronUtil.makeStub('WebContents.setSize'),
+
+  stop() {
+    if (this.isGuest()) {
+      return this._webView.browserPluginNode.stop();
+    } else {
+      console.warn('WebContents.stop unimplemented for non-guest WebContents');
+    }
+  },
+
+  reload() {
+    if (this.isGuest()) {
+      return this._webView.browserPluginNode.reload();
+    } else {
+      console.warn('WebContents.reload unimplemented for non-guest WebContents');
+    }
+  },
+
 };
 
 let lastWebContentsID = 0;
