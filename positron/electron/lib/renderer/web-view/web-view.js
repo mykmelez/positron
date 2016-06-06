@@ -370,9 +370,6 @@ var registerBrowserPluginElement = function() {
     return internal.handleBrowserPluginAttributeMutation(name, oldValue, newValue);
   };
   proto.attachedCallback = function() {
-    var internal = v8Util.getHiddenValue(this, 'internal');
-    console.log('proto.attachedCallback: ' + internal);
-
     // Load the plugin immediately.
     return this.nonExistentAttribute;
   };
