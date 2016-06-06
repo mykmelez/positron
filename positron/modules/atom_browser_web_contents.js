@@ -135,16 +135,7 @@ const GuestWebContentsPrototype = {
   },
 
   loadURL: function(url) {
-    // Now that we have direct access to the webview element, we don't have
-    // to implement this via a message that we send via the message manager,
-    // so this could be as simple as:
-    //
-    //   this._webView.browserPluginNode.setAttribute('src', url);
-    //
-    // But it's useful to know how such a message passing API would look like,
-    // so I've left this one implementation in place (for now).
-    //
-    this.embedder._browserWindow._send(`POSITRON_RENDERER_WEB_FRAME_LOAD_URL-${this.viewInstanceId}`, [url]);
+    this._webView.browserPluginNode.setAttribute('src', url);
   },
 
   getTitle: positronUtil.makeStub('WebContents.getTitle', { returnValue: '' }),

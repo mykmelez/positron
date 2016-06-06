@@ -22,14 +22,4 @@ exports.webFrame = {
     return document.registerElement(name, options);
   },
 
-  registerLoadURLEvent: function(webView) {
-    ipcRenderer.on(`POSITRON_RENDERER_WEB_FRAME_LOAD_URL-${webView.viewInstanceId}`, (event, url) => {
-      webView.onLoadURL(url);
-    });
-  },
-
-  deregisterLoadURLEvent: function(viewInstanceId) {
-    return ipcRenderer.removeAllListeners(`POSITRON_RENDERER_WEB_FRAME_LOAD_URL-${viewInstanceId}`);
-  },
-
 };

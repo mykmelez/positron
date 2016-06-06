@@ -35,6 +35,8 @@ var WebViewImpl = (function() {
     shadowRoot.innerHTML = '<style>:host { display: flex; }</style>';
     // Gecko doesn't support :host yet, per Mozilla bug 992245, so twiddle
     // the display property directly.
+    // TODO: remove this workaround once the underlying Mozilla bug is fixed.
+    // https://github.com/mozilla/positron/issues/69
     webviewNode.style.display = "flex";
     this.setupWebViewAttributes();
     this.setupFocusPropagation();
@@ -260,10 +262,6 @@ var WebViewImpl = (function() {
     return guestViewInternal.attachGuest(this.internalInstanceId, this.guestInstanceId, this.buildParams(), this);
   };
 
-  WebViewImpl.prototype.onLoadURL = function(url) {
-    this.browserPluginNode.setAttribute('src', url);
-  };
-
   return WebViewImpl;
 
 })();
@@ -404,7 +402,6 @@ var registerWebViewElement = function() {
     if (!internal) {
       return;
     }
-    webFrame.deregisterLoadURLEvent(internal.viewInstanceId);
     guestViewInternal.deregisterEvents(internal.viewInstanceId);
     internal.elementAttached = false;
     return internal.reset();
@@ -417,7 +414,6 @@ var registerWebViewElement = function() {
     }
     if (!internal.elementAttached) {
       guestViewInternal.registerEvents(internal, internal.viewInstanceId);
-      webFrame.registerLoadURLEvent(internal);
       internal.elementAttached = true;
       return internal.attributes[webViewConstants.ATTRIBUTE_SRC].parse();
     }

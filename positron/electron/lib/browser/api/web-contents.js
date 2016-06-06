@@ -97,6 +97,8 @@ let wrapWebContents = function(webContents) {
   // Mapping webFrame methods.
   for (let method2 of webFrameMethods) {
     // Redeclare variable within block to work around Mozilla bug 449811.
+    // TODO: remove workaround once Mozilla bug is fixed.
+    // https://github.com/mozilla/positron/issues/68
     let method = method2;
 
     webContents[method] = function(...args) {

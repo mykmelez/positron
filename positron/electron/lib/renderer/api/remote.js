@@ -95,6 +95,8 @@ var wrapArgs = function(args, visited) {
 let setObjectMembers = function(object, metaId, members) {
   for (let member2 of members) {
     // Redeclare variable within block to work around Mozilla bug 449811.
+    // TODO: remove workaround once Mozilla bug is fixed.
+    // https://github.com/mozilla/positron/issues/68
     let member = member2;
 
     if (object.hasOwnProperty(member.name))
