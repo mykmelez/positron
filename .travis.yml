@@ -9,16 +9,19 @@ os:
 cache:
   - ccache
   - apt
-matrix:
-  - env: MACH_COMMAND="configure"
-  - env: MACH_COMMAND="build export"
-  - env: MACH_COMMAND="build compile"
-  - env: MACH_COMMAND="build libs"
-  - env: MACH_COMMAND="build tools"
-  - env: MACH_COMMAND="build binaries"
-  - env: MACH_COMMAND="build install-manifests"
-  - env: MACH_COMMAND="build"
-env: MAKE_ARGS=-j4 USE_CCACHE=true
+env:
+  global:
+    - MAKE_ARGS=-j4
+    - USE_CCACHE=true
+  matrix:
+    - MACH_COMMAND="configure"
+    - MACH_COMMAND="build export"
+    - MACH_COMMAND="build compile"
+    - MACH_COMMAND="build libs"
+    - MACH_COMMAND="build tools"
+    - MACH_COMMAND="build binaries"
+    - MACH_COMMAND="build install-manifests"
+    - MACH_COMMAND="build"
 addons:
   apt:
     packages:
