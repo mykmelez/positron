@@ -9,6 +9,15 @@ os:
 cache:
   - ccache
   - apt
+matrix:
+  - env: MACH_COMMAND="configure"
+  - env: MACH_COMMAND="build export"
+  - env: MACH_COMMAND="build compile"
+  - env: MACH_COMMAND="build libs"
+  - env: MACH_COMMAND="build tools"
+  - env: MACH_COMMAND="build binaries"
+  - env: MACH_COMMAND="build install-manifests"
+  - env: MACH_COMMAND="build"
 env: MAKE_ARGS=-j4 USE_CCACHE=true
 addons:
   apt:
@@ -32,6 +41,6 @@ addons:
 before_install:
   - if [ "$TRAVIS_OS_NAME" == "osx" ]; then brew update && brew install autoconf213 yasm ccache; fi
 script:
-  - ./mach build
+  - ./mach $MACH_COMMAND
 notifications:
   email: true
