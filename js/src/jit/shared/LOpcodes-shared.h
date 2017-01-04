@@ -72,7 +72,7 @@
     _(ArraySplice)                  \
     _(NewObject)                    \
     _(NewTypedObject)               \
-    _(NewDeclEnvObject)             \
+    _(NewNamedLambdaObject)         \
     _(NewCallObject)                \
     _(NewSingletonCallObject)       \
     _(NewStringObject)              \
@@ -113,6 +113,7 @@
     _(BitOpV)                       \
     _(ShiftI)                       \
     _(ShiftI64)                     \
+    _(SignExtend)                   \
     _(UrshD)                        \
     _(Return)                       \
     _(Throw)                        \
@@ -168,6 +169,7 @@
     _(Hypot)                        \
     _(PowI)                         \
     _(PowD)                         \
+    _(PowV)                         \
     _(PowHalfD)                     \
     _(Random)                       \
     _(MathFunctionD)                \
@@ -195,6 +197,7 @@
     _(Concat)                       \
     _(CharCodeAt)                   \
     _(FromCharCode)                 \
+    _(FromCodePoint)                \
     _(SinCos)                       \
     _(StringSplit)                  \
     _(Int32ToDouble)                \
@@ -208,7 +211,6 @@
     _(Float32ToInt32)               \
     _(TruncateDToInt32)             \
     _(TruncateFToInt32)             \
-    _(WasmTruncateToInt32)          \
     _(WrapInt64ToInt32)             \
     _(ExtendInt32ToInt64)           \
     _(BooleanToString)              \
@@ -220,9 +222,10 @@
     _(Float32x4ToInt32x4)           \
     _(Float32x4ToUint32x4)          \
     _(Start)                        \
+    _(NaNToZero)                    \
     _(OsrEntry)                     \
     _(OsrValue)                     \
-    _(OsrScopeChain)                \
+    _(OsrEnvironmentChain)          \
     _(OsrReturnValue)               \
     _(OsrArgumentsObject)           \
     _(RegExp)                       \
@@ -240,6 +243,7 @@
     _(Lambda)                       \
     _(LambdaArrow)                  \
     _(LambdaForSingleton)           \
+    _(SetFunName)                   \
     _(KeepAliveObject)              \
     _(Slots)                        \
     _(Elements)                     \
@@ -293,6 +297,8 @@
     _(ArrayJoin)                    \
     _(StoreElementHoleV)            \
     _(StoreElementHoleT)            \
+    _(FallibleStoreElementV)        \
+    _(FallibleStoreElementT)        \
     _(LoadTypedArrayElementHole)    \
     _(LoadTypedArrayElementStatic)  \
     _(StoreTypedArrayElementHole)   \
@@ -331,14 +337,15 @@
     _(SetPropertyCache)             \
     _(SetPropertyPolymorphicV)      \
     _(SetPropertyPolymorphicT)      \
-    _(CallIteratorStart)            \
-    _(IteratorStart)                \
+    _(CallIteratorStartV)           \
+    _(CallIteratorStartO)           \
+    _(IteratorStartO)               \
     _(IteratorMore)                 \
     _(IsNoIterAndBranch)            \
     _(IteratorEnd)                  \
     _(ArrayLength)                  \
     _(SetArrayLength)               \
-    _(GetNextMapEntryForIterator)   \
+    _(GetNextEntryForIterator)      \
     _(TypedArrayLength)             \
     _(TypedArrayElements)           \
     _(SetDisjointTypedElements)     \
@@ -354,6 +361,7 @@
     _(RunOncePrologue)              \
     _(Rest)                         \
     _(TypeOfV)                      \
+    _(ToAsync)                      \
     _(ToIdV)                        \
     _(Floor)                        \
     _(FloorF)                       \
@@ -367,11 +375,6 @@
     _(InstanceOfV)                  \
     _(CallInstanceOf)               \
     _(InterruptCheck)               \
-    _(AsmJSInterruptCheck)          \
-    _(AsmThrowUnreachable)          \
-    _(AsmReinterpret)               \
-    _(AsmReinterpretToI64)          \
-    _(AsmReinterpretFromI64)        \
     _(Rotate)                       \
     _(RotateI64)                    \
     _(GetDOMProperty)               \
@@ -384,34 +387,6 @@
     _(IsObject)                     \
     _(IsObjectAndBranch)            \
     _(HasClass)                     \
-    _(AsmSelect)                    \
-    _(AsmSelectI64)                 \
-    _(WasmLoad)                     \
-    _(WasmLoadI64)                  \
-    _(WasmStore)                    \
-    _(WasmStoreI64)                 \
-    _(WasmBoundsCheck)              \
-    _(WasmLoadGlobalVar)            \
-    _(WasmLoadGlobalVarI64)         \
-    _(WasmStoreGlobalVar)           \
-    _(WasmStoreGlobalVarI64)        \
-    _(AsmJSLoadHeap)                \
-    _(AsmJSStoreHeap)               \
-    _(AsmJSParameter)               \
-    _(AsmJSParameterI64)            \
-    _(AsmJSReturn)                  \
-    _(AsmJSReturnI64)               \
-    _(AsmJSVoidReturn)              \
-    _(AsmJSPassStackArg)            \
-    _(AsmJSPassStackArgI64)         \
-    _(WasmCall)                     \
-    _(WasmCallI64)                  \
-    _(AsmJSCompareExchangeHeap)     \
-    _(AsmJSAtomicExchangeHeap)      \
-    _(AsmJSAtomicBinopHeap)         \
-    _(AsmJSAtomicBinopHeapForEffect)\
-    _(AsmJSUInt32ToDouble)          \
-    _(AsmJSUInt32ToFloat32)         \
     _(RecompileCheck)               \
     _(MemoryBarrier)                \
     _(AssertRangeI)                 \
@@ -427,7 +402,42 @@
     _(NewTarget)                    \
     _(ArrowNewTarget)               \
     _(CheckReturn)                  \
+    _(CheckIsObj)                   \
     _(CheckObjCoercible)            \
-    _(DebugCheckSelfHosted)
+    _(DebugCheckSelfHosted)         \
+    _(AsmJSLoadHeap)                \
+    _(AsmJSStoreHeap)               \
+    _(AsmJSCompareExchangeHeap)     \
+    _(AsmJSAtomicExchangeHeap)      \
+    _(AsmJSAtomicBinopHeap)         \
+    _(AsmJSAtomicBinopHeapForEffect)\
+    _(WasmTruncateToInt32)          \
+    _(WasmTrap)                     \
+    _(WasmReinterpret)              \
+    _(WasmReinterpretToI64)         \
+    _(WasmReinterpretFromI64)       \
+    _(WasmSelect)                   \
+    _(WasmSelectI64)                \
+    _(WasmBoundsCheck)              \
+    _(WasmAddOffset)                \
+    _(WasmLoad)                     \
+    _(WasmLoadI64)                  \
+    _(WasmStore)                    \
+    _(WasmStoreI64)                 \
+    _(WasmLoadGlobalVar)            \
+    _(WasmLoadGlobalVarI64)         \
+    _(WasmStoreGlobalVar)           \
+    _(WasmStoreGlobalVarI64)        \
+    _(WasmParameter)                \
+    _(WasmParameterI64)             \
+    _(WasmReturn)                   \
+    _(WasmReturnI64)                \
+    _(WasmReturnVoid)               \
+    _(WasmStackArg)                 \
+    _(WasmStackArgI64)              \
+    _(WasmCall)                     \
+    _(WasmCallI64)                  \
+    _(WasmUint32ToDouble)           \
+    _(WasmUint32ToFloat32)
 
 #endif /* jit_shared_LOpcodes_shared_h */

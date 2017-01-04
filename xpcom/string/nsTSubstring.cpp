@@ -74,14 +74,38 @@ nsTSubstring_CharT::MutatePrep(size_type aCapacity, char_type** aOldData,
       mFlags &= ~F_VOIDED;  // mutation clears voided flag
       return true;
     }
+  }
 
-    // Use doubling algorithm when forced to increase available capacity.
-    size_type temp = curCapacity;
-    while (temp < aCapacity) {
-      temp <<= 1;
+  if (curCapacity < aCapacity) {
+    // We increase our capacity so that the allocated buffer grows
+    // exponentially, which gives us amortized O(1) appending. Below the
+    // threshold, we use powers-of-two. Above the threshold, we grow by at
+    // least 1.125, rounding up to the nearest MiB.
+    const size_type slowGrowthThreshold = 8 * 1024 * 1024;
+
+    // nsStringBuffer allocates sizeof(nsStringBuffer) + passed size, and
+    // storageSize below wants extra 1 * sizeof(char_type).
+    const size_type neededExtraSpace =
+      sizeof(nsStringBuffer) / sizeof(char_type) + 1;
+
+    size_type temp;
+    if (aCapacity >= slowGrowthThreshold) {
+      size_type minNewCapacity = curCapacity + (curCapacity >> 3); // multiply by 1.125
+      temp = XPCOM_MAX(aCapacity, minNewCapacity) + neededExtraSpace;
+
+      // Round up to the next multiple of MiB, but ensure the expected
+      // capacity doesn't include the extra space required by nsStringBuffer
+      // and null-termination.
+      const size_t MiB = 1 << 20;
+      temp = (MiB * ((temp + MiB - 1) / MiB)) - neededExtraSpace;
+    } else {
+      // Round up to the next power of two.
+      temp =
+        mozilla::RoundUpPow2(aCapacity + neededExtraSpace) - neededExtraSpace;
     }
-    NS_ASSERTION(XPCOM_MIN(temp, kMaxCapacity) >= aCapacity,
-                 "should have hit the early return at the top");
+
+    MOZ_ASSERT(XPCOM_MIN(temp, kMaxCapacity) >= aCapacity,
+               "should have hit the early return at the top");
     aCapacity = XPCOM_MIN(temp, kMaxCapacity);
   }
 
@@ -393,13 +417,28 @@ nsTSubstring_CharT::AssignLiteral(const char_type* aData, size_type aLength)
 void
 nsTSubstring_CharT::Assign(const self_type& aStr)
 {
-  if (!Assign(aStr, mozilla::fallible)) {
+  if (!Assign(aStr, aStr.Length(), mozilla::fallible)) {
     AllocFailed(aStr.Length());
   }
 }
 
 bool
 nsTSubstring_CharT::Assign(const self_type& aStr, const fallible_t& aFallible)
+{
+  return Assign(aStr, aStr.Length(), aFallible);
+}
+
+void
+nsTSubstring_CharT::Assign(const self_type& aStr, size_type aLength)
+{
+  if (!Assign(aStr, aLength, mozilla::fallible)) {
+    AllocFailed(aLength);
+  }
+}
+
+bool
+nsTSubstring_CharT::Assign(const self_type& aStr, size_type aLength,
+                           const fallible_t& aFallible)
 {
   // |aStr| could be sharable. We need to check its flags to know how to
   // deal with it.
@@ -408,7 +447,11 @@ nsTSubstring_CharT::Assign(const self_type& aStr, const fallible_t& aFallible)
     return true;
   }
 
-  if (!aStr.mLength) {
+  if (aStr.Length() < aLength) {
+    aLength = aStr.Length();
+  }
+
+  if (!aLength) {
     Truncate();
     mFlags |= aStr.mFlags & F_VOIDED;
     return true;
@@ -423,7 +466,7 @@ nsTSubstring_CharT::Assign(const self_type& aStr, const fallible_t& aFallible)
     ::ReleaseData(mData, mFlags);
 
     mData = aStr.mData;
-    mLength = aStr.mLength;
+    mLength = aLength;
     SetDataFlags(F_TERMINATED | F_SHARED);
 
     // get an owning reference to the mData
@@ -432,12 +475,12 @@ nsTSubstring_CharT::Assign(const self_type& aStr, const fallible_t& aFallible)
   } else if (aStr.mFlags & F_LITERAL) {
     MOZ_ASSERT(aStr.mFlags & F_TERMINATED, "Unterminated literal");
 
-    AssignLiteral(aStr.mData, aStr.mLength);
+    AssignLiteral(aStr.mData, aLength);
     return true;
   }
 
   // else, treat this like an ordinary assignment.
-  return Assign(aStr.Data(), aStr.Length(), aFallible);
+  return Assign(aStr.Data(), aLength, aFallible);
 }
 
 void
@@ -902,7 +945,7 @@ nsTSubstring_CharT::AppendPrintf(const char* aFormat, ...)
   va_start(ap, aFormat);
   uint32_t r = PR_vsxprintf(AppendFunc, this, aFormat, ap);
   if (r == (uint32_t)-1) {
-    NS_RUNTIMEABORT("Allocation or other failure in PR_vsxprintf");
+    MOZ_CRASH("Allocation or other failure in PR_vsxprintf");
   }
   va_end(ap);
 }
@@ -912,7 +955,7 @@ nsTSubstring_CharT::AppendPrintf(const char* aFormat, va_list aAp)
 {
   uint32_t r = PR_vsxprintf(AppendFunc, this, aFormat, aAp);
   if (r == (uint32_t)-1) {
-    NS_RUNTIMEABORT("Allocation or other failure in PR_vsxprintf");
+    MOZ_CRASH("Allocation or other failure in PR_vsxprintf");
   }
 }
 

@@ -9,10 +9,9 @@
 
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/EventStates.h"
-#include "mozilla/RefPtr.h"
-#include "mozilla/ServoBindingHelpers.h"
+#include "mozilla/ServoBindingTypes.h"
 #include "mozilla/ServoElementSnapshot.h"
-#include "mozilla/ServoStyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "mozilla/SheetType.h"
 #include "mozilla/UniquePtr.h"
 #include "nsCSSPseudoElements.h"
@@ -55,15 +54,17 @@ public:
   void BeginUpdate();
   nsresult EndUpdate();
 
-  void StartStyling(nsPresContext* aPresContext);
-
   already_AddRefed<nsStyleContext>
   ResolveStyleFor(dom::Element* aElement,
-                  nsStyleContext* aParentContext);
+                  nsStyleContext* aParentContext,
+                  ConsumeStyleBehavior aConsume,
+                  LazyComputeBehavior aMayCompute);
 
   already_AddRefed<nsStyleContext>
   ResolveStyleFor(dom::Element* aElement,
                   nsStyleContext* aParentContext,
+                  ConsumeStyleBehavior aConsume,
+                  LazyComputeBehavior aMayCompute,
                   TreeMatchContext& aTreeMatchContext);
 
   already_AddRefed<nsStyleContext>
@@ -74,7 +75,7 @@ public:
   ResolveStyleForOtherNonElement(nsStyleContext* aParentContext);
 
   already_AddRefed<nsStyleContext>
-  ResolvePseudoElementStyle(dom::Element* aParentElement,
+  ResolvePseudoElementStyle(dom::Element* aOriginatingElement,
                             mozilla::CSSPseudoElementType aType,
                             nsStyleContext* aParentContext,
                             dom::Element* aPseudoElement);
@@ -102,12 +103,12 @@ public:
 
   // check whether there is ::before/::after style for an element
   already_AddRefed<nsStyleContext>
-  ProbePseudoElementStyle(dom::Element* aParentElement,
+  ProbePseudoElementStyle(dom::Element* aOriginatingElement,
                           mozilla::CSSPseudoElementType aType,
                           nsStyleContext* aParentContext);
 
   already_AddRefed<nsStyleContext>
-  ProbePseudoElementStyle(dom::Element* aParentElement,
+  ProbePseudoElementStyle(dom::Element* aOriginatingElement,
                           mozilla::CSSPseudoElementType aType,
                           nsStyleContext* aParentContext,
                           TreeMatchContext& aTreeMatchContext,
@@ -121,17 +122,38 @@ public:
     dom::Element* aPseudoElement, EventStates aStateMask);
 
   /**
-   * Computes a restyle hint given a element and a previous element snapshot.
+   * Performs a Servo traversal to compute style for all dirty nodes in the
+   * document. The root element must be non-null.
    */
-  nsRestyleHint ComputeRestyleHint(dom::Element* aElement,
-                                   ServoElementSnapshot* aSnapshot);
+  void StyleDocument();
 
   /**
-   * Restyles a whole subtree of nodes.
+   * Eagerly styles a subtree of unstyled nodes that was just appended to the
+   * tree. This is used in situations where we need the style immediately and
+   * cannot wait for a future batch restyle.
    */
-  void RestyleSubtree(nsINode* aNode);
+  void StyleNewSubtree(Element* aRoot);
 
-  bool StylingStarted() const { return mStylingStarted; }
+  /**
+   * Like the above, but skips the root node, and only styles unstyled children.
+   * When potentially appending multiple children, it's preferable to call
+   * StyleNewChildren on the node rather than making multiple calls to
+   * StyleNewSubtree on each child, since it allows for more parallelism.
+   */
+  void StyleNewChildren(Element* aParent);
+
+  /**
+   * Records that the contents of style sheets have changed since the last
+   * restyle.  Calling this will ensure that the Stylist rebuilds its
+   * selector maps.
+   */
+  void NoteStyleSheetsChanged();
+
+#ifdef DEBUG
+  void AssertTreeIsClean();
+#else
+  void AssertTreeIsClean() {}
+#endif
 
 private:
   already_AddRefed<nsStyleContext> GetContext(already_AddRefed<ServoComputedValues>,
@@ -142,14 +164,15 @@ private:
   already_AddRefed<nsStyleContext> GetContext(nsIContent* aContent,
                                               nsStyleContext* aParentContext,
                                               nsIAtom* aPseudoTag,
-                                              CSSPseudoElementType aPseudoType);
+                                              CSSPseudoElementType aPseudoType,
+                                              ConsumeStyleBehavior aConsume,
+                                              LazyComputeBehavior aMayCompute);
 
   nsPresContext* mPresContext;
   UniquePtr<RawServoStyleSet> mRawSet;
   EnumeratedArray<SheetType, SheetType::Count,
                   nsTArray<RefPtr<ServoStyleSheet>>> mSheets;
   int32_t mBatching;
-  bool mStylingStarted;
 };
 
 } // namespace mozilla

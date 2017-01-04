@@ -13,15 +13,15 @@
 #include "nsLayoutUtils.h"
 #include "imgINotificationObserver.h"
 #include "nsSVGEffects.h"
-#include "nsSVGPathGeometryFrame.h"
 #include "mozilla/dom/SVGSVGElement.h"
 #include "nsSVGUtils.h"
 #include "SVGContentUtils.h"
+#include "SVGGeometryFrame.h"
 #include "SVGImageContext.h"
 #include "mozilla/dom/SVGImageElement.h"
 #include "nsContentUtils.h"
 #include "nsIReflowCallback.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -46,7 +46,7 @@ private:
   nsSVGImageFrame *mFrame;
 };
 
-class nsSVGImageFrame : public nsSVGPathGeometryFrame
+class nsSVGImageFrame : public SVGGeometryFrame
                       , public nsIReflowCallback
 {
   friend nsIFrame*
@@ -54,7 +54,7 @@ class nsSVGImageFrame : public nsSVGPathGeometryFrame
 
 protected:
   explicit nsSVGImageFrame(nsStyleContext* aContext)
-    : nsSVGPathGeometryFrame(aContext)
+    : SVGGeometryFrame(aContext)
     , mReflowCallbackPosted(false)
   {
     EnableVisibilityTracking();
@@ -72,7 +72,7 @@ public:
   virtual nsIFrame* GetFrameForPoint(const gfxPoint& aPoint) override;
   virtual void ReflowSVG() override;
 
-  // nsSVGPathGeometryFrame methods:
+  // SVGGeometryFrame methods:
   virtual uint16_t GetHitTestFlags() override;
 
   // nsIFrame interface:
@@ -80,8 +80,7 @@ public:
                                      nsIAtom*        aAttribute,
                                      int32_t         aModType) override;
 
-  void OnVisibilityChange(Visibility aOldVisibility,
-                          Visibility aNewVisibility,
+  void OnVisibilityChange(Visibility aNewVisibility,
                           Maybe<OnNonvisible> aNonvisibleAction = Nothing()) override;
 
   virtual void Init(nsIContent*       aContent,
@@ -155,18 +154,18 @@ nsSVGImageFrame::Init(nsIContent*       aContent,
   NS_ASSERTION(aContent->IsSVGElement(nsGkAtoms::image),
                "Content is not an SVG image!");
 
-  nsSVGPathGeometryFrame::Init(aContent, aParent, aPrevInFlow);
+  SVGGeometryFrame::Init(aContent, aParent, aPrevInFlow);
 
   if (GetStateBits() & NS_FRAME_IS_NONDISPLAY) {
     // Non-display frames are likely to be patterns, masks or the like.
     // Treat them as always visible.
-    IncVisibilityCount(VisibilityCounter::IN_DISPLAYPORT);
+    IncApproximateVisibleCount();
   }
 
   mListener = new nsSVGImageListener(this);
   nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mContent);
   if (!imageLoader) {
-    NS_RUNTIMEABORT("Why is this not an image loading content?");
+    MOZ_CRASH("Why is this not an image loading content?");
   }
 
   // We should have a PresContext now, so let's notify our image loader that
@@ -180,7 +179,7 @@ nsSVGImageFrame::Init(nsIContent*       aContent,
 nsSVGImageFrame::DestroyFrom(nsIFrame* aDestructRoot)
 {
   if (GetStateBits() & NS_FRAME_IS_NONDISPLAY) {
-    DecVisibilityCount(VisibilityCounter::IN_DISPLAYPORT);
+    DecApproximateVisibleCount();
   }
 
   if (mReflowCallbackPosted) {
@@ -226,38 +225,38 @@ nsSVGImageFrame::AttributeChanged(int32_t         aNameSpaceID,
       return NS_OK;
     }
   }
-  if (aNameSpaceID == kNameSpaceID_XLink &&
+  if ((aNameSpaceID == kNameSpaceID_XLink ||
+       aNameSpaceID == kNameSpaceID_None) &&
       aAttribute == nsGkAtoms::href) {
     SVGImageElement *element = static_cast<SVGImageElement*>(mContent);
 
-    if (element->mStringAttributes[SVGImageElement::HREF].IsExplicitlySet()) {
+    bool hrefIsSet =
+      element->mStringAttributes[SVGImageElement::HREF].IsExplicitlySet() ||
+      element->mStringAttributes[SVGImageElement::XLINK_HREF].IsExplicitlySet();
+    if (hrefIsSet) {
       element->LoadSVGImage(true, true);
     } else {
       element->CancelImageRequests(true);
     }
   }
 
-  return nsSVGPathGeometryFrame::AttributeChanged(aNameSpaceID,
-                                                  aAttribute, aModType);
+  return SVGGeometryFrame::AttributeChanged(aNameSpaceID,
+                                            aAttribute, aModType);
 }
 
 void
-nsSVGImageFrame::OnVisibilityChange(Visibility aOldVisibility,
-                                    Visibility aNewVisibility,
+nsSVGImageFrame::OnVisibilityChange(Visibility aNewVisibility,
                                     Maybe<OnNonvisible> aNonvisibleAction)
 {
   nsCOMPtr<nsIImageLoadingContent> imageLoader = do_QueryInterface(mContent);
   if (!imageLoader) {
-    nsSVGPathGeometryFrame::OnVisibilityChange(aOldVisibility, aNewVisibility,
-                                               aNonvisibleAction);
+    SVGGeometryFrame::OnVisibilityChange(aNewVisibility, aNonvisibleAction);
     return;
   }
 
-  imageLoader->OnVisibilityChange(aOldVisibility, aNewVisibility,
-                                  aNonvisibleAction);
+  imageLoader->OnVisibilityChange(aNewVisibility, aNonvisibleAction);
 
-  nsSVGPathGeometryFrame::OnVisibilityChange(aOldVisibility, aNewVisibility,
-                                             aNonvisibleAction);
+  SVGGeometryFrame::OnVisibilityChange(aNewVisibility, aNonvisibleAction);
 }
 
 gfx::Matrix
@@ -500,7 +499,7 @@ nsSVGImageFrame::GetType() const
 }
 
 //----------------------------------------------------------------------
-// nsSVGPathGeometryFrame methods:
+// SVGGeometryFrame methods:
 
 // Lie about our fill/stroke so that covered region and hit detection work properly
 

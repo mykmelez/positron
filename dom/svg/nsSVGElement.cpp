@@ -6,7 +6,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/DebugOnly.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 
 #include "nsSVGElement.h"
 
@@ -16,7 +16,6 @@
 #include "nsICSSDeclaration.h"
 #include "nsIDocument.h"
 #include "nsIDOMMutationEvent.h"
-#include "nsSVGPathGeometryElement.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "nsError.h"
 #include "nsIPresShell.h"
@@ -45,6 +44,7 @@
 #include "SVGAnimatedPointList.h"
 #include "SVGAnimatedPathSegList.h"
 #include "SVGContentUtils.h"
+#include "SVGGeometryElement.h"
 #include "nsIFrame.h"
 #include "nsQueryObject.h"
 #include <stdarg.h>
@@ -53,7 +53,7 @@
 #include "nsAttrValueOrString.h"
 #include "nsSMILAnimationController.h"
 #include "mozilla/dom/SVGElementBinding.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozilla/RestyleManagerHandle.h"
 #include "mozilla/RestyleManagerHandleInlines.h"
 
@@ -258,7 +258,7 @@ nsSVGElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   }
   const nsAttrValue* oldVal = mAttrsAndChildren.GetAttr(nsGkAtoms::style);
 
-  if (oldVal && oldVal->Type() == nsAttrValue::eGeckoCSSDeclaration) {
+  if (oldVal && oldVal->Type() == nsAttrValue::eCSSDeclaration) {
     // we need to force a reparse because the baseURI of the document
     // may have changed, and in particular because we may be clones of
     // XBL anonymous content now being bound to the document we should
@@ -1199,8 +1199,8 @@ MappedAttrParser::ParseMappedAttrValue(nsIAtom* aMappedAttrName,
     mDecl->InitializeEmpty();
   }
 
-  // Get the nsCSSProperty ID for our mapped attribute.
-  nsCSSProperty propertyID =
+  // Get the nsCSSPropertyID ID for our mapped attribute.
+  nsCSSPropertyID propertyID =
     nsCSSProps::LookupProperty(nsDependentAtomString(aMappedAttrName),
                                CSSEnabledState::eForAllContent);
   if (propertyID != eCSSProperty_UNKNOWN) {
@@ -2558,7 +2558,7 @@ nsSVGElement::GetAnimatedAttr(int32_t aNamespaceID, nsIAtom* aName)
 
     // Mapped attributes:
     if (IsAttributeMapped(aName)) {
-      nsCSSProperty prop =
+      nsCSSPropertyID prop =
         nsCSSProps::LookupProperty(nsDependentAtomString(aName),
                                    CSSEnabledState::eForAllContent);
       // Check IsPropertyAnimatable to avoid attributes that...

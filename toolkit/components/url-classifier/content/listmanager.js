@@ -196,15 +196,15 @@ PROT_ListManager.prototype.kickoffUpdate_ = function (onDiskTableData)
 {
   this.startingUpdate_ = false;
   var initialUpdateDelay = 3000;
-  // Add a fuzz of 0-5 minutes.
-  initialUpdateDelay += Math.floor(Math.random() * (5 * 60 * 1000));
+  // Add a fuzz of 0-1 minutes for both v2 and v4 according to Bug 1305478.
+  initialUpdateDelay += Math.floor(Math.random() * (1 * 60 * 1000));
 
   // If the user has never downloaded tables, do the check now.
   log("needsUpdate: " + JSON.stringify(this.needsUpdate_, undefined, 2));
   for (var updateUrl in this.needsUpdate_) {
     // If we haven't already kicked off updates for this updateUrl, set a
     // non-repeating timer for it. The timer delay will be reset either on
-    // updateSuccess to this.updateinterval, or backed off on downloadError.
+    // updateSuccess to this.updateInterval, or backed off on downloadError.
     // Don't set the updateChecker unless at least one table has updates
     // enabled.
     if (this.updatesNeeded_(updateUrl) && !this.updateCheckers_[updateUrl]) {
@@ -388,7 +388,26 @@ PROT_ListManager.prototype.makeUpdateRequest_ = function(updateUrl, tableData) {
   }
 
   if (useProtobuf) {
-    let tableArray = streamerMap.tableList.split(',');
+    let tableArray = [];
+    Object.keys(streamerMap.tableNames).forEach(aTableName => {
+      if (streamerMap.tableNames[aTableName]) {
+        tableArray.push(aTableName);
+      }
+    });
+
+    // Build the <tablename, stateBase64> mapping.
+    let tableState = {};
+    tableData.split("\n").forEach(line => {
+      let p = line.indexOf(";");
+      if (-1 === p) {
+        return;
+      }
+      let tableName = line.substring(0, p);
+      let metadata = line.substring(p + 1).split(":");
+      let stateBase64 = metadata[0];
+      log(tableName + " ==> " + stateBase64);
+      tableState[tableName] = stateBase64;
+    });
 
     // The state is a byte stream which server told us from the
     // last table update. The state would be used to do the partial
@@ -396,15 +415,18 @@ PROT_ListManager.prototype.makeUpdateRequest_ = function(updateUrl, tableData) {
     // never been downloaded. See Bug 1287058 for supporting
     // partial update.
     let stateArray = [];
-    tableArray.forEach(() => stateArray.push(''));
+    tableArray.forEach(listName => {
+      stateArray.push(tableState[listName] || "");
+    });
+
+    log("stateArray: " + stateArray);
 
     let urlUtils = Cc["@mozilla.org/url-classifier/utils;1"]
                      .getService(Ci.nsIUrlClassifierUtils);
-    let requestPayload =  urlUtils.makeUpdateRequestV4(tableArray,
-                                                stateArray,
-                                                tableArray.length);
-    // Use a base64-encoded request.
-    streamerMap.requestPayload = btoa(requestPayload);
+
+    streamerMap.requestPayload = urlUtils.makeUpdateRequestV4(tableArray,
+                                                              stateArray,
+                                                              tableArray.length);
     streamerMap.isPostRequest = false;
   } else {
     // Build the request. For each table already in the database, include the
@@ -470,12 +492,15 @@ PROT_ListManager.prototype.makeUpdateRequestForEntry_ = function(updateUrl,
  *        wait before requesting again.
  */
 PROT_ListManager.prototype.updateSuccess_ = function(tableList, updateUrl,
-                                                     waitForUpdate) {
+                                                     waitForUpdateSec) {
   log("update success for " + tableList + " from " + updateUrl + ": " +
-      waitForUpdate + "\n");
+      waitForUpdateSec + "\n");
+
+  // The time unit below are all milliseconds if not specified.
+
   var delay = 0;
-  if (waitForUpdate) {
-    delay = parseInt(waitForUpdate, 10) * 1000;
+  if (waitForUpdateSec) {
+    delay = parseInt(waitForUpdateSec, 10) * 1000;
   }
   // As long as the delay is something sane (5 min to 1 day), update
   // our delay time for requesting updates. We always use a non-repeating
@@ -534,7 +559,7 @@ PROT_ListManager.prototype.updateSuccess_ = function(tableList, updateUrl,
 PROT_ListManager.prototype.updateError_ = function(table, updateUrl, result) {
   log("update error for " + table + " from " + updateUrl + ": " + result + "\n");
   // There was some trouble applying the updates. Don't try again for at least
-  // updateInterval seconds.
+  // updateInterval milliseconds.
   this.updateCheckers_[updateUrl] =
     new G_Alarm(BindToObject(this.checkForUpdates, this, updateUrl),
                 this.updateInterval, false);

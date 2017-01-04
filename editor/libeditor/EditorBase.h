@@ -9,7 +9,7 @@
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc.
 #include "mozilla/OwningNonNull.h"      // for OwningNonNull
 #include "mozilla/SelectionState.h"     // for RangeUpdater, etc.
-#include "mozilla/StyleSheetHandle.h"   // for StyleSheetHandle
+#include "mozilla/StyleSheet.h"   // for StyleSheet
 #include "mozilla/dom/Text.h"
 #include "nsCOMPtr.h"                   // for already_AddRefed, nsCOMPtr
 #include "nsCycleCollectionParticipant.h"
@@ -141,8 +141,7 @@ struct IMEState;
  * delegate the actual commands to the editor independent of the XPFE
  * implementation.
  */
-class EditorBase : public nsIEditor
-                 , public nsIEditorIMESupport
+class EditorBase : public nsIEditorIMESupport
                  , public nsSupportsWeakReference
                  , public nsIPhonetic
 {
@@ -234,6 +233,19 @@ public:
                         ErrorResult& aResult);
   nsresult JoinNodes(nsINode& aLeftNode, nsINode& aRightNode);
   nsresult MoveNode(nsIContent* aNode, nsINode* aParent, int32_t aOffset);
+
+  nsresult CloneAttribute(nsIAtom* aAttribute, Element* aDestElement,
+                          Element* aSourceElement);
+  nsresult RemoveAttribute(Element* aElement, nsIAtom* aAttribute);
+  virtual nsresult RemoveAttributeOrEquivalent(Element* aElement,
+                                               nsIAtom* aAttribute,
+                                               bool aSuppressTransaction) = 0;
+  nsresult SetAttribute(Element* aElement, nsIAtom* aAttribute,
+                        const nsAString& aValue);
+  virtual nsresult SetAttributeOrEquivalent(Element* aElement,
+                                            nsIAtom* aAttribute,
+                                            const nsAString& aValue,
+                                            bool aSuppressTransaction) = 0;
 
   /**
    * Method to replace certain CreateElementNS() calls.
@@ -328,14 +340,14 @@ protected:
    * Create a transaction for adding a style sheet.
    */
   NS_IMETHOD CreateTxnForAddStyleSheet(
-               StyleSheetHandle aSheet,
+               StyleSheet* aSheet,
                AddStyleSheetTransaction** aTransaction);
 
   /**
    * Create a transaction for removing a style sheet.
    */
   NS_IMETHOD CreateTxnForRemoveStyleSheet(
-               StyleSheetHandle aSheet,
+               StyleSheet* aSheet,
                RemoveStyleSheetTransaction** aTransaction);
 
   nsresult DeleteText(nsGenericDOMDataNode& aElement,
@@ -441,8 +453,14 @@ protected:
   /**
    * EnsureComposition() should be called by composition event handlers.  This
    * tries to get the composition for the event and set it to mComposition.
+   * However, this may fail because the composition may be committed before
+   * the event comes to the editor.
+   *
+   * @return            true if there is a composition.  Otherwise, for example,
+   *                    a composition event handler in web contents moved focus
+   *                    for committing the composition, returns false.
    */
-  void EnsureComposition(WidgetCompositionEvent* aCompositionEvent);
+  bool EnsureComposition(WidgetCompositionEvent* aCompositionEvent);
 
   nsresult GetSelection(SelectionType aSelectionType,
                         nsISelection** aSelection);
@@ -922,6 +940,8 @@ public:
    * FindBetterInsertionPoint() tries to look for better insertion point which
    * is typically the nearest text node and offset in it.
    */
+  void FindBetterInsertionPoint(nsCOMPtr<nsIDOMNode>& aNode,
+                                int32_t& aOffset);
   void FindBetterInsertionPoint(nsCOMPtr<nsINode>& aNode,
                                 int32_t& aOffset);
 

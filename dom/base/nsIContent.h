@@ -145,7 +145,14 @@ public:
      * Skip native anonymous content created for placeholder of HTML input,
      * used in conjunction with eAllChildren or eAllButXBL.
      */
-    eSkipPlaceholderContent = 2
+    eSkipPlaceholderContent = 2,
+
+    /**
+     * Skip native anonymous content created by ancestor frames of the root
+     * element's primary frame, such as scrollbar elements created by the root
+     * scroll frame.
+     */
+    eSkipDocumentLevelNativeAnonymousContent = 4,
   };
 
   /**
@@ -247,7 +254,7 @@ public:
   /**
    * Returns true if in a chrome document
    */
-  virtual bool IsInChromeDocument();
+  virtual bool IsInChromeDocument() const;
 
   /**
    * Get the namespace that this element's tag is defined in
@@ -325,6 +332,18 @@ public:
   {
     return mNodeInfo->Equals(nsGkAtoms::children, kNameSpaceID_XBL) &&
            GetBindingParent();
+  }
+
+  bool IsGeneratedContentContainerForBefore() const
+  {
+    return IsRootOfNativeAnonymousSubtree() &&
+           mNodeInfo->NameAtom() == nsGkAtoms::mozgeneratedcontentbefore;
+  }
+
+  bool IsGeneratedContentContainerForAfter() const
+  {
+    return IsRootOfNativeAnonymousSubtree() &&
+           mNodeInfo->NameAtom() == nsGkAtoms::mozgeneratedcontentafter;
   }
 
   /**
@@ -666,7 +685,7 @@ public:
    *
    * @return The ShadowRoot currently bound to this element.
    */
-  virtual mozilla::dom::ShadowRoot *GetShadowRoot() const = 0;
+  inline mozilla::dom::ShadowRoot *GetShadowRoot() const;
 
   /**
    * Gets the root of the node tree for this content if it is in a shadow tree.
@@ -707,13 +726,14 @@ public:
   virtual void SetXBLInsertionParent(nsIContent* aContent) = 0;
 
   /**
-   * Returns the content node that is the parent of this node in the flattened
-   * tree. For nodes that are not filtered into an insertion point, this
-   * simply returns their DOM parent in the original DOM tree.
-   *
-   * @return the flattened tree parent
+   * Same as GetFlattenedTreeParentNode, but returns null if the parent is
+   * non-nsIContent.
    */
-  nsIContent *GetFlattenedTreeParent() const;
+  inline nsIContent *GetFlattenedTreeParent() const;
+
+  // Helper method, which we leave public so that it's accessible from nsINode.
+  enum FlattenedParentType { eNotForStyle, eForStyle };
+  nsINode* GetFlattenedTreeParentNodeInternal(FlattenedParentType aType) const;
 
   /**
    * Gets the custom element data used by web components custom element.
@@ -954,7 +974,7 @@ public:
   // Overloaded from nsINode
   virtual already_AddRefed<nsIURI> GetBaseURI(bool aTryUseXHRDocBaseURI = false) const override;
 
-  virtual nsresult PreHandleEvent(
+  virtual nsresult GetEventTargetParent(
                      mozilla::EventChainPreVisitor& aVisitor) override;
 
   virtual bool IsPurple() = 0;
@@ -1001,7 +1021,7 @@ public:
   }
 
   enum ETabFocusType {
-  //eTabFocus_textControlsMask = (1<<0),  // unused - textboxes always tabbable
+    eTabFocus_textControlsMask = (1<<0),  // textboxes and lists always tabbable
     eTabFocus_formElementsMask = (1<<1),  // non-text form elements
     eTabFocus_linksMask = (1<<2),         // links
     eTabFocus_any = 1 + (1<<1) + (1<<2)   // everything that can be focused

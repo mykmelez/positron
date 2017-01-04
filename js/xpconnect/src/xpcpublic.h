@@ -162,6 +162,8 @@ struct RuntimeStats;
 
 } // namespace JS
 
+#define XPC_WRAPPER_FLAGS (JSCLASS_HAS_PRIVATE | JSCLASS_FOREGROUND_FINALIZE)
+
 #define XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(n)                            \
     JSCLASS_DOM_GLOBAL | JSCLASS_HAS_PRIVATE |                                \
     JSCLASS_PRIVATE_IS_NSISUPPORTS |                                          \
@@ -185,15 +187,6 @@ xpc_FastGetCachedWrapper(JSContext* cx, nsWrapperCache* cache, JS::MutableHandle
     }
 
     return nullptr;
-}
-
-inline JSScript*
-xpc_UnmarkGrayScript(JSScript* script)
-{
-    if (script)
-        JS::ExposeScriptToActiveJS(script);
-
-    return script;
 }
 
 // If aVariant is an XPCVariant, this marks the object to be in aGeneration.
@@ -341,7 +334,7 @@ StringToJsval(JSContext* cx, const nsAString& str, JS::MutableHandleValue rval)
 /**
  * As above, but for mozilla::dom::DOMString.
  */
-MOZ_ALWAYS_INLINE
+inline
 bool NonVoidStringToJsval(JSContext* cx, mozilla::dom::DOMString& str,
                           JS::MutableHandleValue rval)
 {
@@ -417,11 +410,11 @@ private:
 // (which isn't all of them).
 // @see ZoneStatsExtras
 // @see CompartmentStatsExtras
-nsresult
+void
 ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats& rtStats,
                                  const nsACString& rtPath,
-                                 nsIMemoryReporterCallback* cb,
-                                 nsISupports* closure,
+                                 nsIMemoryReporterCallback* handleReport,
+                                 nsISupports* data,
                                  bool anonymize,
                                  size_t* rtTotal = nullptr);
 
@@ -525,7 +518,7 @@ class ErrorReport {
                   , mIsMuted(false)
     {}
 
-    void Init(JSErrorReport* aReport, const char* aFallbackMessage,
+    void Init(JSErrorReport* aReport, const char* aToStringResult,
               bool aIsChrome, uint64_t aWindowID);
     void Init(JSContext* aCx, mozilla::dom::Exception* aException,
               bool aIsChrome, uint64_t aWindowID);
@@ -561,8 +554,8 @@ class ErrorReport {
 };
 
 void
-DispatchScriptErrorEvent(nsPIDOMWindowInner* win, JSRuntime* rt, xpc::ErrorReport* xpcReport,
-                         JS::Handle<JS::Value> exception);
+DispatchScriptErrorEvent(nsPIDOMWindowInner* win, JS::RootingContext* rootingCx,
+                         xpc::ErrorReport* xpcReport, JS::Handle<JS::Value> exception);
 
 // Get a stack of the sort that can be passed to
 // xpc::ErrorReport::LogToConsoleWithStack from the given exception value.  Can
@@ -584,9 +577,6 @@ FindExceptionStackForConsoleReport(nsPIDOMWindowInner* win,
 // and unique. However, there are no guarantees of either property.
 extern void
 GetCurrentCompartmentName(JSContext*, nsCString& name);
-
-JSRuntime*
-GetJSRuntime();
 
 void AddGCCallback(xpcGCCallback cb);
 void RemoveGCCallback(xpcGCCallback cb);

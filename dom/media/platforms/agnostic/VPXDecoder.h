@@ -25,10 +25,10 @@ public:
   ~VPXDecoder();
 
   RefPtr<InitPromise> Init() override;
-  nsresult Input(MediaRawData* aSample) override;
-  nsresult Flush() override;
-  nsresult Drain() override;
-  nsresult Shutdown() override;
+  void Input(MediaRawData* aSample) override;
+  void Flush() override;
+  void Drain() override;
+  void Shutdown() override;
   const char* GetDescriptionName() const override
   {
     return "libvpx video decoder";
@@ -48,8 +48,10 @@ public:
 
 private:
   void ProcessDecode(MediaRawData* aSample);
-  int DoDecode(MediaRawData* aSample);
+  MediaResult DoDecode(MediaRawData* aSample);
   void ProcessDrain();
+  MediaResult DecodeAlpha(vpx_image_t** aImgAlpha,
+                          MediaRawData* aSample);
 
   const RefPtr<ImageContainer> mImageContainer;
   const RefPtr<TaskQueue> mTaskQueue;
@@ -58,6 +60,9 @@ private:
 
   // VPx decoder state
   vpx_codec_ctx_t mVPX;
+
+  // VPx alpha decoder state
+  vpx_codec_ctx_t mVPXAlpha;
 
   const VideoInfo& mInfo;
 

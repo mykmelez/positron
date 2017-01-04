@@ -239,7 +239,10 @@ nsViewSourceChannel::GetURI(nsIURI* *aURI)
     }
 
     nsAutoCString spec;
-    uri->GetSpec(spec);
+    rv = uri->GetSpec(spec);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
 
     /* XXX Gross hack -- NS_NewURI goes into an infinite loop on
        non-flat specs.  See bug 136980 */
@@ -723,6 +726,27 @@ nsViewSourceChannel::SetChannelId(const nsACString& aChannelId)
 }
 
 NS_IMETHODIMP
+nsViewSourceChannel::GetTopLevelContentWindowId(uint64_t *aWindowId)
+{
+  return !mHttpChannel ? NS_ERROR_NULL_POINTER :
+      mHttpChannel->GetTopLevelContentWindowId(aWindowId);
+}
+
+NS_IMETHODIMP
+nsViewSourceChannel::SetTopLevelContentWindowId(uint64_t aWindowId)
+{
+  return !mHttpChannel ? NS_ERROR_NULL_POINTER :
+      mHttpChannel->SetTopLevelContentWindowId(aWindowId);
+}
+
+NS_IMETHODIMP
+nsViewSourceChannel::GetIsTrackingResource(bool* aIsTrackingResource)
+{
+  return !mHttpChannel ? NS_ERROR_NULL_POINTER :
+      mHttpChannel->GetIsTrackingResource(aIsTrackingResource);
+}
+
+NS_IMETHODIMP
 nsViewSourceChannel::GetRequestMethod(nsACString & aRequestMethod)
 {
     return !mHttpChannel ? NS_ERROR_NULL_POINTER :
@@ -987,9 +1011,15 @@ nsViewSourceChannel::SetIsMainDocumentChannel(bool aValue)
         mHttpChannel->SetIsMainDocumentChannel(aValue);
 }
 
-// Have to manually forward SetCorsPreflightParameters since it's [notxpcom]
+// Have to manually forward since these are [notxpcom]
 void
 nsViewSourceChannel::SetCorsPreflightParameters(const nsTArray<nsCString>& aUnsafeHeaders)
 {
   mHttpChannelInternal->SetCorsPreflightParameters(aUnsafeHeaders);
+}
+
+mozilla::net::nsHttpChannel *
+nsViewSourceChannel::QueryHttpChannelImpl()
+{
+  return mHttpChannelInternal->QueryHttpChannelImpl();
 }

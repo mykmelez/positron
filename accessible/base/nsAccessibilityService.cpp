@@ -44,6 +44,7 @@
 
 #ifdef XP_WIN
 #include "mozilla/a11y/Compatibility.h"
+#include "mozilla/dom/ContentChild.h"
 #include "HTMLWin32ObjectAccessible.h"
 #include "mozilla/StaticPtr.h"
 #endif
@@ -60,7 +61,7 @@
 #include "nsIObserverService.h"
 #include "nsLayoutUtils.h"
 #include "nsPluginFrame.h"
-#include "nsSVGPathGeometryFrame.h"
+#include "SVGGeometryFrame.h"
 #include "nsTreeBodyFrame.h"
 #include "nsTreeColumns.h"
 #include "nsTreeUtils.h"
@@ -263,8 +264,7 @@ static const MarkupMapInfo sMarkupMapList[] = {
 nsAccessibilityService *nsAccessibilityService::gAccessibilityService = nullptr;
 ApplicationAccessible* nsAccessibilityService::gApplicationAccessible = nullptr;
 xpcAccessibleApplication* nsAccessibilityService::gXPCApplicationAccessible = nullptr;
-bool nsAccessibilityService::gIsShutdown = true;
-bool nsAccessibilityService::gIsPlatformCaller = false;
+uint32_t nsAccessibilityService::gConsumers = 0;
 
 nsAccessibilityService::nsAccessibilityService() :
   DocManager(), FocusManager(), mMarkupMaps(ArrayLength(sMarkupMapList))
@@ -273,7 +273,7 @@ nsAccessibilityService::nsAccessibilityService() :
 
 nsAccessibilityService::~nsAccessibilityService()
 {
-  NS_ASSERTION(gIsShutdown, "Accessibility wasn't shutdown!");
+  NS_ASSERTION(IsShutdown(), "Accessibility wasn't shutdown!");
   gAccessibilityService = nullptr;
 }
 
@@ -406,11 +406,11 @@ class PluginTimerCallBack final : public nsITimerCallback
   ~PluginTimerCallBack() {}
 
 public:
-  PluginTimerCallBack(nsIContent* aContent) : mContent(aContent) {}
+  explicit PluginTimerCallBack(nsIContent* aContent) : mContent(aContent) {}
 
   NS_DECL_ISUPPORTS
 
-  NS_IMETHODIMP Notify(nsITimer* aTimer) final
+  NS_IMETHOD Notify(nsITimer* aTimer) final
   {
     if (!mContent->IsInUncomposedDoc())
       return NS_OK;
@@ -751,163 +751,167 @@ nsAccessibilityService::GetStringRole(uint32_t aRole, nsAString& aString)
 
 void
 nsAccessibilityService::GetStringStates(uint32_t aState, uint32_t aExtraState,
-                                        nsISupports **aStringStates)
+                                        nsISupports** aStringStates)
 {
-  RefPtr<DOMStringList> stringStates = new DOMStringList();
+  RefPtr<DOMStringList> stringStates = 
+    GetStringStates(nsAccUtils::To64State(aState, aExtraState));
 
-  uint64_t state = nsAccUtils::To64State(aState, aExtraState);
-
-  // states
-  if (state & states::UNAVAILABLE) {
-    stringStates->Add(NS_LITERAL_STRING("unavailable"));
-  }
-  if (state & states::SELECTED) {
-    stringStates->Add(NS_LITERAL_STRING("selected"));
-  }
-  if (state & states::FOCUSED) {
-    stringStates->Add(NS_LITERAL_STRING("focused"));
-  }
-  if (state & states::PRESSED) {
-    stringStates->Add(NS_LITERAL_STRING("pressed"));
-  }
-  if (state & states::CHECKED) {
-    stringStates->Add(NS_LITERAL_STRING("checked"));
-  }
-  if (state & states::MIXED) {
-    stringStates->Add(NS_LITERAL_STRING("mixed"));
-  }
-  if (state & states::READONLY) {
-    stringStates->Add(NS_LITERAL_STRING("readonly"));
-  }
-  if (state & states::HOTTRACKED) {
-    stringStates->Add(NS_LITERAL_STRING("hottracked"));
-  }
-  if (state & states::DEFAULT) {
-    stringStates->Add(NS_LITERAL_STRING("default"));
-  }
-  if (state & states::EXPANDED) {
-    stringStates->Add(NS_LITERAL_STRING("expanded"));
-  }
-  if (state & states::COLLAPSED) {
-    stringStates->Add(NS_LITERAL_STRING("collapsed"));
-  }
-  if (state & states::BUSY) {
-    stringStates->Add(NS_LITERAL_STRING("busy"));
-  }
-  if (state & states::FLOATING) {
-    stringStates->Add(NS_LITERAL_STRING("floating"));
-  }
-  if (state & states::ANIMATED) {
-    stringStates->Add(NS_LITERAL_STRING("animated"));
-  }
-  if (state & states::INVISIBLE) {
-    stringStates->Add(NS_LITERAL_STRING("invisible"));
-  }
-  if (state & states::OFFSCREEN) {
-    stringStates->Add(NS_LITERAL_STRING("offscreen"));
-  }
-  if (state & states::SIZEABLE) {
-    stringStates->Add(NS_LITERAL_STRING("sizeable"));
-  }
-  if (state & states::MOVEABLE) {
-    stringStates->Add(NS_LITERAL_STRING("moveable"));
-  }
-  if (state & states::SELFVOICING) {
-    stringStates->Add(NS_LITERAL_STRING("selfvoicing"));
-  }
-  if (state & states::FOCUSABLE) {
-    stringStates->Add(NS_LITERAL_STRING("focusable"));
-  }
-  if (state & states::SELECTABLE) {
-    stringStates->Add(NS_LITERAL_STRING("selectable"));
-  }
-  if (state & states::LINKED) {
-    stringStates->Add(NS_LITERAL_STRING("linked"));
-  }
-  if (state & states::TRAVERSED) {
-    stringStates->Add(NS_LITERAL_STRING("traversed"));
-  }
-  if (state & states::MULTISELECTABLE) {
-    stringStates->Add(NS_LITERAL_STRING("multiselectable"));
-  }
-  if (state & states::EXTSELECTABLE) {
-    stringStates->Add(NS_LITERAL_STRING("extselectable"));
-  }
-  if (state & states::PROTECTED) {
-    stringStates->Add(NS_LITERAL_STRING("protected"));
-  }
-  if (state & states::HASPOPUP) {
-    stringStates->Add(NS_LITERAL_STRING("haspopup"));
-  }
-  if (state & states::REQUIRED) {
-    stringStates->Add(NS_LITERAL_STRING("required"));
-  }
-  if (state & states::ALERT) {
-    stringStates->Add(NS_LITERAL_STRING("alert"));
-  }
-  if (state & states::INVALID) {
-    stringStates->Add(NS_LITERAL_STRING("invalid"));
-  }
-  if (state & states::CHECKABLE) {
-    stringStates->Add(NS_LITERAL_STRING("checkable"));
-  }
-
-  // extraStates
-  if (state & states::SUPPORTS_AUTOCOMPLETION) {
-    stringStates->Add(NS_LITERAL_STRING("autocompletion"));
-  }
-  if (state & states::DEFUNCT) {
-    stringStates->Add(NS_LITERAL_STRING("defunct"));
-  }
-  if (state & states::SELECTABLE_TEXT) {
-    stringStates->Add(NS_LITERAL_STRING("selectable text"));
-  }
-  if (state & states::EDITABLE) {
-    stringStates->Add(NS_LITERAL_STRING("editable"));
-  }
-  if (state & states::ACTIVE) {
-    stringStates->Add(NS_LITERAL_STRING("active"));
-  }
-  if (state & states::MODAL) {
-    stringStates->Add(NS_LITERAL_STRING("modal"));
-  }
-  if (state & states::MULTI_LINE) {
-    stringStates->Add(NS_LITERAL_STRING("multi line"));
-  }
-  if (state & states::HORIZONTAL) {
-    stringStates->Add(NS_LITERAL_STRING("horizontal"));
-  }
-  if (state & states::OPAQUE1) {
-    stringStates->Add(NS_LITERAL_STRING("opaque"));
-  }
-  if (state & states::SINGLE_LINE) {
-    stringStates->Add(NS_LITERAL_STRING("single line"));
-  }
-  if (state & states::TRANSIENT) {
-    stringStates->Add(NS_LITERAL_STRING("transient"));
-  }
-  if (state & states::VERTICAL) {
-    stringStates->Add(NS_LITERAL_STRING("vertical"));
-  }
-  if (state & states::STALE) {
-    stringStates->Add(NS_LITERAL_STRING("stale"));
-  }
-  if (state & states::ENABLED) {
-    stringStates->Add(NS_LITERAL_STRING("enabled"));
-  }
-  if (state & states::SENSITIVE) {
-    stringStates->Add(NS_LITERAL_STRING("sensitive"));
-  }
-  if (state & states::EXPANDABLE) {
-    stringStates->Add(NS_LITERAL_STRING("expandable"));
-  }
-
-  //unknown states
+  // unknown state
   if (!stringStates->Length()) {
     stringStates->Add(NS_LITERAL_STRING("unknown"));
   }
 
   stringStates.forget(aStringStates);
+}
+
+already_AddRefed<DOMStringList>
+nsAccessibilityService::GetStringStates(uint64_t aStates) const
+{
+  RefPtr<DOMStringList> stringStates = new DOMStringList();
+
+  if (aStates & states::UNAVAILABLE) {
+    stringStates->Add(NS_LITERAL_STRING("unavailable"));
+  }
+  if (aStates & states::SELECTED) {
+    stringStates->Add(NS_LITERAL_STRING("selected"));
+  }
+  if (aStates & states::FOCUSED) {
+    stringStates->Add(NS_LITERAL_STRING("focused"));
+  }
+  if (aStates & states::PRESSED) {
+    stringStates->Add(NS_LITERAL_STRING("pressed"));
+  }
+  if (aStates & states::CHECKED) {
+    stringStates->Add(NS_LITERAL_STRING("checked"));
+  }
+  if (aStates & states::MIXED) {
+    stringStates->Add(NS_LITERAL_STRING("mixed"));
+  }
+  if (aStates & states::READONLY) {
+    stringStates->Add(NS_LITERAL_STRING("readonly"));
+  }
+  if (aStates & states::HOTTRACKED) {
+    stringStates->Add(NS_LITERAL_STRING("hottracked"));
+  }
+  if (aStates & states::DEFAULT) {
+    stringStates->Add(NS_LITERAL_STRING("default"));
+  }
+  if (aStates & states::EXPANDED) {
+    stringStates->Add(NS_LITERAL_STRING("expanded"));
+  }
+  if (aStates & states::COLLAPSED) {
+    stringStates->Add(NS_LITERAL_STRING("collapsed"));
+  }
+  if (aStates & states::BUSY) {
+    stringStates->Add(NS_LITERAL_STRING("busy"));
+  }
+  if (aStates & states::FLOATING) {
+    stringStates->Add(NS_LITERAL_STRING("floating"));
+  }
+  if (aStates & states::ANIMATED) {
+    stringStates->Add(NS_LITERAL_STRING("animated"));
+  }
+  if (aStates & states::INVISIBLE) {
+    stringStates->Add(NS_LITERAL_STRING("invisible"));
+  }
+  if (aStates & states::OFFSCREEN) {
+    stringStates->Add(NS_LITERAL_STRING("offscreen"));
+  }
+  if (aStates & states::SIZEABLE) {
+    stringStates->Add(NS_LITERAL_STRING("sizeable"));
+  }
+  if (aStates & states::MOVEABLE) {
+    stringStates->Add(NS_LITERAL_STRING("moveable"));
+  }
+  if (aStates & states::SELFVOICING) {
+    stringStates->Add(NS_LITERAL_STRING("selfvoicing"));
+  }
+  if (aStates & states::FOCUSABLE) {
+    stringStates->Add(NS_LITERAL_STRING("focusable"));
+  }
+  if (aStates & states::SELECTABLE) {
+    stringStates->Add(NS_LITERAL_STRING("selectable"));
+  }
+  if (aStates & states::LINKED) {
+    stringStates->Add(NS_LITERAL_STRING("linked"));
+  }
+  if (aStates & states::TRAVERSED) {
+    stringStates->Add(NS_LITERAL_STRING("traversed"));
+  }
+  if (aStates & states::MULTISELECTABLE) {
+    stringStates->Add(NS_LITERAL_STRING("multiselectable"));
+  }
+  if (aStates & states::EXTSELECTABLE) {
+    stringStates->Add(NS_LITERAL_STRING("extselectable"));
+  }
+  if (aStates & states::PROTECTED) {
+    stringStates->Add(NS_LITERAL_STRING("protected"));
+  }
+  if (aStates & states::HASPOPUP) {
+    stringStates->Add(NS_LITERAL_STRING("haspopup"));
+  }
+  if (aStates & states::REQUIRED) {
+    stringStates->Add(NS_LITERAL_STRING("required"));
+  }
+  if (aStates & states::ALERT) {
+    stringStates->Add(NS_LITERAL_STRING("alert"));
+  }
+  if (aStates & states::INVALID) {
+    stringStates->Add(NS_LITERAL_STRING("invalid"));
+  }
+  if (aStates & states::CHECKABLE) {
+    stringStates->Add(NS_LITERAL_STRING("checkable"));
+  }
+  if (aStates & states::SUPPORTS_AUTOCOMPLETION) {
+    stringStates->Add(NS_LITERAL_STRING("autocompletion"));
+  }
+  if (aStates & states::DEFUNCT) {
+    stringStates->Add(NS_LITERAL_STRING("defunct"));
+  }
+  if (aStates & states::SELECTABLE_TEXT) {
+    stringStates->Add(NS_LITERAL_STRING("selectable text"));
+  }
+  if (aStates & states::EDITABLE) {
+    stringStates->Add(NS_LITERAL_STRING("editable"));
+  }
+  if (aStates & states::ACTIVE) {
+    stringStates->Add(NS_LITERAL_STRING("active"));
+  }
+  if (aStates & states::MODAL) {
+    stringStates->Add(NS_LITERAL_STRING("modal"));
+  }
+  if (aStates & states::MULTI_LINE) {
+    stringStates->Add(NS_LITERAL_STRING("multi line"));
+  }
+  if (aStates & states::HORIZONTAL) {
+    stringStates->Add(NS_LITERAL_STRING("horizontal"));
+  }
+  if (aStates & states::OPAQUE1) {
+    stringStates->Add(NS_LITERAL_STRING("opaque"));
+  }
+  if (aStates & states::SINGLE_LINE) {
+    stringStates->Add(NS_LITERAL_STRING("single line"));
+  }
+  if (aStates & states::TRANSIENT) {
+    stringStates->Add(NS_LITERAL_STRING("transient"));
+  }
+  if (aStates & states::VERTICAL) {
+    stringStates->Add(NS_LITERAL_STRING("vertical"));
+  }
+  if (aStates & states::STALE) {
+    stringStates->Add(NS_LITERAL_STRING("stale"));
+  }
+  if (aStates & states::ENABLED) {
+    stringStates->Add(NS_LITERAL_STRING("enabled"));
+  }
+  if (aStates & states::SENSITIVE) {
+    stringStates->Add(NS_LITERAL_STRING("sensitive"));
+  }
+  if (aStates & states::EXPANDABLE) {
+    stringStates->Add(NS_LITERAL_STRING("expandable"));
+  }
+
+  return stringStates.forget();
 }
 
 void
@@ -957,7 +961,7 @@ nsAccessibilityService::CreateAccessible(nsINode* aNode,
 {
   MOZ_ASSERT(aContext, "No context provided");
   MOZ_ASSERT(aNode, "No node to create an accessible for");
-  MOZ_ASSERT(!gIsShutdown, "No creation after shutdown");
+  MOZ_ASSERT(gConsumers, "No creation after shutdown");
 
   if (aIsSubtreeHidden)
     *aIsSubtreeHidden = false;
@@ -1169,8 +1173,8 @@ nsAccessibilityService::CreateAccessible(nsINode* aNode,
 
   if (!newAcc) {
     if (content->IsSVGElement()) {
-      nsSVGPathGeometryFrame* pathGeometryFrame = do_QueryFrame(frame);
-      if (pathGeometryFrame) {
+      SVGGeometryFrame* geometryFrame = do_QueryFrame(frame);
+      if (geometryFrame) {
         // A graphic elements: rect, circle, ellipse, line, path, polygon,
         // polyline and image. A 'use' and 'text' graphic elements require
         // special support.
@@ -1265,10 +1269,23 @@ nsAccessibilityService::Init()
   gAccessibilityService = this;
   NS_ADDREF(gAccessibilityService); // will release in Shutdown()
 
-  if (XRE_IsParentProcess())
+  if (XRE_IsParentProcess()) {
     gApplicationAccessible = new ApplicationAccessibleWrap();
-  else
+  } else {
+#if defined(XP_WIN)
+    dom::ContentChild* contentChild = dom::ContentChild::GetSingleton();
+    MOZ_ASSERT(contentChild);
+    // If we were instantiated by the chrome process, GetMsaaID() will return
+    // a non-zero value and we may safely continue with initialization.
+    if (!contentChild->GetMsaaID()) {
+      // Since we were not instantiated by chrome, we need to synchronously
+      // obtain a MSAA content process id.
+      contentChild->SendGetA11yContentId();
+    }
+#endif // defined(XP_WIN)
+
     gApplicationAccessible = new ApplicationAccessible();
+  }
 
   NS_ADDREF(gApplicationAccessible); // will release in Shutdown()
   gApplicationAccessible->Init();
@@ -1284,11 +1301,11 @@ nsAccessibilityService::Init()
   sPluginTimers = new nsTArray<nsCOMPtr<nsITimer> >;
 #endif
 
-  gIsShutdown = false;
-
   // Now its safe to start platform accessibility.
   if (XRE_IsParentProcess())
     PlatformInit();
+
+  statistics::A11yInitialized();
 
   return true;
 }
@@ -1301,9 +1318,9 @@ nsAccessibilityService::Shutdown()
   // Don't null accessibility service static member at this point to be safe
   // if someone will try to operate with it.
 
-  MOZ_ASSERT(!gIsShutdown, "Accessibility was shutdown already");
+  MOZ_ASSERT(gConsumers, "Accessibility was shutdown already");
 
-  gIsShutdown = true;
+  gConsumers = 0;
 
   // Remove observers.
   nsCOMPtr<nsIObserverService> observerService =
@@ -1342,7 +1359,6 @@ nsAccessibilityService::Shutdown()
 
   NS_RELEASE(gAccessibilityService);
   gAccessibilityService = nullptr;
-  gIsPlatformCaller = false;
 }
 
 already_AddRefed<Accessible>
@@ -1776,12 +1792,8 @@ nsAccessibilityService::CreateAccessibleForXULTree(nsIContent* aContent,
 #endif
 
 nsAccessibilityService*
-GetOrCreateAccService(bool aIsPlatformCaller)
+GetOrCreateAccService(uint32_t aNewConsumer)
 {
-  if (aIsPlatformCaller) {
-    nsAccessibilityService::gIsPlatformCaller = aIsPlatformCaller;
-  }
-
   if (!nsAccessibilityService::gAccessibilityService) {
     RefPtr<nsAccessibilityService> service = new nsAccessibilityService();
     if (!service->Init()) {
@@ -1792,19 +1804,35 @@ GetOrCreateAccService(bool aIsPlatformCaller)
 
   MOZ_ASSERT(nsAccessibilityService::gAccessibilityService,
              "Accessible service is not initialized.");
+  nsAccessibilityService::gConsumers |= aNewConsumer;
   return nsAccessibilityService::gAccessibilityService;
 }
 
-bool
-CanShutdownAccService()
+void
+MaybeShutdownAccService(uint32_t aFormerConsumer)
 {
-  nsAccessibilityService* accService = nsAccessibilityService::gAccessibilityService;
-  if (!accService) {
-    return false;
+  nsAccessibilityService* accService =
+    nsAccessibilityService::gAccessibilityService;
+
+  if (!accService || accService->IsShutdown()) {
+    return;
   }
-  return !xpcAccessibilityService::IsInUse() &&
-         !accService->IsPlatformCaller() && !accService->IsShutdown() &&
-         !nsCoreUtils::AccEventObserversExist();
+
+  if (nsCoreUtils::AccEventObserversExist() ||
+      xpcAccessibilityService::IsInUse() ||
+      accService->HasXPCDocuments()) {
+    // Still used by XPCOM
+    nsAccessibilityService::gConsumers =
+      (nsAccessibilityService::gConsumers & ~aFormerConsumer) |
+      nsAccessibilityService::eXPCOM;
+    return;
+  }
+
+  if (nsAccessibilityService::gConsumers & ~aFormerConsumer) {
+    nsAccessibilityService::gConsumers &= ~aFormerConsumer;
+  } else {
+    accService->Shutdown(); // Will unset all nsAccessibilityService::gConsumers
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

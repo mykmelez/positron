@@ -7,12 +7,12 @@
 
 #include "TextureD3D11.h"
 #include "CompositorD3D11Shaders.h"
-#include "CompositorD3D11ShadersVR.h"
 
 #include "gfxWindowsPlatform.h"
 #include "nsIWidget.h"
-#include "nsIGfxInfo.h"
-#include "mozilla/gfx/DeviceManagerD3D11.h"
+#include "mozilla/gfx/D3D11Checks.h"
+#include "mozilla/gfx/DeviceManagerDx.h"
+#include "mozilla/gfx/GPUParent.h"
 #include "mozilla/layers/ImageHost.h"
 #include "mozilla/layers/ContentHost.h"
 #include "mozilla/layers/Effects.h"
@@ -20,7 +20,7 @@
 #include "gfxPrefs.h"
 #include "gfxConfig.h"
 #include "gfxCrashReporterUtils.h"
-#include "gfxVR.h"
+#include "gfxUtils.h"
 #include "mozilla/gfx/StackArray.h"
 #include "mozilla/Services.h"
 #include "mozilla/widget/WinCompositorWidget.h"
@@ -29,6 +29,9 @@
 #include "mozilla/Telemetry.h"
 #include "BlendShaderConstants.h"
 
+#include "D3D11ShareHandleImage.h"
+#include "D3D9SurfaceImage.h"
+
 #include <dxgi1_2.h>
 
 namespace mozilla {
@@ -36,6 +39,8 @@ namespace mozilla {
 using namespace gfx;
 
 namespace layers {
+
+static bool CanUsePartialPresents(ID3D11Device* aDevice);
 
 struct Vertex
 {
@@ -63,7 +68,7 @@ namespace TexSlot {
 
 struct DeviceAttachmentsD3D11
 {
-  DeviceAttachmentsD3D11(ID3D11Device* device)
+  explicit DeviceAttachmentsD3D11(ID3D11Device* device)
    : mSyncHandle(0),
      mDevice(device),
      mInitOkay(true)
@@ -100,29 +105,6 @@ struct DeviceAttachmentsD3D11
   RefPtr<ID3D11BlendState> mDisabledBlendState;
   RefPtr<IDXGIResource> mSyncTexture;
   HANDLE mSyncHandle;
-
-  //
-  // VR pieces
-  //
-  typedef EnumeratedArray<VRHMDType, VRHMDType::NumHMDTypes, RefPtr<ID3D11InputLayout>>
-          VRDistortionInputLayoutArray;
-  typedef EnumeratedArray<VRHMDType, VRHMDType::NumHMDTypes, RefPtr<ID3D11VertexShader>>
-          VRVertexShaderArray;
-  typedef EnumeratedArray<VRHMDType, VRHMDType::NumHMDTypes, RefPtr<ID3D11PixelShader>>
-          VRPixelShaderArray;
-
-  VRDistortionInputLayoutArray mVRDistortionInputLayout;
-  VRVertexShaderArray mVRDistortionVS;
-  VRPixelShaderArray mVRDistortionPS;
-
-  RefPtr<ID3D11Buffer> mVRDistortionConstants;
-
-  // These will be created/filled in as needed during rendering whenever the configuration
-  // changes.
-  VRHMDConfiguration mVRConfiguration;
-  RefPtr<ID3D11Buffer> mVRDistortionVertices[2]; // one for each eye
-  RefPtr<ID3D11Buffer> mVRDistortionIndices[2];
-  uint32_t mVRDistortionIndexCount[2];
 
 private:
   void InitVertexShader(const ShaderBytes& aShader, VertexShaderArray& aArray, MaskType aMaskType) {
@@ -166,6 +148,7 @@ CompositorD3D11::CompositorD3D11(CompositorBridgeParent* aParent, widget::Compos
   , mAttachments(nullptr)
   , mHwnd(nullptr)
   , mDisableSequenceForNextFrame(false)
+  , mAllowPartialPresents(false)
   , mVerifyBuffersFailed(false)
 {
 }
@@ -200,18 +183,16 @@ CompositorD3D11::Initialize(nsCString* const out_failureReason)
 {
   ScopedGfxFeatureReporter reporter("D3D11 Layers");
 
-  MOZ_ASSERT(gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING));
-
   HRESULT hr;
 
-  mDevice = DeviceManagerD3D11::Get()->GetCompositorDevice();
+  mDevice = DeviceManagerDx::Get()->GetCompositorDevice();
   if (!mDevice) {
+    gfxCriticalNote << "[D3D11] failed to get compositor device.";
     *out_failureReason = "FEATURE_FAILURE_D3D11_NO_DEVICE";
     return false;
   }
 
   mDevice->GetImmediateContext(getter_AddRefs(mContext));
-
   if (!mContext) {
     gfxCriticalNote << "[D3D11] failed to get immediate context";
     *out_failureReason = "FEATURE_FAILURE_D3D11_CONTEXT";
@@ -380,35 +361,6 @@ CompositorD3D11::Initialize(nsCString* const out_failureReason)
       *out_failureReason = "FEATURE_FAILURE_D3D11_OBJ_SYNC";
       return false;
     }
-
-    //
-    // VR additions
-    //
-    D3D11_INPUT_ELEMENT_DESC vrlayout[] =
-    {
-      { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,       0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-      { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-      { "TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT,       0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-      { "TEXCOORD", 2, DXGI_FORMAT_R32G32_FLOAT,       0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-      { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    };
-
-    hr = mDevice->CreateInputLayout(vrlayout,
-                                    sizeof(vrlayout) / sizeof(D3D11_INPUT_ELEMENT_DESC),
-                                    Oculus050VRDistortionVS,
-                                    sizeof(Oculus050VRDistortionVS),
-                                    getter_AddRefs(mAttachments->mVRDistortionInputLayout[VRHMDType::Oculus050]));
-
-    // XXX shared for now, rename
-    mAttachments->mVRDistortionInputLayout[VRHMDType::Cardboard] =
-      mAttachments->mVRDistortionInputLayout[VRHMDType::Oculus050];
-
-    cBufferDesc.ByteWidth = sizeof(gfx::VRDistortionConstants);
-    hr = mDevice->CreateBuffer(&cBufferDesc, nullptr, getter_AddRefs(mAttachments->mVRDistortionConstants));
-    if (Failed(hr, "create vr buffer ")) {
-      *out_failureReason = "FEATURE_FAILURE_D3D11_VR_BUFFER";
-      return false;
-    }
   }
 
   RefPtr<IDXGIDevice> dxgiDevice;
@@ -459,7 +411,34 @@ CompositorD3D11::Initialize(nsCString* const out_failureReason)
     return false;
   }
 
+  mAllowPartialPresents = CanUsePartialPresents(mDevice);
+
   reporter.SetSuccessful();
+  return true;
+}
+
+static bool
+CanUsePartialPresents(ID3D11Device* aDevice)
+{
+  if (gfxPrefs::PartialPresent() > 0) {
+    return true;
+  }
+  if (gfxPrefs::PartialPresent() < 0) {
+    return false;
+  }
+  if (DeviceManagerDx::Get()->IsWARP()) {
+    return true;
+  }
+
+  DXGI_ADAPTER_DESC desc;
+  if (!D3D11Checks::GetDxgiDesc(aDevice, &desc)) {
+    return false;
+  }
+
+  // We have to disable partial presents on NVIDIA (bug 1189940).
+  if (desc.VendorId == 0x10de) {
+    return false;
+  }
 
   return true;
 }
@@ -477,7 +456,7 @@ CompositorD3D11::GetTextureFactoryIdentifier()
 {
   TextureFactoryIdentifier ident;
   ident.mMaxTextureSize = GetMaxTextureSize();
-  ident.mParentProcessId = XRE_GetProcessType();
+  ident.mParentProcessType = XRE_GetProcessType();
   ident.mParentBackend = LayersBackend::LAYERS_D3D11;
   ident.mSyncHandle = mAttachments->mSyncHandle;
   return ident;
@@ -715,151 +694,6 @@ CompositorD3D11::ClearRect(const gfx::Rect& aRect)
   mContext->OMSetBlendState(mAttachments->mPremulBlendState, sBlendFactor, 0xFFFFFFFF);
 }
 
-void
-CompositorD3D11::DrawVRDistortion(const gfx::Rect& aRect,
-                                  const gfx::IntRect& aClipRect,
-                                  const EffectChain& aEffectChain,
-                                  gfx::Float aOpacity,
-                                  const gfx::Matrix4x4& aTransform)
-{
-  MOZ_ASSERT(aEffectChain.mPrimaryEffect->mType == EffectTypes::VR_DISTORTION);
-
-  if (aEffectChain.mSecondaryEffects[EffectTypes::MASK] ||
-      aEffectChain.mSecondaryEffects[EffectTypes::BLEND_MODE])
-  {
-    NS_WARNING("DrawVRDistortion: ignoring secondary effect!");
-  }
-
-  HRESULT hr;
-
-  EffectVRDistortion* vrEffect =
-    static_cast<EffectVRDistortion*>(aEffectChain.mPrimaryEffect.get());
-
-  TextureSourceD3D11* source = vrEffect->mTexture->AsSourceD3D11();
-
-  VRHMDInfo* hmdInfo = vrEffect->mHMD;
-  VRHMDType hmdType = hmdInfo->GetDeviceInfo().GetType();
-
-  if (!mAttachments->mVRDistortionVS[hmdType] ||
-      !mAttachments->mVRDistortionPS[hmdType])
-  {
-    NS_WARNING("No VS/PS for hmd type for VR distortion!");
-    return;
-  }
-
-  VRDistortionConstants shaderConstants;
-
-  // do we need to recreate the VR buffers, since the config has changed?
-  if (hmdInfo->GetConfiguration() != mAttachments->mVRConfiguration) {
-    D3D11_SUBRESOURCE_DATA sdata = { 0 };
-    CD3D11_BUFFER_DESC desc(0, D3D11_BIND_VERTEX_BUFFER, D3D11_USAGE_IMMUTABLE);
-
-    // XXX as an optimization, we should really pack the indices and vertices for both eyes
-    // into one buffer instead of needing one eye each.  Then we can just bind them once.
-    for (uint32_t eye = 0; eye < 2; eye++) {
-      const gfx::VRDistortionMesh& mesh = hmdInfo->GetDistortionMesh(eye);
-
-      desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-      desc.ByteWidth = mesh.mVertices.Length() * sizeof(gfx::VRDistortionVertex);
-      sdata.pSysMem = mesh.mVertices.Elements();
-      
-      hr = mDevice->CreateBuffer(&desc, &sdata, getter_AddRefs(mAttachments->mVRDistortionVertices[eye]));
-      if (FAILED(hr)) {
-        NS_WARNING("CreateBuffer failed");
-        return;
-      }
-
-      desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-      desc.ByteWidth = mesh.mIndices.Length() * sizeof(uint16_t);
-      sdata.pSysMem = mesh.mIndices.Elements();
-
-      hr = mDevice->CreateBuffer(&desc, &sdata, getter_AddRefs(mAttachments->mVRDistortionIndices[eye]));
-      if (FAILED(hr)) {
-        NS_WARNING("CreateBuffer failed");
-        return;
-      }
-
-      mAttachments->mVRDistortionIndexCount[eye] = mesh.mIndices.Length();
-    }
-
-    mAttachments->mVRConfiguration = hmdInfo->GetConfiguration();
-  }
-
-  // XXX do I need to set a scissor rect? Is this the right scissor rect?
-  D3D11_RECT scissor;
-  scissor.left = aClipRect.x;
-  scissor.right = aClipRect.XMost();
-  scissor.top = aClipRect.y;
-  scissor.bottom = aClipRect.YMost();
-  mContext->RSSetScissorRects(1, &scissor);
-
-  // Triangle lists and same layout for both eyes
-  mContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-  mContext->IASetInputLayout(mAttachments->mVRDistortionInputLayout[hmdType]);
-  mContext->VSSetShader(mAttachments->mVRDistortionVS[hmdType], nullptr, 0);
-  mContext->PSSetShader(mAttachments->mVRDistortionPS[hmdType], nullptr, 0);
-
-  // This is the source texture SRV for the pixel shader
-  ID3D11ShaderResourceView* srView = source->GetShaderResourceView();
-  mContext->PSSetShaderResources(0, 1, &srView);
-
-  Rect destRect = aTransform.TransformBounds(aRect);
-  gfx::IntSize preDistortionSize = vrEffect->mRenderTarget->GetSize(); // XXX source->GetSize()
-  gfx::Size vpSize = destRect.Size();
-
-  ID3D11Buffer* vbuffer;
-  UINT vsize, voffset;
-
-  for (uint32_t eye = 0; eye < 2; eye++) {
-    gfx::IntRect eyeViewport;
-    eyeViewport.x = eye * preDistortionSize.width / 2;
-    eyeViewport.y = 0;
-    eyeViewport.width = preDistortionSize.width / 2;
-    eyeViewport.height = preDistortionSize.height;
-
-    hmdInfo->FillDistortionConstants(eye,
-                                     preDistortionSize, eyeViewport,
-                                     vpSize, destRect,
-                                     shaderConstants);
-
-    // D3D has clip space top-left as -1,1 so we need to flip the Y coordinate offset here
-    shaderConstants.destinationScaleAndOffset[1] = - shaderConstants.destinationScaleAndOffset[1];
-
-    // XXX I really want to write a templated helper for these next 4 lines
-    D3D11_MAPPED_SUBRESOURCE resource;
-    hr = mContext->Map(mAttachments->mVRDistortionConstants, 0, D3D11_MAP_WRITE_DISCARD, 0, &resource);
-    if (FAILED(hr) || !resource.pData) {
-      gfxCriticalError() << "Failed to map VRDistortionConstants. Result: " << hr;
-      HandleError(hr);
-      return;
-    }
-    *(gfx::VRDistortionConstants*)resource.pData = shaderConstants;
-    mContext->Unmap(mAttachments->mVRDistortionConstants, 0);
-    resource.pData = nullptr;
-
-    // XXX is there a better way to change a bunch of these things from what they were set to
-    // in BeginFrame/etc?
-    vbuffer = mAttachments->mVRDistortionVertices[eye];
-    vsize = sizeof(gfx::VRDistortionVertex);
-    voffset = 0;
-    mContext->IASetVertexBuffers(0, 1, &vbuffer, &vsize, &voffset);
-    mContext->IASetIndexBuffer(mAttachments->mVRDistortionIndices[eye], DXGI_FORMAT_R16_UINT, 0);
-
-    ID3D11Buffer* constBuf = mAttachments->mVRDistortionConstants;
-    mContext->VSSetConstantBuffers(0, 1, &constBuf);
-
-    mContext->DrawIndexed(mAttachments->mVRDistortionIndexCount[eye], 0, 0);
-  }
-
-  // restore previous configurations
-  vbuffer = mAttachments->mVertexBuffer;
-  vsize = sizeof(Vertex);
-  voffset = 0;
-  mContext->IASetVertexBuffers(0, 1, &vbuffer, &vsize, &voffset);
-  mContext->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
-  mContext->IASetInputLayout(mAttachments->mInputLayout);
-}
-
 static inline bool
 EffectHasPremultipliedAlpha(Effect* aEffect)
 {
@@ -904,11 +738,6 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
   }
 
   MOZ_ASSERT(mCurrentRT, "No render target");
-
-  if (aEffectChain.mPrimaryEffect->mType == EffectTypes::VR_DISTORTION) {
-    DrawVRDistortion(aRect, aClipRect, aEffectChain, aOpacity, aTransform);
-    return;
-  }
 
   memcpy(&mVSConstants.layerTransform, &aTransform._11, 64);
   IntPoint origin = mCurrentRT->GetOrigin();
@@ -1060,6 +889,9 @@ CompositorD3D11::DrawQuad(const gfx::Rect& aRect,
         return;
       }
 
+      float* yuvToRgb = gfxUtils::Get4x3YuvColorMatrix(ycbcrEffect->mYUVColorSpace);
+      memcpy(&mPSConstants.yuvColorMatrix, yuvToRgb, sizeof(mPSConstants.yuvColorMatrix));
+
       TextureSourceD3D11* sourceY  = source->GetSubSource(Y)->AsSourceD3D11();
       TextureSourceD3D11* sourceCb = source->GetSubSource(Cb)->AsSourceD3D11();
       TextureSourceD3D11* sourceCr = source->GetSubSource(Cr)->AsSourceD3D11();
@@ -1147,8 +979,25 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
   // this is important because resizing our buffers when mimised will fail and
   // cause a crash when we're restored.
   NS_ASSERTION(mHwnd, "Couldn't find an HWND when initialising?");
-  if (::IsIconic(mHwnd) || mDevice->GetDeviceRemovedReason() != S_OK) {
+  if (::IsIconic(mHwnd)) {
+    // We are not going to render, and not going to call EndFrame so we have to
+    // read-unlock our textures to prevent them from accumulating.
+    ReadUnlockTextures();
     *aRenderBoundsOut = IntRect();
+    return;
+  }
+
+  if (mDevice->GetDeviceRemovedReason() != S_OK) {
+    gfxCriticalNote << "GFX: D3D11 skip BeginFrame with device-removed.";
+    ReadUnlockTextures();
+    *aRenderBoundsOut = IntRect();
+
+    // If we are in the GPU process then the main process doesn't
+    // know that a device reset has happened and needs to be informed
+    if (XRE_IsGPUProcess()) {
+      GPUParent::GetSingleton()->NotifyDeviceReset();
+    }
+
     return;
   }
 
@@ -1157,6 +1006,7 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
   // Failed to create a render target or the view.
   if (!UpdateRenderTarget() || !mDefaultRT || !mDefaultRT->mRTView ||
       mSize.width <= 0 || mSize.height <= 0) {
+    ReadUnlockTextures();
     *aRenderBoundsOut = IntRect();
     return;
   }
@@ -1179,6 +1029,7 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
   }
 
   if (clipRect.IsEmpty()) {
+    CancelFrame();
     *aRenderBoundsOut = IntRect();
     return;
   }
@@ -1214,24 +1065,25 @@ CompositorD3D11::BeginFrame(const nsIntRegion& aInvalidRegion,
     mAttachments->mSyncTexture->QueryInterface((IDXGIKeyedMutex**)getter_AddRefs(mutex));
 
     MOZ_ASSERT(mutex);
-    HRESULT hr = mutex->AcquireSync(0, 10000);
-    if (hr == WAIT_TIMEOUT) {
-      hr = mDevice->GetDeviceRemovedReason();
-      if (hr == S_OK) {
-        // There is no driver-removed event. Crash with this timeout.
-        MOZ_CRASH("GFX: D3D11 normal status timeout");
+    {
+      HRESULT hr;
+      AutoTextureLock lock(mutex, hr, 10000);
+      if (hr == WAIT_TIMEOUT) {
+        hr = mDevice->GetDeviceRemovedReason();
+        if (hr == S_OK) {
+          // There is no driver-removed event. Crash with this timeout.
+          MOZ_CRASH("GFX: D3D11 normal status timeout");
+        }
+
+        // Since the timeout is related to the driver-removed, clear the
+        // render-bounding size to skip this frame.
+        gfxCriticalNote << "GFX: D3D11 timeout with device-removed:" << gfx::hexa(hr);
+        *aRenderBoundsOut = IntRect();
+        return;
+      } else if (hr == WAIT_ABANDONED) {
+        gfxCriticalNote << "GFX: D3D11 abandoned sync";
       }
-
-      // Since the timeout is related to the driver-removed, clear the
-      // render-bounding size to skip this frame.
-      gfxCriticalNote << "GFX: D3D11 timeout with device-removed:" << gfx::hexa(hr);
-      *aRenderBoundsOut = IntRect();
-      return;
-    } else if (hr == WAIT_ABANDONED) {
-      gfxCriticalNote << "GFX: D3D11 abandoned sync";
     }
-
-    mutex->ReleaseSync(0);
   }
 }
 
@@ -1240,6 +1092,13 @@ CompositorD3D11::EndFrame()
 {
   if (!mDefaultRT) {
     Compositor::EndFrame();
+    return;
+  }
+
+  if (mDevice->GetDeviceRemovedReason() != S_OK) {
+    gfxCriticalNote << "GFX: D3D11 skip EndFrame with device-removed.";
+    Compositor::EndFrame();
+    mCurrentRT = nullptr;
     return;
   }
 
@@ -1259,7 +1118,7 @@ CompositorD3D11::EndFrame()
 
   UINT presentInterval = 0;
 
-  bool isWARP = DeviceManagerD3D11::Get()->IsWARP();
+  bool isWARP = DeviceManagerDx::Get()->IsWARP();
   if (isWARP) {
     // When we're using WARP we cannot present immediately as it causes us
     // to tear when rendering. When not using WARP it appears the DWM takes
@@ -1270,23 +1129,8 @@ CompositorD3D11::EndFrame()
   if (oldSize == mSize) {
     RefPtr<IDXGISwapChain1> chain;
     HRESULT hr = mSwapChain->QueryInterface((IDXGISwapChain1**)getter_AddRefs(chain));
-    // We can force partial present or block partial present, based on the value of
-    // this preference; the default is to disable it on Nvidia (bug 1189940)
-    bool allowPartialPresent = false;
 
-    int32_t partialPresentPref = gfxPrefs::PartialPresent();
-    if (partialPresentPref > 0) {
-      allowPartialPresent = true;
-    } else if (partialPresentPref < 0) {
-      allowPartialPresent = false;
-    } else if (partialPresentPref == 0) {
-      nsString vendorID;
-      nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-      gfxInfo->GetAdapterVendorID(vendorID);
-      allowPartialPresent = !vendorID.EqualsLiteral("0x10de") || isWARP;
-    }
-
-    if (SUCCEEDED(hr) && chain && allowPartialPresent) {
+    if (SUCCEEDED(hr) && chain && mAllowPartialPresents) {
       DXGI_PRESENT_PARAMETERS params;
       PodZero(&params);
       params.DirtyRectsCount = mInvalidRegion.GetNumRects();
@@ -1337,6 +1181,15 @@ CompositorD3D11::EndFrame()
   Compositor::EndFrame();
 
   mCurrentRT = nullptr;
+}
+
+void
+CompositorD3D11::CancelFrame()
+{
+  ReadUnlockTextures();
+  // Flush the context, otherwise the driver might hold some resources alive
+  // until the next flush or present.
+  mContext->Flush();
 }
 
 void
@@ -1509,7 +1362,7 @@ bool
 DeviceAttachmentsD3D11::InitSyncObject()
 {
   // Sync object is not supported on WARP.
-  if (DeviceManagerD3D11::Get()->IsWARP()) {
+  if (DeviceManagerDx::Get()->IsWARP()) {
     return true;
   }
 
@@ -1576,13 +1429,6 @@ DeviceAttachmentsD3D11::CreateShaders()
     InitPixelShader(sComponentAlphaShaderMask, mComponentAlphaShader, MaskType::Mask);
   }
 
-  InitVertexShader(sOculus050VRDistortionVS, getter_AddRefs(mVRDistortionVS[VRHMDType::Oculus050]));
-  InitPixelShader(sOculus050VRDistortionPS, getter_AddRefs(mVRDistortionPS[VRHMDType::Oculus050]));
-
-  // These are shared
-  // XXX rename Oculus050 shaders to something more generic
-  mVRDistortionVS[VRHMDType::Cardboard] = mVRDistortionVS[VRHMDType::Oculus050];
-  mVRDistortionPS[VRHMDType::Cardboard] = mVRDistortionPS[VRHMDType::Oculus050];
   return mInitOkay;
 }
 
@@ -1711,8 +1557,8 @@ CompositorD3D11::HandleError(HRESULT hr, Severity aSeverity)
     MOZ_CRASH("GFX: Unrecoverable D3D11 error");
   }
 
-  if (mDevice && DeviceManagerD3D11::Get()->GetCompositorDevice() != mDevice) {
-    gfxCriticalError() << "Out of sync D3D11 devices in HandleError, " << (int)mVerifyBuffersFailed;
+  if (mDevice && DeviceManagerDx::Get()->GetCompositorDevice() != mDevice) {
+    gfxCriticalNote << "Out of sync D3D11 devices in HandleError, " << (int)mVerifyBuffersFailed;
   }
 
   HRESULT hrOnReset = S_OK;

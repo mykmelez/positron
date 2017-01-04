@@ -58,7 +58,6 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/ShadowRoot.h"
-#include "mozilla/ServoStyleSet.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -96,7 +95,9 @@ static const JSClassOps gPrototypeJSClassOps = {
 
 static const JSClass gPrototypeJSClass = {
     "XBL prototype JSClass",
-    JSCLASS_HAS_PRIVATE | JSCLASS_PRIVATE_IS_NSISUPPORTS |
+    JSCLASS_HAS_PRIVATE |
+    JSCLASS_PRIVATE_IS_NSISUPPORTS |
+    JSCLASS_FOREGROUND_FINALIZE |
     // Our one reserved slot holds the relevant nsXBLPrototypeBinding
     JSCLASS_HAS_RESERVED_SLOTS(1),
     &gPrototypeJSClassOps
@@ -204,10 +205,6 @@ nsXBLBinding::InstallAnonymousContent(nsIContent* aAnonParent, nsIContent* aElem
   // (2) The children's parent back pointer should not be to this synthetic root
   // but should instead point to the enclosing parent element.
   nsIDocument* doc = aElement->GetUncomposedDoc();
-  ServoStyleSet* servoStyleSet = nullptr;
-  if (nsIPresShell* presShell = aElement->OwnerDoc()->GetShell()) {
-    servoStyleSet = presShell->StyleSet()->GetAsServo();
-  }
   bool allowScripts = AllowScripts();
 
   nsAutoScriptBlocker scriptBlocker;
@@ -238,10 +235,6 @@ nsXBLBinding::InstallAnonymousContent(nsIContent* aAnonParent, nsIContent* aElem
     if (xuldoc)
       xuldoc->AddSubtreeToDocument(child);
 #endif
-
-    if (servoStyleSet) {
-      servoStyleSet->RestyleSubtree(child);
-    }
   }
 }
 
@@ -426,6 +419,18 @@ nsXBLBinding::GenerateAnonymousContent()
     if (mContent)
       mContent->UnsetAttr(namespaceID, name, false);
   }
+}
+
+nsIURI*
+nsXBLBinding::GetSourceDocURI()
+{
+  nsIContent* targetContent =
+    mPrototypeBinding->GetImmediateChild(nsGkAtoms::content);
+  if (!targetContent) {
+    return nullptr;
+  }
+
+  return targetContent->OwnerDoc()->GetDocumentURI();
 }
 
 XBLChildrenElement*

@@ -111,7 +111,8 @@ addMessageListener("dir.open", function (e) {
   }
 
   sendAsyncMessage("dir.opened", {
-    dir: testFile.path
+    dir: testFile.path,
+    name: testFile.leafName
   });
 });
 
@@ -123,6 +124,6 @@ addMessageListener("file.open", function (e) {
   testFile.append("prefs.js");
 
   sendAsyncMessage("file.opened", {
-    file: new File(testFile)
+    file: File.createFromNsIFile(testFile)
   });
 });

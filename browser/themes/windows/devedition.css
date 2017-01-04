@@ -19,7 +19,7 @@
    (Win XP or 7 in classic / basic theme), or else dragging and focus become
    broken. So instead just show the normal titlebar in that case, and override
    the window color as transparent when the compositor is available. */
-@media not all and (-moz-windows-compositor) {
+@media (-moz-windows-compositor: 0) {
   #main-window[tabsintitlebar] #titlebar:-moz-lwtheme {
     visibility: visible;
   }
@@ -104,14 +104,14 @@
 :root[devtoolstheme="dark"] #sidebar-header > .close-icon,
 /* Tab styling - make sure to use an inverted icon for the selected tab
    (brighttext only covers the unselected tabs) */
-.tab-close-button[visuallyselected=true] {
+.tab-close-button[selected=true] {
   list-style-image: url("chrome://global/skin/icons/close-inverted.png");
 }
 
 @media (min-resolution: 1.1dppx) {
   :root[devtoolstheme="dark"] .findbar-closebutton,
   :root[devtoolstheme="dark"] #sidebar-header > .close-icon,
-  .tab-close-button[visuallyselected=true] {
+  .tab-close-button[selected=true] {
     list-style-image: url("chrome://global/skin/icons/close-inverted@2x.png");
   }
 }
@@ -191,8 +191,8 @@
   }
 
   /* Use proper menu text styling in Win7 classic mode (copied from browser.css) */
-  @media not all and (-moz-windows-compositor),
-         not all and (-moz-windows-default-theme) {
+  @media (-moz-windows-compositor: 0),
+         (-moz-windows-default-theme: 0) {
     #main-window[tabsintitlebar]:not([inFullscreen]) #toolbar-menubar,
     #main-window[tabsintitlebar]:not([inFullscreen]) #TabsToolbar {
       color: CaptionText;

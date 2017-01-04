@@ -35,13 +35,17 @@ NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(AudioParam, Release)
 
 AudioParam::AudioParam(AudioNode* aNode,
                        uint32_t aIndex,
+                       const char* aName,
                        float aDefaultValue,
-                       const char* aName)
+                       float aMinValue,
+                       float aMaxValue)
   : AudioParamTimeline(aDefaultValue)
   , mNode(aNode)
   , mName(aName)
   , mIndex(aIndex)
   , mDefaultValue(aDefaultValue)
+  , mMinValue(aMinValue)
+  , mMaxValue(aMaxValue)
 {
 }
 
@@ -91,7 +95,8 @@ AudioParam::Stream()
   AudioNodeEngine* engine = new AudioNodeEngine(nullptr);
   RefPtr<AudioNodeStream> stream =
     AudioNodeStream::Create(mNode->Context(), engine,
-                            AudioNodeStream::NO_STREAM_FLAGS);
+                            AudioNodeStream::NO_STREAM_FLAGS,
+                            mNode->Context()->Graph());
 
   // Force the input to have only one channel, and make it down-mix using
   // the speaker rules if needed.

@@ -37,7 +37,7 @@
 #include "nsIContent.h"
 #include "nsVersionComparator.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsILoadContext.h"
 #include "mozilla/dom/HTMLObjectElementBinding.h"
 #include "AudioChannelService.h"
@@ -51,7 +51,6 @@ using namespace mozilla::dom;
 #include "android_npapi.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/CondVar.h"
-#include "AndroidBridge.h"
 #include "mozilla/dom/ScreenOrientation.h"
 #include "mozilla/Hal.h"
 #include "GLContextProvider.h"
@@ -140,6 +139,7 @@ nsNPAPIPluginInstance::nsNPAPIPluginInstance()
   , mCachedParamLength(0)
   , mCachedParamNames(nullptr)
   , mCachedParamValues(nullptr)
+  , mMuted(false)
 {
   mNPP.pdata = nullptr;
   mNPP.ndata = this;
@@ -319,10 +319,10 @@ nsNPAPIPluginInstance::GetDOMWindow()
   if (!mOwner)
     return nullptr;
 
-  RefPtr<nsPluginInstanceOwner> deathGrip(mOwner);
+  RefPtr<nsPluginInstanceOwner> kungFuDeathGrip(mOwner);
 
   nsCOMPtr<nsIDocument> doc;
-  mOwner->GetDocument(getter_AddRefs(doc));
+  kungFuDeathGrip->GetDocument(getter_AddRefs(doc));
   if (!doc)
     return nullptr;
 
@@ -680,20 +680,6 @@ nsresult nsNPAPIPluginInstance::GetNPP(NPP* aNPP)
 NPError nsNPAPIPluginInstance::SetWindowless(bool aWindowless)
 {
   mWindowless = aWindowless;
-
-  if (mMIMEType) {
-    // bug 558434 - Prior to 3.6.4, we assumed windowless was transparent.
-    // Silverlight apparently relied on this quirk, so we default to
-    // transparent unless they specify otherwise after setting the windowless
-    // property. (Last tested version: sl 4.0).
-    // Changes to this code should be matched with changes in
-    // PluginInstanceChild::InitQuirksMode.
-    if (nsPluginHost::GetSpecialType(nsDependentCString(mMIMEType)) ==
-        nsPluginHost::eSpecialType_Silverlight) {
-      mTransparent = true;
-    }
-  }
-
   return NPERR_NO_ERROR;
 }
 
@@ -901,7 +887,7 @@ already_AddRefed<AndroidSurfaceTexture> nsNPAPIPluginInstance::CreateSurfaceText
 void nsNPAPIPluginInstance::OnSurfaceTextureFrameAvailable()
 {
   if (mRunning == RUNNING && mOwner)
-    AndroidBridge::Bridge()->InvalidateAndScheduleComposite();
+    mOwner->Recomposite();
 }
 
 void* nsNPAPIPluginInstance::AcquireContentWindow()
@@ -1006,7 +992,7 @@ nsresult nsNPAPIPluginInstance::IsRemoteDrawingCoreAnimation(bool* aDrawing)
 nsresult
 nsNPAPIPluginInstance::ContentsScaleFactorChanged(double aContentsScaleFactor)
 {
-#ifdef XP_MACOSX
+#if defined(XP_MACOSX) || defined(XP_WIN)
   if (!mPlugin)
       return NS_ERROR_FAILURE;
 
@@ -1808,7 +1794,17 @@ nsNPAPIPluginInstance::WindowVolumeChanged(float aVolume, bool aMuted)
 {
   // We just support mute/unmute
   nsresult rv = SetMuted(aMuted);
-  NS_WARN_IF(NS_FAILED(rv));
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "SetMuted failed");
+  if (mMuted != aMuted) {
+    mMuted = aMuted;
+    if (mAudioChannelAgent) {
+      AudioChannelService::AudibleState audible = aMuted ?
+        AudioChannelService::AudibleState::eNotAudible :
+        AudioChannelService::AudibleState::eAudible;
+      mAudioChannelAgent->NotifyStartedAudible(audible,
+                                               AudioChannelService::AudibleChangedReasons::eVolumeChanged);
+    }
+  }
   return rv;
 }
 

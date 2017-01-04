@@ -44,7 +44,7 @@
 #include "mozilla/Services.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/TypeTraits.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "mozStorageCID.h"
 #include "mozStorageHelper.h"
 #include "nsAppDirectoryServiceDefs.h"
@@ -105,8 +105,6 @@ namespace dom {
 namespace quota {
 
 using namespace mozilla::ipc;
-
-const bool QuotaManager::kRunningXPCShellTests = !!PR_GetEnv("XPCSHELL_TEST_PROFILE_DIR");
 
 // We want profiles to be platform-independent so we always need to replace
 // the same characters on every platform. Windows has the most extensive set
@@ -670,7 +668,7 @@ private:
   { }
 
   NS_IMETHOD
-  Run();
+  Run() override;
 };
 
 class OriginOperationBase
@@ -793,7 +791,7 @@ protected:
   }
 
   NS_IMETHOD
-  Run();
+  Run() override;
 
   virtual nsresult
   DoInitOnMainThread()
@@ -980,7 +978,7 @@ private:
   virtual PQuotaUsageRequestParent*
   AllocPQuotaUsageRequestParent(const UsageRequestParams& aParams) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPQuotaUsageRequestConstructor(PQuotaUsageRequestParent* aActor,
                                     const UsageRequestParams& aParams) override;
 
@@ -990,17 +988,17 @@ private:
   virtual PQuotaRequestParent*
   AllocPQuotaRequestParent(const RequestParams& aParams) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvPQuotaRequestConstructor(PQuotaRequestParent* aActor,
                                const RequestParams& aParams) override;
 
   virtual bool
   DeallocPQuotaRequestParent(PQuotaRequestParent* aActor) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvStartIdleMaintenance() override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvStopIdleMaintenance() override;
 };
 
@@ -1022,14 +1020,14 @@ class GetUsageOp final
 public:
   explicit GetUsageOp(const UsageRequestParams& aParams);
 
-  bool
+  MOZ_IS_CLASS_INIT bool
   Init(Quota* aQuota);
 
 private:
   ~GetUsageOp()
   { }
 
-  virtual nsresult
+  MOZ_IS_CLASS_INIT virtual nsresult
   DoInitOnMainThread() override;
 
   nsresult
@@ -1046,7 +1044,7 @@ private:
   virtual void
   ActorDestroy(ActorDestroyReason aWhy) override;
 
-  virtual bool
+  virtual mozilla::ipc::IPCResult
   RecvCancel() override;
 };
 
@@ -1318,7 +1316,7 @@ private:
   RunOnMainThread();
 
   NS_IMETHOD
-  Run();
+  Run() override;
 };
 
 struct StorageDirectoryHelper::OriginProps
@@ -4437,7 +4435,7 @@ QuotaManager::EnsureOriginIsInitialized(PersistenceType aPersistenceType,
     }
 
     if (gFixedLimitKB >= 0) {
-      mTemporaryStorageLimit = gFixedLimitKB * 1024;
+      mTemporaryStorageLimit = static_cast<uint64_t>(gFixedLimitKB) * 1024;
     }
     else {
       nsCOMPtr<nsIFile> storageDir =
@@ -4639,63 +4637,6 @@ QuotaManager::GetStorageId(PersistenceType aPersistenceType,
   aDatabaseId = str;
 }
 
-static nsresult
-TryGetInfoForAboutURI(nsIPrincipal* aPrincipal,
-                      nsACString& aGroup,
-                      nsACString& aASCIIOrigin,
-                      bool* aIsApp)
-{
-  NS_ASSERTION(aPrincipal, "Don't hand me a null principal!");
-
-  nsCOMPtr<nsIURI> uri;
-  nsresult rv = aPrincipal->GetURI(getter_AddRefs(uri));
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (!uri) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
-  bool isAbout;
-  rv = uri->SchemeIs("about", &isAbout);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (!isAbout) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsIAboutModule> module;
-  rv = NS_GetAboutModule(uri, getter_AddRefs(module));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsCOMPtr<nsIURI> inner = NS_GetInnermostURI(uri);
-  NS_ENSURE_TRUE(inner, NS_ERROR_FAILURE);
-
-  nsAutoString postfix;
-  rv = module->GetIndexedDBOriginPostfix(uri, postfix);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsCString origin;
-  if (DOMStringIsNull(postfix)) {
-    rv = inner->GetSpec(origin);
-    NS_ENSURE_SUCCESS(rv, rv);
-  } else {
-    nsAutoCString scheme;
-    rv = inner->GetScheme(scheme);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    origin = scheme + NS_LITERAL_CSTRING(":") + NS_ConvertUTF16toUTF8(postfix);
-  }
-
-  ToLowerCase(origin);
-  aGroup.Assign(origin);
-  aASCIIOrigin.Assign(origin);
-
-  if (aIsApp) {
-    *aIsApp = false;
-  }
-
-  return NS_OK;
-}
-
 // static
 nsresult
 QuotaManager::GetInfoFromPrincipal(nsIPrincipal* aPrincipal,
@@ -4707,30 +4648,19 @@ QuotaManager::GetInfoFromPrincipal(nsIPrincipal* aPrincipal,
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aPrincipal);
 
-  if (aGroup && aOrigin) {
-    nsresult rv =
-      TryGetInfoForAboutURI(aPrincipal, *aGroup, *aOrigin, aIsApp);
-    if (NS_SUCCEEDED(rv)) {
-      return NS_OK;
-    }
-  }
-
   if (nsContentUtils::IsSystemPrincipal(aPrincipal)) {
     GetInfoForChrome(aSuffix, aGroup, aOrigin, aIsApp);
     return NS_OK;
   }
 
-  bool isNullPrincipal;
-  nsresult rv = aPrincipal->GetIsNullPrincipal(&isNullPrincipal);
-  NS_ENSURE_SUCCESS(rv, rv);
 
-  if (isNullPrincipal) {
+  if (aPrincipal->GetIsNullPrincipal()) {
     NS_WARNING("IndexedDB not supported from this principal!");
     return NS_ERROR_FAILURE;
   }
 
   nsCString origin;
-  rv = aPrincipal->GetOrigin(origin);
+  nsresult rv = aPrincipal->GetOrigin(origin);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (origin.EqualsLiteral(kChromeOrigin)) {
@@ -4739,7 +4669,7 @@ QuotaManager::GetInfoFromPrincipal(nsIPrincipal* aPrincipal,
   }
 
   nsCString suffix;
-  BasePrincipal::Cast(aPrincipal)->OriginAttributesRef().CreateSuffix(suffix);
+  aPrincipal->OriginAttributesRef().CreateSuffix(suffix);
 
   if (aSuffix)
   {
@@ -5720,7 +5650,7 @@ Quota::AllocPQuotaUsageRequestParent(const UsageRequestParams& aParams)
   return actor.forget().take();
 }
 
-bool
+mozilla::ipc::IPCResult
 Quota::RecvPQuotaUsageRequestConstructor(PQuotaUsageRequestParent* aActor,
                                          const UsageRequestParams& aParams)
 {
@@ -5731,11 +5661,11 @@ Quota::RecvPQuotaUsageRequestConstructor(PQuotaUsageRequestParent* aActor,
   auto* op = static_cast<GetUsageOp*>(aActor);
 
   if (NS_WARN_IF(!op->Init(this))) {
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
   op->RunImmediately();
-  return true;
+  return IPC_OK();
 }
 
 bool
@@ -5792,7 +5722,7 @@ Quota::AllocPQuotaRequestParent(const RequestParams& aParams)
   return actor.forget().take();
 }
 
-bool
+mozilla::ipc::IPCResult
 Quota::RecvPQuotaRequestConstructor(PQuotaRequestParent* aActor,
                                     const RequestParams& aParams)
 {
@@ -5802,11 +5732,11 @@ Quota::RecvPQuotaRequestConstructor(PQuotaRequestParent* aActor,
 
   auto* op = static_cast<QuotaRequestBase*>(aActor);
   if (NS_WARN_IF(!op->Init(this))) {
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
   op->RunImmediately();
-  return true;
+  return IPC_OK();
 }
 
 bool
@@ -5821,7 +5751,7 @@ Quota::DeallocPQuotaRequestParent(PQuotaRequestParent* aActor)
   return true;
 }
 
-bool
+mozilla::ipc::IPCResult
 Quota::RecvStartIdleMaintenance()
 {
   AssertIsOnBackgroundThread();
@@ -5831,11 +5761,11 @@ Quota::RecvStartIdleMaintenance()
 
   if (BackgroundParent::IsOtherProcessActor(actor)) {
     ASSERT_UNLESS_FUZZING();
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
   if (QuotaManager::IsShuttingDown()) {
-    return true;
+    return IPC_OK();
   }
 
   QuotaManager* quotaManager = QuotaManager::Get();
@@ -5844,15 +5774,15 @@ Quota::RecvStartIdleMaintenance()
       NewRunnableMethod(this, &Quota::StartIdleMaintenance);
 
     QuotaManager::GetOrCreate(callback);
-    return true;
+    return IPC_OK();
   }
 
   quotaManager->StartIdleMaintenance();
 
-  return true;
+  return IPC_OK();
 }
 
-bool
+mozilla::ipc::IPCResult
 Quota::RecvStopIdleMaintenance()
 {
   AssertIsOnBackgroundThread();
@@ -5862,21 +5792,21 @@ Quota::RecvStopIdleMaintenance()
 
   if (BackgroundParent::IsOtherProcessActor(actor)) {
     ASSERT_UNLESS_FUZZING();
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
   if (QuotaManager::IsShuttingDown()) {
-    return true;
+    return IPC_OK();
   }
 
   QuotaManager* quotaManager = QuotaManager::Get();
   if (!quotaManager) {
-    return true;
+    return IPC_OK();
   }
 
   quotaManager->StopIdleMaintenance();
 
-  return true;
+  return IPC_OK();
 }
 
 GetUsageOp::GetUsageOp(const UsageRequestParams& aParams)
@@ -6119,17 +6049,17 @@ GetUsageOp::ActorDestroy(ActorDestroyReason aWhy)
   NoteActorDestroyed();
 }
 
-bool
+mozilla::ipc::IPCResult
 GetUsageOp::RecvCancel()
 {
   AssertIsOnOwningThread();
 
   nsresult rv = mUsageInfo.Cancel();
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    return false;
+    return IPC_FAIL_NO_REASON(this);
   }
 
-  return true;
+  return IPC_OK();
 }
 
 bool
@@ -6319,8 +6249,11 @@ OriginClearOp::DoInitOnMainThread()
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
-
-    mOriginScope.SetFromOrigin(origin);
+    if (params.clearAll()) {
+      mOriginScope.SetFromPrefix(origin);
+    } else {
+      mOriginScope.SetFromOrigin(origin);
+    }
   }
 
   return NS_OK;
@@ -6357,6 +6290,10 @@ OriginClearOp::DeleteFiles(QuotaManager* aQuotaManager,
     nsCString originSanitized(originScope.GetOrigin());
     SanitizeOriginString(originSanitized);
     originScope.SetOrigin(originSanitized);
+  } else if (originScope.IsPrefix()) {
+    nsCString prefixSanitized(originScope.GetPrefix());
+    SanitizeOriginString(prefixSanitized);
+    originScope.SetPrefix(prefixSanitized);
   }
 
   bool hasMore;
@@ -7555,8 +7492,6 @@ nsresult
 UpgradeDirectoryMetadataFrom1To2Helper::DoProcessOriginDirectories()
 {
   AssertIsOnIOThread();
-
-  nsCOMPtr<nsIFile> permanentStorageDir;
 
   for (uint32_t count = mOriginProps.Length(), index = 0;
        index < count;

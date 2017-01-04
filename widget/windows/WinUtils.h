@@ -382,6 +382,13 @@ public:
    */
   static uint16_t GetMouseInputSource();
 
+  /**
+   * Windows also fires mouse window messages for pens and touches, so we should
+   * retrieve their pointer ID on receiving mouse events as well. Please refer to
+   * https://msdn.microsoft.com/en-us/library/windows/desktop/ms703320(v=vs.85).aspx
+   */
+  static uint16_t GetMousePointerID();
+
   static bool GetIsMouseFromTouch(EventMessage aEventType);
 
   /**
@@ -512,6 +519,10 @@ public:
    */
   static bool GetAppInitDLLs(nsAString& aOutput);
 
+#ifdef ACCESSIBILITY
+  static void SetAPCPending();
+#endif
+
 private:
   typedef HRESULT (WINAPI * SHCreateItemFromParsingNamePtr)(PCWSTR pszPath,
                                                             IBindCtx *pbc,
@@ -581,7 +592,7 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIRUNNABLE
 
-  AsyncDeleteIconFromDisk(const nsAString &aIconPath);
+  explicit AsyncDeleteIconFromDisk(const nsAString &aIconPath);
 
 private:
   virtual ~AsyncDeleteIconFromDisk();
@@ -595,7 +606,7 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIRUNNABLE
 
-  AsyncDeleteAllFaviconsFromDisk(bool aIgnoreRecent = false);
+  explicit AsyncDeleteAllFaviconsFromDisk(bool aIgnoreRecent = false);
 
 private:
   virtual ~AsyncDeleteAllFaviconsFromDisk();

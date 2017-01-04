@@ -128,6 +128,9 @@ CommandList.prototype = {
       if (name == "_execute_page_action") {
         let win = event.target.ownerDocument.defaultView;
         pageActionFor(this.extension).triggerAction(win);
+      } else if (name == "_execute_browser_action") {
+        let win = event.target.ownerDocument.defaultView;
+        browserActionFor(this.extension).triggerAction(win);
       } else {
         TabManager.for(this.extension)
                   .addActiveTabPermission(TabManager.activeTab);
@@ -228,7 +231,8 @@ extensions.on("shutdown", (type, extension) => {
 });
 /* eslint-enable mozilla/balanced-listeners */
 
-extensions.registerSchemaAPI("commands", (extension, context) => {
+extensions.registerSchemaAPI("commands", "addon_parent", context => {
+  let {extension} = context;
   return {
     commands: {
       getAll() {

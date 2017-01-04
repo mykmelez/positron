@@ -195,10 +195,8 @@ DynamicImage::GetFrameAtSize(const IntSize& aSize,
 }
 
 NS_IMETHODIMP_(bool)
-DynamicImage::IsOpaque()
+DynamicImage::WillDrawOpaqueNow()
 {
-  // XXX(seth): For performance reasons it'd be better to return true here, but
-  // I'm not sure how we can guarantee it for an arbitrary gfxDrawable.
   return false;
 }
 
@@ -248,9 +246,15 @@ DynamicImage::Draw(gfxContext* aContext,
 }
 
 NS_IMETHODIMP
-DynamicImage::StartDecoding()
+DynamicImage::StartDecoding(uint32_t aFlags)
 {
   return NS_OK;
+}
+
+bool
+DynamicImage::StartDecodingWithResult(uint32_t aFlags)
+{
+  return true;
 }
 
 NS_IMETHODIMP

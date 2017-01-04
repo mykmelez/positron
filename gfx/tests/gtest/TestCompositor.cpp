@@ -36,12 +36,11 @@ public:
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  NS_IMETHOD GetClientBounds(LayoutDeviceIntRect& aRect) override {
-    aRect = LayoutDeviceIntRect(0, 0, gCompWidth, gCompHeight);
-    return NS_OK;
+  virtual LayoutDeviceIntRect GetClientBounds() override {
+    return LayoutDeviceIntRect(0, 0, gCompWidth, gCompHeight);
   }
-  NS_IMETHOD GetBounds(LayoutDeviceIntRect& aRect) override {
-    return GetClientBounds(aRect);
+  virtual LayoutDeviceIntRect GetBounds() override {
+    return GetClientBounds();
   }
 
   void* GetNativeData(uint32_t aDataType) override {
@@ -59,24 +58,22 @@ public:
     return nullptr;
   }
 
-  NS_IMETHOD              Create(nsIWidget* aParent,
+  virtual nsresult        Create(nsIWidget* aParent,
                                  nsNativeWidget aNativeParent,
                                  const LayoutDeviceIntRect& aRect,
                                  nsWidgetInitData* aInitData = nullptr) override { return NS_OK; }
-  NS_IMETHOD              Create(nsIWidget* aParent,
+  virtual nsresult        Create(nsIWidget* aParent,
                                  nsNativeWidget aNativeParent,
                                  const DesktopIntRect& aRect,
                                  nsWidgetInitData* aInitData = nullptr) override { return NS_OK; }
   NS_IMETHOD              Show(bool aState) override { return NS_OK; }
   virtual bool            IsVisible() const override { return true; }
-  NS_IMETHOD              ConstrainPosition(bool aAllowSlop,
-                                            int32_t *aX, int32_t *aY) override { return NS_OK; }
-  NS_IMETHOD              Move(double aX, double aY) override { return NS_OK; }
-  NS_IMETHOD              Resize(double aWidth, double aHeight, bool aRepaint) override { return NS_OK; }
-  NS_IMETHOD              Resize(double aX, double aY,
-                                 double aWidth, double aHeight, bool aRepaint) override { return NS_OK; }
+  virtual void            Move(double aX, double aY) override {}
+  virtual void            Resize(double aWidth, double aHeight, bool aRepaint) override {}
+  virtual void            Resize(double aX, double aY,
+                                 double aWidth, double aHeight, bool aRepaint) override {}
 
-  NS_IMETHOD              Enable(bool aState) override { return NS_OK; }
+  virtual void            Enable(bool aState) override {}
   virtual bool            IsEnabled() const override { return true; }
   NS_IMETHOD              SetFocus(bool aRaise) override { return NS_OK; }
   virtual nsresult        ConfigureChildren(const nsTArray<Configuration>& aConfigurations) override { return NS_OK; }
@@ -85,11 +82,9 @@ public:
   virtual LayoutDeviceIntPoint WidgetToScreenOffset() override { return LayoutDeviceIntPoint(0, 0); }
   NS_IMETHOD              DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
                                         nsEventStatus& aStatus) override { return NS_OK; }
-  NS_IMETHOD              CaptureRollupEvents(nsIRollupListener * aListener, bool aDoCapture) override { return NS_OK; }
   NS_IMETHOD_(void)       SetInputContext(const InputContext& aContext,
                                           const InputContextAction& aAction) override {}
   NS_IMETHOD_(InputContext) GetInputContext() override { abort(); }
-  NS_IMETHOD              ReparentNativeWidget(nsIWidget* aNewParent) override { return NS_OK; }
 
 private:
   ~MockWidget() {}

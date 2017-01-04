@@ -26,18 +26,6 @@ def set_defaults(config, tests):
 
 
 @transforms.add
-def set_tier(config, tests):
-    for test in tests:
-        if 'tier' not in test:
-            # Bug 1282850: android debug is tier 1, but opt is tier 2
-            if test['test-platform'] == 'android-4.3-arm7-api-15/debug':
-                test['tier'] = 1
-            else:
-                test['tier'] = 2
-        yield test
-
-
-@transforms.add
 def set_treeherder_machine_platform(config, tests):
     """Set the appropriate task.extra.treeherder.machine.platform"""
     # The build names for these build platforms have partially evolved over the
@@ -51,4 +39,12 @@ def set_treeherder_machine_platform(config, tests):
     for test in tests:
         build_platform = test['build-platform']
         test['treeherder-machine-platform'] = translation.get(build_platform, build_platform)
+        yield test
+
+
+@transforms.add
+def set_e10s_attr(config, tests):
+    """Set the e10s attribute to false"""
+    for test in tests:
+        test.setdefault('attributes', {})['e10s'] = False
         yield test

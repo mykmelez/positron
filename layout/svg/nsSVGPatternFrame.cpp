@@ -18,7 +18,7 @@
 #include "nsISVGChildFrame.h"
 #include "nsStyleContext.h"
 #include "nsSVGEffects.h"
-#include "nsSVGPathGeometryFrame.h"
+#include "SVGGeometryFrame.h"
 #include "mozilla/dom/SVGPatternElement.h"
 #include "nsSVGUtils.h"
 #include "nsSVGAnimatedTransformList.h"
@@ -85,7 +85,8 @@ nsSVGPatternFrame::AttributeChanged(int32_t         aNameSpaceID,
     nsSVGEffects::InvalidateDirectRenderingObservers(this);
   }
 
-  if (aNameSpaceID == kNameSpaceID_XLink &&
+  if ((aNameSpaceID == kNameSpaceID_XLink ||
+       aNameSpaceID == kNameSpaceID_None) &&
       aAttribute == nsGkAtoms::href) {
     // Blow away our reference, if any
     Properties().Delete(nsSVGEffects::HrefAsPaintingProperty());
@@ -391,7 +392,7 @@ nsSVGPatternFrame::PaintPattern(const DrawTarget* aDrawTarget,
 
   if (aSource->IsFrameOfType(nsIFrame::eSVGGeometry)) {
     // Set the geometrical parent of the pattern we are rendering
-    patternWithChildren->mSource = static_cast<nsSVGPathGeometryFrame*>(aSource);
+    patternWithChildren->mSource = static_cast<SVGGeometryFrame*>(aSource);
   }
 
   // Delay checking NS_FRAME_DRAWING_AS_PAINTSERVER bit until here so we can
@@ -553,10 +554,17 @@ nsSVGPatternFrame::GetReferencedPattern()
     Properties().Get(nsSVGEffects::HrefAsPaintingProperty());
 
   if (!property) {
-    // Fetch our pattern element's xlink:href attribute
+    // Fetch our pattern element's href or xlink:href attribute
     SVGPatternElement *pattern = static_cast<SVGPatternElement *>(mContent);
     nsAutoString href;
-    pattern->mStringAttributes[SVGPatternElement::HREF].GetAnimValue(href, pattern);
+    if (pattern->mStringAttributes[SVGPatternElement::HREF].IsExplicitlySet()) {
+      pattern->mStringAttributes[SVGPatternElement::HREF]
+        .GetAnimValue(href, pattern);
+    } else {
+      pattern->mStringAttributes[SVGPatternElement::XLINK_HREF]
+        .GetAnimValue(href, pattern);
+    }
+
     if (href.IsEmpty()) {
       mNoHRefURI = true;
       return nullptr; // no URL

@@ -12,13 +12,13 @@
 #include "nsStyleSet.h"
 
 #include "mozilla/ArrayUtils.h"
-#include "mozilla/CSSStyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/EnumeratedRange.h"
 #include "mozilla/EventStates.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/RuleProcessorCache.h"
-#include "mozilla/StyleSheetHandleInlines.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "nsIDocumentInlines.h"
 #include "nsRuleWalker.h"
 #include "nsStyleContext.h"
@@ -62,6 +62,14 @@ nsEmptyStyleRule::MightMapInheritedStyleData()
   return false;
 }
 
+/* virtual */ bool
+nsEmptyStyleRule::GetDiscretelyAnimatedCSSValue(nsCSSPropertyID aProperty,
+                                                nsCSSValue* aValue)
+{
+  MOZ_ASSERT(false, "GetDiscretelyAnimatedCSSValue is not implemented yet");
+  return false;
+}
+
 #ifdef DEBUG
 /* virtual */ void
 nsEmptyStyleRule::List(FILE* out, int32_t aIndent) const
@@ -95,15 +103,15 @@ nsInitialStyleRule::MapRuleInfoInto(nsRuleData* aRuleData)
             !aRuleData->mPresContext->Document()->GetMathMLEnabled()) {
           size_t index = value - value_start;
           if (index == nsCSSProps::PropertyIndexInStruct(
-                          eCSSProperty_script_level) ||
+                          eCSSProperty__moz_script_level) ||
               index == nsCSSProps::PropertyIndexInStruct(
-                          eCSSProperty_script_size_multiplier) ||
+                          eCSSProperty__moz_script_size_multiplier) ||
               index == nsCSSProps::PropertyIndexInStruct(
-                          eCSSProperty_script_min_size) ||
+                          eCSSProperty__moz_script_min_size) ||
               index == nsCSSProps::PropertyIndexInStruct(
-                          eCSSProperty_math_variant) ||
+                          eCSSProperty__moz_math_variant) ||
               index == nsCSSProps::PropertyIndexInStruct(
-                          eCSSProperty_math_display)) {
+                          eCSSProperty__moz_math_display)) {
             continue;
           }
         }
@@ -119,6 +127,14 @@ nsInitialStyleRule::MapRuleInfoInto(nsRuleData* aRuleData)
 nsInitialStyleRule::MightMapInheritedStyleData()
 {
   return true;
+}
+
+/* virtual */ bool
+nsInitialStyleRule::GetDiscretelyAnimatedCSSValue(nsCSSPropertyID aProperty,
+                                                  nsCSSValue* aValue)
+{
+  MOZ_ASSERT(false, "GetDiscretelyAnimatedCSSValue is not implemented yet");
+  return false;
 }
 
 #ifdef DEBUG
@@ -150,6 +166,14 @@ nsDisableTextZoomStyleRule::MapRuleInfoInto(nsRuleData* aRuleData)
 nsDisableTextZoomStyleRule::MightMapInheritedStyleData()
 {
   return true;
+}
+
+/* virtual */ bool
+nsDisableTextZoomStyleRule::
+GetDiscretelyAnimatedCSSValue(nsCSSPropertyID aProperty, nsCSSValue* aValue)
+{
+  MOZ_ASSERT(false, "GetDiscretelyAnimatedCSSValue is not implemented yet");
+  return false;
 }
 
 #ifdef DEBUG
@@ -727,9 +751,9 @@ nsStyleSet::AppendAllXBLStyleSheets(nsTArray<mozilla::CSSStyleSheet*>& aArray) c
     // XXXheycam stylo: AppendAllSheets will need to be able to return either
     // CSSStyleSheets or ServoStyleSheets, on request (and then here requesting
     // CSSStyleSheets).
-    AutoTArray<StyleSheetHandle, 32> sheets;
+    AutoTArray<StyleSheet*, 32> sheets;
     mBindingManager->AppendAllSheets(sheets);
-    for (StyleSheetHandle handle : sheets) {
+    for (StyleSheet* handle : sheets) {
       MOZ_ASSERT(handle->IsGecko(), "stylo: AppendAllSheets shouldn't give us "
                                     "ServoStyleSheets yet");
       aArray.AppendElement(handle->AsGecko());
@@ -1781,7 +1805,7 @@ nsStyleSet::WalkRestrictionRule(CSSPseudoElementType aPseudoType,
     aRuleWalker->Forward(mFirstLetterRule);
   else if (aPseudoType == CSSPseudoElementType::firstLine)
     aRuleWalker->Forward(mFirstLineRule);
-  else if (aPseudoType == CSSPseudoElementType::mozPlaceholder)
+  else if (aPseudoType == CSSPseudoElementType::placeholder)
     aRuleWalker->Forward(mPlaceholderRule);
 }
 
@@ -1928,7 +1952,7 @@ nsStyleSet::ProbePseudoElementStyle(Element* aParentElement,
     const nsStyleDisplay *display = result->StyleDisplay();
     const nsStyleContent *content = result->StyleContent();
     // XXXldb What is contentCount for |content: ""|?
-    if (display->mDisplay == NS_STYLE_DISPLAY_NONE ||
+    if (display->mDisplay == StyleDisplay::None ||
         content->ContentCount() == 0) {
       result = nullptr;
     }
@@ -2207,7 +2231,7 @@ nsStyleSet::ReparentStyleContext(nsStyleContext* aStyleContext,
 {
   MOZ_ASSERT(aStyleContext, "aStyleContext must not be null");
 
-  // This short-circuit is OK because we don't call TryStartingTransition
+  // This short-circuit is OK because we don't call TryInitatingTransition
   // during style reresolution if the style context pointer hasn't changed.
   if (aStyleContext->GetParent() == aNewParentContext) {
     RefPtr<nsStyleContext> ret = aStyleContext;
@@ -2450,12 +2474,12 @@ nsStyleSet::EnsureUniqueInnerOnCSSSheets()
   }
 
   if (mBindingManager) {
-    AutoTArray<StyleSheetHandle, 32> sheets;
+    AutoTArray<StyleSheet*, 32> sheets;
     // XXXheycam stylo: AppendAllSheets will need to be able to return either
     // CSSStyleSheets or ServoStyleSheets, on request (and then here requesting
     // CSSStyleSheets).
     mBindingManager->AppendAllSheets(sheets);
-    for (StyleSheetHandle sheet : sheets) {
+    for (StyleSheet* sheet : sheets) {
       MOZ_ASSERT(sheet->IsGecko(), "stylo: AppendAllSheets shouldn't give us "
                                    "ServoStyleSheets yet");
       queue.AppendElement(sheet->AsGecko());

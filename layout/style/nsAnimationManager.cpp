@@ -12,7 +12,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StyleAnimationValue.h"
 #include "mozilla/dom/DocumentTimeline.h"
-#include "mozilla/dom/KeyframeEffect.h"
+#include "mozilla/dom/KeyframeEffectReadOnly.h"
 
 #include "nsPresContext.h"
 #include "nsStyleSet.h"
@@ -33,11 +33,15 @@ using mozilla::dom::AnimationPlayState;
 using mozilla::dom::KeyframeEffectReadOnly;
 using mozilla::dom::CSSAnimation;
 
+typedef mozilla::ComputedTiming::AnimationPhase AnimationPhase;
+
 namespace {
 
-// Pair of an event message and elapsed time used when determining the set of
-// events to queue.
-typedef Pair<EventMessage, StickyTimeDuration> EventPair;
+struct AnimationEventParams {
+  EventMessage mMessage;
+  StickyTimeDuration mElapsedTime;
+  TimeStamp mTimeStamp;
+};
 
 } // anonymous namespace
 
@@ -193,78 +197,94 @@ CSSAnimation::QueueEvents()
     return;
   }
   nsAnimationManager* manager = presContext->AnimationManager();
-
   ComputedTiming computedTiming = mEffect->GetComputedTiming();
 
-  if (computedTiming.mPhase == ComputedTiming::AnimationPhase::Null) {
-    return; // do nothing
+  ComputedTiming::AnimationPhase currentPhase = computedTiming.mPhase;
+  uint64_t currentIteration  = computedTiming.mCurrentIteration;
+  if (currentPhase == mPreviousPhase &&
+      currentIteration == mPreviousIteration) {
+    return;
   }
 
-  // Note that script can change the start time, so we have to handle moving
-  // backwards through the animation as well as forwards. An 'animationstart'
-  // is dispatched if we enter the active phase (regardless if that is from
-  // before or after the animation's active phase). An 'animationend' is
-  // dispatched if we leave the active phase (regardless if that is to before
-  // or after the animation's active phase).
+  const StickyTimeDuration zeroDuration;
+  StickyTimeDuration intervalStartTime =
+    std::max(std::min(StickyTimeDuration(-mEffect->SpecifiedTiming().mDelay),
+                      computedTiming.mActiveDuration),
+             zeroDuration);
+  StickyTimeDuration intervalEndTime =
+    std::max(std::min((EffectEnd() - mEffect->SpecifiedTiming().mDelay),
+                      computedTiming.mActiveDuration),
+             zeroDuration);
 
-  bool wasActive = mPreviousPhaseOrIteration != PREVIOUS_PHASE_BEFORE &&
-                   mPreviousPhaseOrIteration != PREVIOUS_PHASE_AFTER;
-  bool isActive =
-    computedTiming.mPhase == ComputedTiming::AnimationPhase::Active;
-  bool isSameIteration =
-         computedTiming.mCurrentIteration == mPreviousPhaseOrIteration;
-  bool skippedActivePhase =
-    (mPreviousPhaseOrIteration == PREVIOUS_PHASE_BEFORE &&
-     computedTiming.mPhase == ComputedTiming::AnimationPhase::After) ||
-    (mPreviousPhaseOrIteration == PREVIOUS_PHASE_AFTER &&
-     computedTiming.mPhase == ComputedTiming::AnimationPhase::Before);
-  bool skippedFirstIteration =
-    isActive &&
-    mPreviousPhaseOrIteration == PREVIOUS_PHASE_BEFORE &&
-    computedTiming.mCurrentIteration > 0;
+  uint64_t iterationBoundary = mPreviousIteration > currentIteration
+                               ? currentIteration + 1
+                               : currentIteration;
+  StickyTimeDuration iterationStartTime  =
+    computedTiming.mDuration.MultDouble(
+      (iterationBoundary - computedTiming.mIterationStart));
 
-  MOZ_ASSERT(!skippedActivePhase || (!isActive && !wasActive),
-             "skippedActivePhase only makes sense if we were & are inactive");
+  TimeStamp startTimeStamp     = ElapsedTimeToTimeStamp(intervalStartTime);
+  TimeStamp endTimeStamp       = ElapsedTimeToTimeStamp(intervalEndTime);
+  TimeStamp iterationTimeStamp = ElapsedTimeToTimeStamp(iterationStartTime);
 
-  if (computedTiming.mPhase == ComputedTiming::AnimationPhase::Before) {
-    mPreviousPhaseOrIteration = PREVIOUS_PHASE_BEFORE;
-  } else if (computedTiming.mPhase == ComputedTiming::AnimationPhase::Active) {
-    mPreviousPhaseOrIteration = computedTiming.mCurrentIteration;
-  } else if (computedTiming.mPhase == ComputedTiming::AnimationPhase::After) {
-    mPreviousPhaseOrIteration = PREVIOUS_PHASE_AFTER;
+  AutoTArray<AnimationEventParams, 2> events;
+  switch (mPreviousPhase) {
+    case AnimationPhase::Null:
+    case AnimationPhase::Before:
+      if (currentPhase == AnimationPhase::Active) {
+        events.AppendElement(AnimationEventParams{ eAnimationStart,
+                                                   intervalStartTime,
+                                                   startTimeStamp });
+      } else if (currentPhase == AnimationPhase::After) {
+        events.AppendElement(AnimationEventParams{ eAnimationStart,
+                                                   intervalStartTime,
+                                                   startTimeStamp });
+        events.AppendElement(AnimationEventParams{ eAnimationEnd,
+                                                   intervalEndTime,
+                                                   endTimeStamp });
+      }
+      break;
+    case AnimationPhase::Active:
+      if (currentPhase == AnimationPhase::Before) {
+        events.AppendElement(AnimationEventParams{ eAnimationEnd,
+                                                   intervalStartTime,
+                                                   startTimeStamp });
+      } else if (currentPhase == AnimationPhase::Active) {
+        // The currentIteration must have changed or element we would have
+        // returned early above.
+        MOZ_ASSERT(currentIteration != mPreviousIteration);
+        events.AppendElement(AnimationEventParams{ eAnimationIteration,
+                                                   iterationStartTime,
+                                                   iterationTimeStamp });
+      } else if (currentPhase == AnimationPhase::After) {
+        events.AppendElement(AnimationEventParams{ eAnimationEnd,
+                                                   intervalEndTime,
+                                                   endTimeStamp });
+      }
+      break;
+    case AnimationPhase::After:
+      if (currentPhase == AnimationPhase::Before) {
+        events.AppendElement(AnimationEventParams{ eAnimationStart,
+                                                   intervalEndTime,
+                                                   startTimeStamp});
+        events.AppendElement(AnimationEventParams{ eAnimationEnd,
+                                                   intervalStartTime,
+                                                   endTimeStamp });
+      } else if (currentPhase == AnimationPhase::Active) {
+        events.AppendElement(AnimationEventParams{ eAnimationStart,
+                                                   intervalEndTime,
+                                                   endTimeStamp });
+      }
+      break;
   }
+  mPreviousPhase = currentPhase;
+  mPreviousIteration = currentIteration;
 
-  AutoTArray<EventPair, 2> events;
-  StickyTimeDuration initialAdvance = StickyTimeDuration(InitialAdvance());
-  StickyTimeDuration iterationStart = computedTiming.mDuration *
-                                      computedTiming.mCurrentIteration;
-  const StickyTimeDuration& activeDuration = computedTiming.mActiveDuration;
-
-  if (skippedFirstIteration) {
-    // Notify animationstart and animationiteration in same tick.
-    events.AppendElement(EventPair(eAnimationStart, initialAdvance));
-    events.AppendElement(EventPair(eAnimationIteration,
-                                   std::max(iterationStart, initialAdvance)));
-  } else if (!wasActive && isActive) {
-    events.AppendElement(EventPair(eAnimationStart, initialAdvance));
-  } else if (wasActive && !isActive) {
-    events.AppendElement(EventPair(eAnimationEnd, activeDuration));
-  } else if (wasActive && isActive && !isSameIteration) {
-    events.AppendElement(EventPair(eAnimationIteration, iterationStart));
-  } else if (skippedActivePhase) {
-    events.AppendElement(EventPair(eAnimationStart,
-                                   std::min(initialAdvance, activeDuration)));
-    events.AppendElement(EventPair(eAnimationEnd, activeDuration));
-  } else {
-    return; // No events need to be sent
-  }
-
-  for (const EventPair& pair : events){
+  for (const AnimationEventParams& event : events){
     manager->QueueEvent(
                AnimationEventInfo(owningElement, owningPseudoType,
-                                  pair.first(), mAnimationName,
-                                  pair.second(),
-                                  ElapsedTimeToTimeStamp(pair.second()),
+                                  event.mMessage, mAnimationName,
+                                  event.mElapsedTime, event.mTimeStamp,
                                   this));
   }
 }
@@ -279,14 +299,6 @@ CSSAnimation::UpdateTiming(SeekFlag aSeekFlag, SyncNotifyFlag aSyncNotifyFlag)
   }
 
   Animation::UpdateTiming(aSeekFlag, aSyncNotifyFlag);
-}
-
-TimeStamp
-CSSAnimation::ElapsedTimeToTimeStamp(const StickyTimeDuration&
-                                       aElapsedTime) const
-{
-  return AnimationTimeToTimeStamp(aElapsedTime +
-                                  mEffect->SpecifiedTiming().mDelay);
 }
 
 ////////////////////////// nsAnimationManager ////////////////////////////
@@ -336,11 +348,14 @@ UpdateOldAnimationPropertiesWithNew(
   // Update the old from the new so we can keep the original object
   // identity (and any expando properties attached to it).
   if (aOld.GetEffect()) {
-    KeyframeEffectReadOnly* oldEffect = aOld.GetEffect();
-    animationChanged =
-      oldEffect->SpecifiedTiming() != aNewTiming;
+    dom::AnimationEffectReadOnly* oldEffect = aOld.GetEffect();
+    animationChanged = oldEffect->SpecifiedTiming() != aNewTiming;
     oldEffect->SetSpecifiedTiming(aNewTiming);
-    oldEffect->SetKeyframes(Move(aNewKeyframes), aStyleContext);
+
+    KeyframeEffectReadOnly* oldKeyframeEffect = oldEffect->AsKeyframeEffect();
+    if (oldKeyframeEffect) {
+      oldKeyframeEffect->SetKeyframes(Move(aNewKeyframes), aStyleContext);
+    }
   }
 
   // Handle changes in play state. If the animation is idle, however,
@@ -412,13 +427,7 @@ nsAnimationManager::UpdateAnimations(nsStyleContext* aStyleContext,
     return;
   }
 
-  if (collection) {
-    EffectSet* effectSet =
-      EffectSet::GetEffectSet(aElement, aStyleContext->GetPseudoType());
-    if (effectSet) {
-      effectSet->UpdateAnimationGeneration(mPresContext);
-    }
-  } else {
+  if (!collection) {
     bool createdCollection = false;
     collection =
       CSSAnimationCollection::GetOrCreateAnimationCollection(
@@ -439,12 +448,6 @@ nsAnimationManager::UpdateAnimations(nsStyleContext* aStyleContext,
   for (size_t newAnimIdx = newAnimations.Length(); newAnimIdx-- != 0; ) {
     newAnimations[newAnimIdx]->CancelFromStyle();
   }
-
-  mPresContext->EffectCompositor()->
-    MaybeUpdateAnimationRule(aElement,
-                             aStyleContext->GetPseudoType(),
-                             EffectCompositor::CascadeLevel::Animations,
-                             aStyleContext);
 
   // We don't actually dispatch the pending events now.  We'll either
   // dispatch them the next time we get a refresh driver notification
@@ -549,19 +552,19 @@ private:
   nsTArray<PropertyValuePair> GetKeyframePropertyValues(
     nsPresContext* aPresContext,
     nsCSSKeyframeRule* aKeyframeRule,
-    nsCSSPropertySet& aAnimatedProperties);
+    nsCSSPropertyIDSet& aAnimatedProperties);
   void FillInMissingKeyframeValues(
     nsPresContext* aPresContext,
-    nsCSSPropertySet aAnimatedProperties,
-    nsCSSPropertySet aPropertiesSetAtStart,
-    nsCSSPropertySet aPropertiesSetAtEnd,
+    nsCSSPropertyIDSet aAnimatedProperties,
+    nsCSSPropertyIDSet aPropertiesSetAtStart,
+    nsCSSPropertyIDSet aPropertiesSetAtEnd,
     const Maybe<ComputedTimingFunction>& aInheritedTimingFunction,
     nsTArray<Keyframe>& aKeyframes);
   void AppendProperty(nsPresContext* aPresContext,
-                      nsCSSProperty aProperty,
+                      nsCSSPropertyID aProperty,
                       nsTArray<PropertyValuePair>& aPropertyValues);
   nsCSSValue GetComputedValue(nsPresContext* aPresContext,
-                              nsCSSProperty aProperty);
+                              nsCSSPropertyID aProperty);
 
   static TimingParams TimingParamsFrom(
     const StyleAnimation& aStyleAnimation)
@@ -649,7 +652,7 @@ CSSAnimationBuilder::Build(nsPresContext* aPresContext,
     OwningElementRef(*mTarget, mStyleContext->GetPseudoType()));
 
   animation->SetTimelineNoUpdate(mTimeline);
-  animation->SetEffect(effect);
+  animation->SetEffectNoUpdate(effect);
 
   if (isStylePaused) {
     animation->PauseFromStyle();
@@ -717,7 +720,7 @@ CSSAnimationBuilder::BuildAnimationFrames(nsPresContext* aPresContext,
 
   // First, make up Keyframe objects for each rule
   nsTArray<Keyframe> keyframes;
-  nsCSSPropertySet animatedProperties;
+  nsCSSPropertyIDSet animatedProperties;
 
   for (auto ruleIdx = 0, ruleEnd = aRule->StyleRuleCount();
        ruleIdx != ruleEnd; ++ruleIdx) {
@@ -754,9 +757,9 @@ CSSAnimationBuilder::BuildAnimationFrames(nsPresContext* aPresContext,
                    });
 
   // Then walk backwards through the keyframes and drop overridden properties.
-  nsCSSPropertySet propertiesSetAtCurrentOffset;
-  nsCSSPropertySet propertiesSetAtStart;
-  nsCSSPropertySet propertiesSetAtEnd;
+  nsCSSPropertyIDSet propertiesSetAtCurrentOffset;
+  nsCSSPropertyIDSet propertiesSetAtStart;
+  nsCSSPropertyIDSet propertiesSetAtEnd;
   double currentOffset = -1.0;
   for (size_t keyframeIdx = keyframes.Length();
        keyframeIdx > 0;
@@ -791,7 +794,7 @@ CSSAnimationBuilder::BuildAnimationFrames(nsPresContext* aPresContext,
     // Otherwise, we should update the existing keyframe with only the
     // unique properties.
     //
-    // Bug 1216843: We should also match composite modes here.
+    // Bug 1293490: We should also match composite modes here.
     Keyframe* existingKeyframe = nullptr;
     // Don't bother searching for an existing keyframe if we don't
     // have anything to contribute to it.
@@ -874,16 +877,16 @@ nsTArray<PropertyValuePair>
 CSSAnimationBuilder::GetKeyframePropertyValues(
     nsPresContext* aPresContext,
     nsCSSKeyframeRule* aKeyframeRule,
-    nsCSSPropertySet& aAnimatedProperties)
+    nsCSSPropertyIDSet& aAnimatedProperties)
 {
   nsTArray<PropertyValuePair> result;
   RefPtr<nsStyleContext> styleContext =
     mResolvedStyles.Get(aPresContext, mStyleContext,
                         aKeyframeRule->Declaration());
 
-  for (nsCSSProperty prop = nsCSSProperty(0);
+  for (nsCSSPropertyID prop = nsCSSPropertyID(0);
        prop < eCSSProperty_COUNT_no_shorthands;
-       prop = nsCSSProperty(prop + 1)) {
+       prop = nsCSSPropertyID(prop + 1)) {
     if (nsCSSProps::kAnimTypeTable[prop] == eStyleAnimType_None ||
         !aKeyframeRule->Declaration()->HasNonImportantValueFor(prop)) {
       continue;
@@ -949,9 +952,9 @@ FindMatchingKeyframe(
 void
 CSSAnimationBuilder::FillInMissingKeyframeValues(
     nsPresContext* aPresContext,
-    nsCSSPropertySet aAnimatedProperties,
-    nsCSSPropertySet aPropertiesSetAtStart,
-    nsCSSPropertySet aPropertiesSetAtEnd,
+    nsCSSPropertyIDSet aAnimatedProperties,
+    nsCSSPropertyIDSet aPropertiesSetAtStart,
+    nsCSSPropertyIDSet aPropertiesSetAtEnd,
     const Maybe<ComputedTimingFunction>& aInheritedTimingFunction,
     nsTArray<Keyframe>& aKeyframes)
 {
@@ -997,9 +1000,9 @@ CSSAnimationBuilder::FillInMissingKeyframeValues(
                             ? nullptr : &aKeyframes[endKeyframeIndex];
 
   // Iterate through all properties and fill-in missing values
-  for (nsCSSProperty prop = nsCSSProperty(0);
+  for (nsCSSPropertyID prop = nsCSSPropertyID(0);
        prop < eCSSProperty_COUNT_no_shorthands;
-       prop = nsCSSProperty(prop + 1)) {
+       prop = nsCSSPropertyID(prop + 1)) {
     if (!aAnimatedProperties.HasProperty(prop)) {
       continue;
     }
@@ -1016,7 +1019,7 @@ CSSAnimationBuilder::FillInMissingKeyframeValues(
 void
 CSSAnimationBuilder::AppendProperty(
     nsPresContext* aPresContext,
-    nsCSSProperty aProperty,
+    nsCSSPropertyID aProperty,
     nsTArray<PropertyValuePair>& aPropertyValues)
 {
   PropertyValuePair propertyValue;
@@ -1028,7 +1031,7 @@ CSSAnimationBuilder::AppendProperty(
 
 nsCSSValue
 CSSAnimationBuilder::GetComputedValue(nsPresContext* aPresContext,
-                                      nsCSSProperty aProperty)
+                                      nsCSSPropertyID aProperty)
 {
   nsCSSValue result;
   StyleAnimationValue computedValue;
@@ -1045,7 +1048,11 @@ CSSAnimationBuilder::GetComputedValue(nsPresContext* aPresContext,
   if (StyleAnimationValue::ExtractComputedValue(aProperty,
                                                 mStyleWithoutAnimation,
                                                 computedValue)) {
-    StyleAnimationValue::UncomputeValue(aProperty, Move(computedValue), result);
+    DebugOnly<bool> uncomputeResult =
+      StyleAnimationValue::UncomputeValue(aProperty, Move(computedValue),
+                                          result);
+    MOZ_ASSERT(uncomputeResult,
+               "Unable to get specified value from computed value");
   }
 
   // If we hit this assertion, it probably means we are fetching a value from

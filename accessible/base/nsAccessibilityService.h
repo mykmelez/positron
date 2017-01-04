@@ -24,6 +24,11 @@ class nsPluginFrame;
 class nsITreeView;
 
 namespace mozilla {
+
+namespace dom {
+  class DOMStringList;
+}
+
 namespace a11y {
 
 class ApplicationAccessible;
@@ -108,6 +113,8 @@ public:
   /**
    * Get a string equivalent for an accessible state/extra state.
    */
+  already_AddRefed<mozilla::dom::DOMStringList>
+    GetStringStates(uint64_t aStates) const;
   void GetStringStates(uint32_t aState, uint32_t aExtraState,
                        nsISupports **aStringStates);
 
@@ -195,12 +202,10 @@ public:
   /**
    * Return true if accessibility service has been shutdown.
    */
-  static bool IsShutdown() { return gIsShutdown; }
-
-  /**
-   * Return true if accessibility service has been initialized by platform.
-   */
-  static bool IsPlatformCaller() { return gIsPlatformCaller; };
+  static bool IsShutdown()
+  {
+    return gConsumers == 0;
+  };
 
   /**
    * Creates an accessible for the given DOM node.
@@ -225,6 +230,25 @@ public:
    */
   void MarkupAttributes(const nsIContent* aContent,
                         nsIPersistentProperties* aAttributes) const;
+
+  /**
+   * A list of possible accessibility service consumers. Accessibility service
+   * can only be shut down when there are no remaining consumers.
+   *
+   * eXPCOM       - accessibility service is used by XPCOM.
+   *
+   * eMainProcess - accessibility service was started by main process in the
+   *                content process.
+   *
+   * ePlatformAPI - accessibility service is used by the platform api in the
+   *                main process.
+   */
+  enum ServiceConsumer
+  {
+    eXPCOM       = 1 << 0,
+    eMainProcess = 1 << 1,
+    ePlatformAPI = 1 << 2,
+  };
 
 private:
   // nsAccessibilityService creation is controlled by friend
@@ -277,20 +301,15 @@ private:
   static mozilla::a11y::xpcAccessibleApplication* gXPCApplicationAccessible;
 
   /**
-   * Indicates whether accessibility service was shutdown.
+   * Contains a set of accessibility service consumers.
    */
-  static bool gIsShutdown;
-
-  /**
-   * Indicates whether accessibility service was initialized by platform.
-   */
-  static bool gIsPlatformCaller;
+  static uint32_t gConsumers;
 
   nsDataHashtable<nsPtrHashKey<const nsIAtom>, const mozilla::a11y::MarkupMapInfo*> mMarkupMaps;
 
   friend nsAccessibilityService* GetAccService();
-  friend nsAccessibilityService* GetOrCreateAccService(bool);
-  friend bool CanShutdownAccService();
+  friend nsAccessibilityService* GetOrCreateAccService(uint32_t);
+  friend void MaybeShutdownAccService(uint32_t);
   friend mozilla::a11y::FocusManager* mozilla::a11y::FocusMgr();
   friend mozilla::a11y::SelectionManager* mozilla::a11y::SelectionMgr();
   friend mozilla::a11y::ApplicationAccessible* mozilla::a11y::ApplicationAcc();
@@ -310,12 +329,13 @@ GetAccService()
 /**
  * Return accessibility service instance; creating one if necessary.
  */
-nsAccessibilityService* GetOrCreateAccService(bool aIsPlatformCaller = true);
+nsAccessibilityService* GetOrCreateAccService(
+  uint32_t aNewConsumer = nsAccessibilityService::ePlatformAPI);
 
 /**
- * Return a flag indicating if accessibility service can be shutdown.
+ * Shutdown accessibility service if needed.
  */
-bool CanShutdownAccService();
+void MaybeShutdownAccService(uint32_t aFormerConsumer);
 
 /**
  * Return true if we're in a content process and not B2G.

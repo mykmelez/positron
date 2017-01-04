@@ -5,7 +5,6 @@
 
 package org.mozilla.gecko.gfx;
 
-import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.util.FloatUtils;
 import org.mozilla.gecko.util.ThreadUtils;
@@ -112,11 +111,6 @@ public class DynamicToolbarAnimator {
             }
         };
         PrefsHelper.addObserver(new String[] { PREF_SCROLL_TOOLBAR_THRESHOLD }, mPrefObserver);
-
-        // JPZ doesn't notify when scrolling root content. This maintains existing behaviour.
-        if (!AppConstants.MOZ_ANDROID_APZ) {
-            mScrollingRootContent = true;
-        }
     }
 
     public void destroy() {
@@ -243,6 +237,11 @@ public class DynamicToolbarAnimator {
         float layerViewTranslationNeeded = desiredTranslation - mLayerViewTranslation;
         mLayerViewTranslation = desiredTranslation;
         synchronized (mTarget.getLock()) {
+            if (layerViewTranslationNeeded == 0 && isResizing()) {
+                // We're already in the middle of a snap, so this new call is
+                // redundant as it's snapping to the same place. Ignore it.
+                return;
+            }
             mHeightDuringResize = new Integer(mTarget.getViewportMetrics().viewportRectHeight);
             mSnapRequired = mTarget.setViewportSize(
                 mTarget.getView().getWidth(),

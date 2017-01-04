@@ -2,10 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const { Cu, Cc, Ci } = require("chrome");
+"use strict";
 
-const { LocalizationHelper } = require("devtools/client/shared/l10n");
-const STRINGS_URI = "chrome://devtools/locale/memory.properties";
+const { Cc, Ci } = require("chrome");
+
+const { LocalizationHelper } = require("devtools/shared/l10n");
+const STRINGS_URI = "devtools/client/locales/memory.properties";
 const L10N = exports.L10N = new LocalizationHelper(STRINGS_URI);
 
 const { OS } = require("resource://gre/modules/osfile.jsm");
@@ -330,7 +332,6 @@ exports.censusIsUpToDate = function (filter, display, census) {
       && display === census.display;
 };
 
-
 /**
  * Check to see if the snapshot is in a state that it can take a census.
  *
@@ -413,8 +414,8 @@ exports.getSnapshotTotals = function (census) {
  *        The file selected by the user, or null, if cancelled.
  */
 exports.openFilePicker = function ({ title, filters, defaultName, mode }) {
-  mode = mode === "save" ? Ci.nsIFilePicker.modeSave :
-         mode === "open" ? Ci.nsIFilePicker.modeOpen : null;
+  mode = mode === "save" ? Ci.nsIFilePicker.modeSave : null;
+  mode = mode === "open" ? Ci.nsIFilePicker.modeOpen : null;
 
   if (mode == void 0) {
     throw new Error("No valid mode specified for nsIFilePicker.");
@@ -473,7 +474,7 @@ exports.formatNumber = function (number, showSign = false) {
  * @param {Boolean} showSign (defaults to false)
  */
 exports.formatPercent = function (percent, showSign = false) {
-  return exports.L10N.getFormatStr("tree-item.percent",
+  return exports.L10N.getFormatStr("tree-item.percent2",
                            exports.formatNumber(percent, showSign));
 };
 

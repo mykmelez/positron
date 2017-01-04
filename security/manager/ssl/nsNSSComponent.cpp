@@ -20,7 +20,7 @@
 #include "mozilla/StaticPtr.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/Telemetry.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsCRT.h"
 #include "nsClientAuthRemember.h"
@@ -64,6 +64,11 @@
 #include "wincrypt.h"
 #include "nsIWindowsRegKey.h"
 #endif
+
+#ifdef ANDROID
+#include "mozilla/PodOperations.h"
+#include "nsPrintfCString.h"
+#endif // ANDROID
 
 using namespace mozilla;
 using namespace mozilla::psm;
@@ -256,7 +261,7 @@ nsNSSComponent::nsNSSComponent()
 #endif
 {
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::ctor\n"));
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
   NS_ASSERTION( (0 == mInstanceCount), "nsNSSComponent is a singleton, but instantiated multiple times!");
   ++mInstanceCount;
@@ -265,7 +270,7 @@ nsNSSComponent::nsNSSComponent()
 nsNSSComponent::~nsNSSComponent()
 {
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::dtor\n"));
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
   // All cleanup code requiring services needs to happen in xpcom_shutdown
 
@@ -971,7 +976,49 @@ nsNSSComponent::MaybeImportEnterpriseRoots()
   if (!importEnterpriseRoots) {
     return;
   }
-  DWORD flags = CERT_SYSTEM_STORE_LOCAL_MACHINE |
+
+  MOZ_ASSERT(!mEnterpriseRoots);
+  mEnterpriseRoots.reset(CERT_NewCertList());
+  if (!mEnterpriseRoots) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
+            ("failed to allocate a new CERTCertList for mEnterpriseRoots"));
+    return;
+  }
+
+  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE);
+  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY);
+  ImportEnterpriseRootsForLocation(CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE);
+#endif // XP_WIN
+}
+
+#ifdef XP_WIN
+// Loads the enterprise roots at the registry location corresponding to the
+// given location flag.
+// Supported flags are:
+//   CERT_SYSTEM_STORE_LOCAL_MACHINE
+//     (for HKLM\SOFTWARE\Microsoft\SystemCertificates)
+//   CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY
+//     (for HKLM\SOFTWARE\Policies\Microsoft\SystemCertificates\Root\Certificates)
+//   CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE
+//     (for HKLM\SOFTWARE\Microsoft\EnterpriseCertificates\Root\Certificates)
+void
+nsNSSComponent::ImportEnterpriseRootsForLocation(DWORD locationFlag)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+  if (!NS_IsMainThread()) {
+    return;
+  }
+  MOZ_ASSERT(locationFlag == CERT_SYSTEM_STORE_LOCAL_MACHINE ||
+             locationFlag == CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY ||
+             locationFlag == CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE,
+             "unexpected locationFlag for ImportEnterpriseRootsForLocation");
+  if (!(locationFlag == CERT_SYSTEM_STORE_LOCAL_MACHINE ||
+        locationFlag == CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY ||
+        locationFlag == CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE)) {
+    return;
+  }
+
+  DWORD flags = locationFlag |
                 CERT_STORE_OPEN_EXISTING_FLAG |
                 CERT_STORE_READONLY_FLAG;
   // The certificate store being opened should consist only of certificates
@@ -986,8 +1033,6 @@ nsNSSComponent::MaybeImportEnterpriseRoots()
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("failed to open enterprise root store"));
     return;
   }
-  MOZ_ASSERT(!mEnterpriseRoots);
-  mEnterpriseRoots.reset(CERT_NewCertList());
   CERTCertTrust trust = {
     CERTDB_TRUSTED_CA | CERTDB_VALID_CA | CERTDB_USER,
     0,
@@ -1019,6 +1064,10 @@ nsNSSComponent::MaybeImportEnterpriseRoots()
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("skipping Family Safety Root"));
       continue;
     }
+    MOZ_ASSERT(mEnterpriseRoots, "mEnterpriseRoots unexpectedly NULL?");
+    if (!mEnterpriseRoots) {
+      return;
+    }
     if (CERT_AddCertToListTail(mEnterpriseRoots.get(), nssCertificate.get())
           != SECSuccess) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("couldn't add cert to list"));
@@ -1035,8 +1084,8 @@ nsNSSComponent::MaybeImportEnterpriseRoots()
     Unused << nssCertificate.release();
   }
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("imported %u roots", numImported));
-#endif // XP_WIN
 }
+#endif // XP_WIN
 
 void
 nsNSSComponent::LoadLoadableRoots()
@@ -1093,10 +1142,18 @@ nsNSSComponent::LoadLoadableRoots()
   // Prefer the application's installation directory,
   // but also ensure the library is at least the version we expect.
 
-  nsresult rv;
   nsAutoString modName;
-  rv = GetPIPNSSBundleString("RootCertModuleName", modName);
-  if (NS_FAILED(rv)) return;
+  nsresult rv = GetPIPNSSBundleString("RootCertModuleName", modName);
+  if (NS_FAILED(rv)) {
+    // When running Cpp unit tests on Android, this will fail because string
+    // bundles aren't available (see bug 1311077, bug 1228175 comment 12, and
+    // bug 929655). Because the module name is really only for display purposes,
+    // we can just hard-code the value here. Furthermore, if we want to be able
+    // to stop using string bundles in PSM in this way, we'll have to hard-code
+    // the string and only use the localized version when displaying it to the
+    // user, so this is a step in that direction anyway.
+    modName.AssignLiteral("Builtin Roots Module");
+  }
 
   nsCOMPtr<nsIProperties> directoryService(do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID));
   if (!directoryService)
@@ -1153,9 +1210,7 @@ nsNSSComponent::LoadLoadableRoots()
     }
 
     NS_ConvertUTF16toUTF8 modNameUTF8(modName);
-    if (mozilla::psm::LoadLoadableRoots(
-            libDir.Length() > 0 ? libDir.get() : nullptr,
-            modNameUTF8.get()) == SECSuccess) {
+    if (mozilla::psm::LoadLoadableRoots(libDir, modNameUTF8)) {
       break;
     }
   }
@@ -1251,7 +1306,6 @@ typedef struct {
   const char* pref;
   long id;
   bool enabledByDefault;
-  bool weak;
 } CipherPref;
 
 // Update the switch statement in AccumulateCipherSuite in nsNSSCallbacks.cpp
@@ -1288,12 +1342,12 @@ static const CipherPref sCipherPrefs[] = {
  { "security.ssl3.dhe_rsa_aes_256_sha",
    TLS_DHE_RSA_WITH_AES_256_CBC_SHA, true },
 
- { "security.ssl3.ecdhe_psk_aes_128_gcm_sha256",
-   TLS_ECDHE_PSK_WITH_AES_128_GCM_SHA256, true },
- { "security.ssl3.ecdhe_psk_chacha20_poly1305_sha256",
-   TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256, true },
- { "security.ssl3.ecdhe_psk_aes_256_gcm_sha384",
-   TLS_ECDHE_PSK_WITH_AES_256_GCM_SHA384, true },
+ { "security.tls13.aes_128_gcm_sha256",
+   TLS_AES_128_GCM_SHA256, true },
+ { "security.tls13.chacha20_poly1305_sha256",
+   TLS_CHACHA20_POLY1305_SHA256, true },
+ { "security.tls13.aes_256_gcm_sha384",
+   TLS_AES_256_GCM_SHA384, true },
 
  { "security.ssl3.rsa_aes_128_sha",
    TLS_RSA_WITH_AES_128_CBC_SHA, true }, // deprecated (RSA key exchange)
@@ -1306,31 +1360,6 @@ static const CipherPref sCipherPrefs[] = {
 
  { nullptr, 0 } // end marker
 };
-
-// Bit flags indicating what weak ciphers are enabled.
-// The bit index will correspond to the index in sCipherPrefs.
-// Wrtten by the main thread, read from any threads.
-static Atomic<uint32_t> sEnabledWeakCiphers;
-static_assert(MOZ_ARRAY_LENGTH(sCipherPrefs) - 1 <= sizeof(uint32_t) * CHAR_BIT,
-              "too many cipher suites");
-
-/*static*/ bool
-nsNSSComponent::AreAnyWeakCiphersEnabled()
-{
-  return !!sEnabledWeakCiphers;
-}
-
-/*static*/ void
-nsNSSComponent::UseWeakCiphersOnSocket(PRFileDesc* fd)
-{
-  const uint32_t enabledWeakCiphers = sEnabledWeakCiphers;
-  const CipherPref* const cp = sCipherPrefs;
-  for (size_t i = 0; cp[i].pref; ++i) {
-    if (enabledWeakCiphers & ((uint32_t)1 << i)) {
-      SSL_CipherPrefSet(fd, cp[i].id, true);
-    }
-  }
-}
 
 // This function will convert from pref values like 1, 2, ...
 // to the internal values of SSL_LIBRARY_VERSION_TLS_1_0,
@@ -1348,6 +1377,11 @@ nsNSSComponent::FillTLSVersionRange(SSLVersionRange& rangeOut,
         != SECSuccess) {
     return;
   }
+
+  // Clip the defaults by what NSS actually supports to enable
+  // working with a system NSS with different ranges.
+  rangeOut.min = std::max(rangeOut.min, supported.min);
+  rangeOut.max = std::min(rangeOut.max, supported.max);
 
   // convert min/maxFromPrefs to the internal representation
   minFromPrefs += SSL_LIBRARY_VERSION_3_0;
@@ -1367,8 +1401,8 @@ nsNSSComponent::FillTLSVersionRange(SSLVersionRange& rangeOut,
 static const int32_t OCSP_ENABLED_DEFAULT = 1;
 static const bool REQUIRE_SAFE_NEGOTIATION_DEFAULT = false;
 static const bool FALSE_START_ENABLED_DEFAULT = true;
-static const bool NPN_ENABLED_DEFAULT = true;
 static const bool ALPN_ENABLED_DEFAULT = false;
+static const bool ENABLED_0RTT_DATA_DEFAULT = false;
 
 static void
 ConfigureTLSSessionIdentifiers()
@@ -1439,22 +1473,8 @@ CipherSuiteChangeObserver::Observe(nsISupports* aSubject,
       if (prefName.Equals(cp[i].pref)) {
         bool cipherEnabled = Preferences::GetBool(cp[i].pref,
                                                   cp[i].enabledByDefault);
-        if (cp[i].weak) {
-          // Weak ciphers will not be used by default even if they
-          // are enabled in prefs. They are only used on specific
-          // sockets as a part of a fallback mechanism.
-          // Only the main thread will change sEnabledWeakCiphers.
-          uint32_t enabledWeakCiphers = sEnabledWeakCiphers;
-          if (cipherEnabled) {
-            enabledWeakCiphers |= ((uint32_t)1 << i);
-          } else {
-            enabledWeakCiphers &= ~((uint32_t)1 << i);
-          }
-          sEnabledWeakCiphers = enabledWeakCiphers;
-        } else {
-          SSL_CipherPrefSetDefault(cp[i].id, cipherEnabled);
-          SSL_ClearSessionCache();
-        }
+        SSL_CipherPrefSetDefault(cp[i].id, cipherEnabled);
+        SSL_ClearSessionCache();
         break;
       }
     }
@@ -1501,6 +1521,25 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
   PublicSSLState()->SetOCSPMustStapleEnabled(ocspMustStapleEnabled);
   PrivateSSLState()->SetOCSPMustStapleEnabled(ocspMustStapleEnabled);
 
+  const CertVerifier::CertificateTransparencyMode defaultCTMode =
+    CertVerifier::CertificateTransparencyMode::TelemetryOnly;
+  CertVerifier::CertificateTransparencyMode ctMode =
+    static_cast<CertVerifier::CertificateTransparencyMode>
+      (Preferences::GetInt("security.pki.certificate_transparency.mode",
+                           static_cast<int32_t>(defaultCTMode)));
+  switch (ctMode) {
+    case CertVerifier::CertificateTransparencyMode::Disabled:
+    case CertVerifier::CertificateTransparencyMode::TelemetryOnly:
+      break;
+    default:
+      ctMode = defaultCTMode;
+      break;
+  }
+  bool sctsEnabled =
+    ctMode != CertVerifier::CertificateTransparencyMode::Disabled;
+  PublicSSLState()->SetSignedCertTimestampsEnabled(sctsEnabled);
+  PrivateSSLState()->SetSignedCertTimestampsEnabled(sctsEnabled);
+
   CertVerifier::PinningMode pinningMode =
     static_cast<CertVerifier::PinningMode>
       (Preferences::GetInt("security.cert_pinning.enforcement_level",
@@ -1515,12 +1554,18 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
   switch (sha1Mode) {
     case CertVerifier::SHA1Mode::Allowed:
     case CertVerifier::SHA1Mode::Forbidden:
-    case CertVerifier::SHA1Mode::Before2016:
+    case CertVerifier::SHA1Mode::UsedToBeBefore2016ButNowIsForbidden:
     case CertVerifier::SHA1Mode::ImportedRoot:
+    case CertVerifier::SHA1Mode::ImportedRootOrBefore2016:
       break;
     default:
       sha1Mode = CertVerifier::SHA1Mode::Allowed;
       break;
+  }
+
+  // Convert a previously-available setting to a safe one.
+  if (sha1Mode == CertVerifier::SHA1Mode::UsedToBeBefore2016ButNowIsForbidden) {
+    sha1Mode = CertVerifier::SHA1Mode::Forbidden;
   }
 
   BRNameMatchingPolicy::Mode nameMatchingMode =
@@ -1564,7 +1609,8 @@ void nsNSSComponent::setValidationOptions(bool isInitialSetting,
                                                 certShortLifetimeInDays,
                                                 pinningMode, sha1Mode,
                                                 nameMatchingMode,
-                                                netscapeStepUpPolicy);
+                                                netscapeStepUpPolicy,
+                                                ctMode);
 }
 
 // Enable the TLS versions given in the prefs, defaulting to TLS 1.0 (min) and
@@ -1575,7 +1621,7 @@ nsNSSComponent::setEnabledTLSVersions()
   // keep these values in sync with security-prefs.js
   // 1 means TLS 1.0, 2 means TLS 1.1, etc.
   static const uint32_t PSM_DEFAULT_MIN_TLS_VERSION = 1;
-  static const uint32_t PSM_DEFAULT_MAX_TLS_VERSION = 3;
+  static const uint32_t PSM_DEFAULT_MAX_TLS_VERSION = 4;
 
   uint32_t minFromPrefs = Preferences::GetUint("security.tls.version.min",
                                                PSM_DEFAULT_MIN_TLS_VERSION);
@@ -1643,6 +1689,10 @@ GetNSSProfilePath(nsAutoCString& aProfilePath)
           ("NSS profile at '%s'\n", aProfilePath.get()));
   return NS_OK;
 }
+
+#ifdef ANDROID
+static char sCrashReasonBuffer[1024];
+#endif // ANDROID
 
 nsresult
 nsNSSComponent::InitializeNSS()
@@ -1715,6 +1765,17 @@ nsNSSComponent::InitializeNSS()
   // pref has been set to "true", attempt to initialize with no DB.
   if (nocertdb || init_rv != SECSuccess) {
     init_rv = NSS_NoDB_Init(nullptr);
+#ifdef ANDROID
+    if (init_rv != SECSuccess) {
+      nsPrintfCString message("NSS_NoDB_Init failed with PRErrorCode %d",
+                              PR_GetError());
+      mozilla::PodArrayZero(sCrashReasonBuffer);
+      strncpy(sCrashReasonBuffer, message.get(),
+              sizeof(sCrashReasonBuffer) - 1);
+      MOZ_CRASH_ANNOTATE(sCrashReasonBuffer);
+      MOZ_REALLY_CRASH();
+    }
+#endif // ANDROID
   }
   if (init_rv != SECSuccess) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("could not initialize NSS - panicking\n"));
@@ -1743,9 +1804,13 @@ nsNSSComponent::InitializeNSS()
   }
 
   DisableMD5();
-  // Initialize the certverifier log before calling any functions that library.
-  InitCertVerifierLog();
   LoadLoadableRoots();
+
+  rv = LoadExtendedValidationInfo();
+  if (NS_FAILED(rv)) {
+    MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("failed to load EV info"));
+    return rv;
+  }
 
   MaybeEnableFamilySafetyCompatibility();
   MaybeImportEnterpriseRoots();
@@ -1765,16 +1830,17 @@ nsNSSComponent::InitializeNSS()
                        Preferences::GetBool("security.ssl.enable_false_start",
                                             FALSE_START_ENABLED_DEFAULT));
 
-  // SSL_ENABLE_NPN and SSL_ENABLE_ALPN also require calling
-  // SSL_SetNextProtoNego in order for the extensions to be negotiated.
-  // WebRTC does not do that so it will not use NPN or ALPN even when these
-  // preferences are true.
-  SSL_OptionSetDefault(SSL_ENABLE_NPN,
-                       Preferences::GetBool("security.ssl.enable_npn",
-                                            NPN_ENABLED_DEFAULT));
+  // SSL_ENABLE_ALPN also requires calling SSL_SetNextProtoNego in order for
+  // the extensions to be negotiated.
+  // WebRTC does not do that so it will not use ALPN even when this preference
+  // is true.
   SSL_OptionSetDefault(SSL_ENABLE_ALPN,
                        Preferences::GetBool("security.ssl.enable_alpn",
                                             ALPN_ENABLED_DEFAULT));
+
+  SSL_OptionSetDefault(SSL_ENABLE_0RTT_DATA,
+                       Preferences::GetBool("security.tls.enable_0rtt_data",
+                                            ENABLED_0RTT_DATA_DEFAULT));
 
   if (NS_FAILED(InitializeCipherSuite())) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("Unable to initialize cipher suite settings\n"));
@@ -1837,7 +1903,7 @@ nsNSSComponent::ShutdownNSS()
   // needs mutex protection.
 
   MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("nsNSSComponent::ShutdownNSS\n"));
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
   MutexAutoLock lock(mutex);
 
@@ -1860,9 +1926,7 @@ nsNSSComponent::ShutdownNSS()
     // TLSServerSocket may be run with the session cache enabled. This ensures
     // those resources are cleaned up.
     Unused << SSL_ShutdownServerSessionIDCache();
-#ifndef MOZ_NO_EV_CERTS
-    CleanupIdentityInfo();
-#endif
+
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug, ("evaporating psm resources"));
     if (NS_FAILED(nsNSSShutDownList::evaporateAllNSSResources())) {
       MOZ_LOG(gPIPNSSLog, LogLevel::Error, ("failed to evaporate resources"));
@@ -1881,7 +1945,7 @@ nsNSSComponent::ShutdownNSS()
 nsresult
 nsNSSComponent::Init()
 {
-  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_RELEASE_ASSERT(NS_IsMainThread());
   if (!NS_IsMainThread()) {
     return NS_ERROR_NOT_SAME_THREAD;
   }
@@ -1953,14 +2017,14 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
       SSL_OptionSetDefault(SSL_ENABLE_FALSE_START,
                            Preferences::GetBool("security.ssl.enable_false_start",
                                                 FALSE_START_ENABLED_DEFAULT));
-    } else if (prefName.EqualsLiteral("security.ssl.enable_npn")) {
-      SSL_OptionSetDefault(SSL_ENABLE_NPN,
-                           Preferences::GetBool("security.ssl.enable_npn",
-                                                NPN_ENABLED_DEFAULT));
     } else if (prefName.EqualsLiteral("security.ssl.enable_alpn")) {
       SSL_OptionSetDefault(SSL_ENABLE_ALPN,
                            Preferences::GetBool("security.ssl.enable_alpn",
                                                 ALPN_ENABLED_DEFAULT));
+    } else if (prefName.EqualsLiteral("security.tls.enable_0rtt_data")) {
+      SSL_OptionSetDefault(SSL_ENABLE_0RTT_DATA,
+                           Preferences::GetBool("security.tls.enable_0rtt_data",
+                                                ENABLED_0RTT_DATA_DEFAULT));
     } else if (prefName.Equals("security.ssl.disable_session_identifiers")) {
       ConfigureTLSSessionIdentifiers();
     } else if (prefName.EqualsLiteral("security.OCSP.enabled") ||
@@ -1969,6 +2033,7 @@ nsNSSComponent::Observe(nsISupports* aSubject, const char* aTopic,
                prefName.EqualsLiteral("security.pki.cert_short_lifetime_in_days") ||
                prefName.EqualsLiteral("security.ssl.enable_ocsp_stapling") ||
                prefName.EqualsLiteral("security.ssl.enable_ocsp_must_staple") ||
+               prefName.EqualsLiteral("security.pki.certificate_transparency.mode") ||
                prefName.EqualsLiteral("security.cert_pinning.enforcement_level") ||
                prefName.EqualsLiteral("security.pki.sha1_enforcement_level") ||
                prefName.EqualsLiteral("security.pki.name_matching_mode") ||
@@ -2187,7 +2252,6 @@ GetDefaultCertVerifier()
   static NS_DEFINE_CID(kNSSComponentCID, NS_NSSCOMPONENT_CID);
 
   nsCOMPtr<nsINSSComponent> nssComponent(do_GetService(kNSSComponentCID));
-  RefPtr<SharedCertVerifier> certVerifier;
   if (nssComponent) {
     return nssComponent->GetDefaultCertVerifier();
   }
@@ -2299,22 +2363,12 @@ InitializeCipherSuite()
   }
 
   // Now only set SSL/TLS ciphers we knew about at compile time
-  uint32_t enabledWeakCiphers = 0;
   const CipherPref* const cp = sCipherPrefs;
   for (size_t i = 0; cp[i].pref; ++i) {
     bool cipherEnabled = Preferences::GetBool(cp[i].pref,
                                               cp[i].enabledByDefault);
-    if (cp[i].weak) {
-      // Weak ciphers are not used by default. See the comment
-      // in CipherSuiteChangeObserver::Observe for details.
-      if (cipherEnabled) {
-        enabledWeakCiphers |= ((uint32_t)1 << i);
-      }
-    } else {
-      SSL_CipherPrefSetDefault(cp[i].id, cipherEnabled);
-    }
+    SSL_CipherPrefSetDefault(cp[i].id, cipherEnabled);
   }
-  sEnabledWeakCiphers = enabledWeakCiphers;
 
   // Enable ciphers for PKCS#12
   SEC_PKCS12EnableCipher(PKCS12_RC4_40, 1);

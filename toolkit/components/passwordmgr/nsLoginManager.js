@@ -6,11 +6,13 @@
 
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
+const PERMISSION_SAVE_LOGINS = "login-saving";
+
 Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
-Cu.import("resource://gre/modules/LoginManagerContent.jsm");
+Cu.import("resource://gre/modules/LoginManagerContent.jsm"); /* global UserAutoCompleteResult */
 
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
                                   "resource://gre/modules/Promise.jsm");
@@ -20,6 +22,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
                                   "resource://gre/modules/BrowserUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LoginHelper",
                                   "resource://gre/modules/LoginHelper.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "LoginFormFactory",
+                                  "resource://gre/modules/LoginManagerContent.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "InsecurePasswordUtils",
+                                  "resource://gre/modules/InsecurePasswordUtils.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let logger = LoginHelper.createLogger("nsLoginManager");
@@ -347,14 +353,29 @@ LoginManager.prototype = {
   /**
    * Get a list of all origins for which logins are disabled.
    *
-   * |count| is only needed for XPCOM.
+   * @param {Number} count - only needed for XPCOM.
    *
    * @return {String[]} of disabled origins. If there are no disabled origins,
    *                    the array is empty.
    */
   getAllDisabledHosts(count) {
     log.debug("Getting a list of all disabled origins");
-    return this._storage.getAllDisabledHosts(count);
+
+    let disabledHosts = [];
+    let enumerator = Services.perms.enumerator;
+
+    while (enumerator.hasMoreElements()) {
+      let perm = enumerator.getNext();
+      if (perm.type == PERMISSION_SAVE_LOGINS && perm.capability == Services.perms.DENY_ACTION) {
+        disabledHosts.push(perm.principal.URI.prePath);
+      }
+    }
+
+    if (count)
+      count.value = disabledHosts.length; // needed for XPCOM
+
+    log.debug("getAllDisabledHosts: returning", disabledHosts.length, "disabled hosts.");
+    return disabledHosts;
   },
 
 
@@ -425,7 +446,8 @@ LoginManager.prototype = {
       return false;
     }
 
-    return this._storage.getLoginSavingEnabled(origin);
+    let uri = Services.io.newURI(origin, null, null);
+    return Services.perms.testPermission(uri, PERMISSION_SAVE_LOGINS) != Services.perms.DENY_ACTION;
   },
 
 
@@ -433,13 +455,18 @@ LoginManager.prototype = {
    * Enable or disable storing logins for the specified origin.
    */
   setLoginSavingEnabled(origin, enabled) {
-    // Nulls won't round-trip with getAllDisabledHosts().
-    if (origin.indexOf("\0") != -1) {
-      throw new Error("Invalid hostname");
+    // Throws if there are bogus values.
+    LoginHelper.checkHostnameValue(origin);
+
+    let uri = Services.io.newURI(origin, null, null);
+    if (enabled) {
+      Services.perms.remove(uri, PERMISSION_SAVE_LOGINS);
+    } else {
+      Services.perms.add(uri, PERMISSION_SAVE_LOGINS, Services.perms.DENY_ACTION);
     }
 
     log.debug("Login saving for", origin, "now enabled?", enabled);
-    return this._storage.setLoginSavingEnabled(origin, enabled);
+    LoginHelper.notifyStorageChanged(enabled ? "hostSavingEnabled" : "hostSavingDisabled", origin);
   },
 
   /**
@@ -455,10 +482,36 @@ LoginManager.prototype = {
     // aPreviousResult is an nsIAutoCompleteResult, aElement is
     // nsIDOMHTMLInputElement
 
+    let form = LoginFormFactory.createFromField(aElement);
+    let isSecure = InsecurePasswordUtils.isFormSecure(form);
+    let isPasswordField = aElement.type == "password";
+
+    let completeSearch = (autoCompleteLookupPromise, { logins, messageManager }) => {
+      // If the search was canceled before we got our
+      // results, don't bother reporting them.
+      if (this._autoCompleteLookupPromise !== autoCompleteLookupPromise) {
+        return;
+      }
+
+      this._autoCompleteLookupPromise = null;
+      let results = new UserAutoCompleteResult(aSearchString, logins, {
+        messageManager,
+        isSecure,
+        isPasswordField,
+      });
+      aCallback.onSearchCompletion(results);
+    };
+
+    if (isPasswordField && aSearchString) {
+      // Return empty result on password fields with password already filled.
+      let acLookupPromise = this._autoCompleteLookupPromise = Promise.resolve({ logins: [] });
+      acLookupPromise.then(completeSearch.bind(this, acLookupPromise));
+      return;
+    }
+
     if (!this._remember) {
-      setTimeout(function() {
-        aCallback.onSearchCompletion(new UserAutoCompleteResult(aSearchString, []));
-      }, 0);
+      let acLookupPromise = this._autoCompleteLookupPromise = Promise.resolve({ logins: [] });
+      acLookupPromise.then(completeSearch.bind(this, acLookupPromise));
       return;
     }
 
@@ -473,22 +526,11 @@ LoginManager.prototype = {
     }
 
     let rect = BrowserUtils.getElementBoundingScreenRect(aElement);
-    let autoCompleteLookupPromise = this._autoCompleteLookupPromise =
+    let acLookupPromise = this._autoCompleteLookupPromise =
       LoginManagerContent._autoCompleteSearchAsync(aSearchString, previousResult,
                                                    aElement, rect);
-    autoCompleteLookupPromise.then(({ logins, messageManager }) => {
-                               // If the search was canceled before we got our
-                               // results, don't bother reporting them.
-                               if (this._autoCompleteLookupPromise !== autoCompleteLookupPromise) {
-                                 return;
-                               }
-
-                               this._autoCompleteLookupPromise = null;
-                               let results =
-                                 new UserAutoCompleteResult(aSearchString, logins, messageManager);
-                               aCallback.onSearchCompletion(results);
-                             })
-                            .then(null, Cu.reportError);
+    acLookupPromise.then(completeSearch.bind(this, acLookupPromise))
+                             .then(null, Cu.reportError);
   },
 
   stopSearch() {

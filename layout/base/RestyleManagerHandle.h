@@ -17,6 +17,7 @@
 namespace mozilla {
 class RestyleManager;
 class ServoRestyleManager;
+class RestyleManagerBase;
 namespace dom {
 class Element;
 } // namespace dom
@@ -95,6 +96,14 @@ public:
     const RestyleManager* GetAsGecko() const { return IsGecko() ? AsGecko() : nullptr; }
     const ServoRestyleManager* GetAsServo() const { return IsServo() ? AsServo() : nullptr; }
 
+    const mozilla::RestyleManagerBase* AsBase() const {
+      return reinterpret_cast<const RestyleManagerBase*>(mValue & ~SERVO_BIT);
+    }
+
+    mozilla::RestyleManagerBase* AsBase() {
+      return reinterpret_cast<RestyleManagerBase*>(mValue & ~SERVO_BIT);
+    }
+
     // These inline methods are defined in RestyleManagerHandleInlines.h.
     inline MozExternalRefCountType AddRef();
     inline MozExternalRefCountType Release();
@@ -114,13 +123,17 @@ public:
     inline void PostRebuildAllStyleDataEvent(nsChangeHint aExtraHint,
                                              nsRestyleHint aRestyleHint);
     inline void ProcessPendingRestyles();
-    inline void RestyleForInsertOrChange(dom::Element* aContainer,
+    inline void ContentInserted(nsINode* aContainer,
+                                nsIContent* aChild);
+    inline void ContentAppended(nsIContent* aContainer,
+                                nsIContent* aFirstNewContent);
+    inline void ContentRemoved(nsINode* aContainer,
+                               nsIContent* aOldChild,
+                               nsIContent* aFollowingSibling);
+    inline void RestyleForInsertOrChange(nsINode* aContainer,
                                          nsIContent* aChild);
-    inline void RestyleForAppend(dom::Element* aContainer,
+    inline void RestyleForAppend(nsIContent* aContainer,
                                  nsIContent* aFirstNewContent);
-    inline void RestyleForRemove(dom::Element* aContainer,
-                                 nsIContent* aOldChild,
-                                 nsIContent* aFollowingSibling);
     inline nsresult ContentStateChanged(nsIContent* aContent,
                                         EventStates aStateMask);
     inline void AttributeWillChange(dom::Element* aElement,

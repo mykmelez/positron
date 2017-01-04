@@ -114,12 +114,24 @@ this.BrowserIDManager.prototype = {
     }
   },
 
-  // Get the FxA UID. Throws if there is no signed in user
-  userUID() {
-    if (!this._signedInUser) {
-      throw new Error("userUID(): No signed in user");
+  hashedUID() {
+    if (!this._hashedUID) {
+      throw new Error("hashedUID: Don't seem to have previously seen a token");
     }
-    return this._signedInUser.uid;
+    return this._hashedUID;
+  },
+
+  // Return a hashed version of a deviceID, suitable for telemetry.
+  hashedDeviceID(deviceID) {
+    let uid = this.hashedUID();
+    // Combine the raw device id with the metrics uid to create a stable
+    // unique identifier that can't be mapped back to the user's FxA
+    // identity without knowing the metrics HMAC key.
+    return Utils.sha256(deviceID + uid);
+  },
+
+  deviceID() {
+    return this._signedInUser && this._signedInUser.deviceId;
   },
 
   initialize: function() {
@@ -245,6 +257,11 @@ this.BrowserIDManager.prototype = {
         return this._fetchTokenForUser();
       }).then(token => {
         this._token = token;
+        if (token) {
+          // We may not have a token if the master-password is locked - but we
+          // still treat this as "success" so we don't prompt for re-authentication.
+          this._hashedUID = token.hashed_fxa_uid; // see _ensureValidToken for why we do this...
+        }
         this._shouldHaveSyncKeyBundle = true; // and we should actually have one...
         this.whenReadyToAuthenticate.resolve();
         this._log.info("Background fetch for key bundle done");
@@ -369,7 +386,7 @@ this.BrowserIDManager.prototype = {
    * Changes will not persist unless persistSyncCredentials() is called.
    */
   set basicPassword(value) {
-    throw "basicPassword setter should be not used in BrowserIDManager";
+    throw new Error("basicPassword setter should be not used in BrowserIDManager");
   },
 
   /**
@@ -410,6 +427,7 @@ this.BrowserIDManager.prototype = {
   resetCredentials: function() {
     this.resetSyncKey();
     this._token = null;
+    this._hashedUID = null;
     // The cluster URL comes from the token, so resetting it to empty will
     // force Sync to not accidentally use a value from an earlier token.
     Weave.Service.clusterURL = null;
@@ -689,6 +707,13 @@ this.BrowserIDManager.prototype = {
     return this._fetchTokenForUser().then(
       token => {
         this._token = token;
+        // we store the hashed UID from the token so that if we see a transient
+        // error fetching a new token we still know the "most recent" hashed
+        // UID for telemetry.
+        if (token) {
+          // We may not have a token if the master-password is locked.
+          this._hashedUID = token.hashed_fxa_uid;
+        }
         notifyStateChanged();
       },
       error => {

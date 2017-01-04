@@ -14,7 +14,7 @@
 using namespace mozilla::layers;
 
 namespace mozilla {
-PRLogModuleInfo* gVideoFrameContainerLog;
+static LazyLogModule gVideoFrameContainerLog("VideoFrameContainer");
 #define CONTAINER_LOG(type, msg) MOZ_LOG(gVideoFrameContainerLog, type, msg)
 
 VideoFrameContainer::VideoFrameContainer(dom::HTMLMediaElement* aElement,
@@ -28,9 +28,6 @@ VideoFrameContainer::VideoFrameContainer(dom::HTMLMediaElement* aElement,
 {
   NS_ASSERTION(aElement, "aElement must not be null");
   NS_ASSERTION(mImageContainer, "aContainer must not be null");
-  if (!gVideoFrameContainerLog) {
-    gVideoFrameContainerLog = PR_NewLogModule("VideoFrameContainer");
-  }
 }
 
 VideoFrameContainer::~VideoFrameContainer()
@@ -292,6 +289,12 @@ void VideoFrameContainer::ClearFutureFrames()
         img.mTimeStamp, img.mFrameID, img.mProducerID));
     mImageContainer->SetCurrentImages(currentFrame);
   }
+}
+
+void
+VideoFrameContainer::ClearCachedResources()
+{
+  mImageContainer->ClearCachedResources();
 }
 
 ImageContainer* VideoFrameContainer::GetImageContainer() {

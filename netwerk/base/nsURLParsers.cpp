@@ -381,7 +381,7 @@ nsNoAuthURLParser::ParseAfterScheme(const char *spec, int32_t specLen,
             const char *p = nullptr;
             if (specLen > 2) {
                 // looks like there is an authority section
-#if defined(XP_WIN)
+
                 // if the authority looks like a drive number then we
                 // really want to treat it as part of the path
                 // [a-zA-Z][:|]{/\}
@@ -391,8 +391,7 @@ nsNoAuthURLParser::ParseAfterScheme(const char *spec, int32_t specLen,
                     ((specLen == 4) || (spec[4] == '/') || (spec[4] == '\\'))) {
                     pos = 1;
                     break;  
-                } 
-#endif
+                }
                 // Ignore apparent authority; path is everything after it
                 for (p = spec + 2; p < spec + specLen; ++p) {
                     if (*p == '/' || *p == '?' || *p == '#')
@@ -497,6 +496,12 @@ nsAuthURLParser::ParseAuthority(const char *auth, int32_t authLen,
                              port);
         if (NS_FAILED(rv)) return rv;
         OFFSET_RESULT(hostname, p + 1 - auth);
+
+        // malformed if has a username or password
+        // but no host info, such as: http://u:p@/
+        if ((usernamePos || passwordPos) && (!hostnamePos || !*hostnameLen)) {
+            return NS_ERROR_MALFORMED_URI;
+        }
     }
     else {
         // auth = <server-info>
@@ -600,7 +605,7 @@ nsAuthURLParser::ParseServerInfo(const char *serverinfo, int32_t serverinfoLen,
 
                 nsresult err;
                 *port = buf.ToInteger(&err);
-                if (NS_FAILED(err) || *port < 0)
+                if (NS_FAILED(err) || *port < 0 || *port > std::numeric_limits<uint16_t>::max())
                     return NS_ERROR_MALFORMED_URI;
             }
         }

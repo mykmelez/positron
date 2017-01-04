@@ -61,8 +61,9 @@ var checkUpdates = Task.async(function* (aData, aReason = AddonManager.UPDATE_WH
       obj[prop] = value;
   }
 
-  provide(aData, "addon.id", uuidGenerator.generateUUID().number);
-  let id = aData.addon.id;
+  let id = uuidGenerator.generateUUID().number;
+  provide(aData, "addon.id", id);
+  provide(aData, "addon.manifest.applications.gecko.id", id);
 
   let updatePath = `/updates/${id}.json`.replace(/[{}]/g, "");
   let updateUrl = `http://localhost:${gPort}${updatePath}`
@@ -82,6 +83,7 @@ var checkUpdates = Task.async(function* (aData, aReason = AddonManager.UPDATE_WH
     update.version = version;
 
     provide(update, "addon.id", id);
+    provide(update, "addon.manifest.applications.gecko.id", id);
     let addon = update.addon;
 
     delete update.addon;
@@ -225,18 +227,15 @@ add_task(function* checkIllegalUpdateURL() {
 
   for (let url of URLS) {
     let { messages } = yield promiseConsoleOutput(() => {
-      return new Promise((resolve, reject) => {
-        let addonFile = createTempWebExtensionFile({
-          manifest: { applications: { gecko: { update_url: url } } },
-        });
+      let addonFile = createTempWebExtensionFile({
+        manifest: { applications: { gecko: { update_url: url } } },
+      });
 
-        AddonManager.getInstallForFile(addonFile, install => {
-          Services.obs.notifyObservers(addonFile, "flush-cache-entry", null);
+      return AddonManager.getInstallForFile(addonFile).then(install => {
+        Services.obs.notifyObservers(addonFile, "flush-cache-entry", null);
 
-          if (install && install.state == AddonManager.STATE_DOWNLOAD_FAILED)
-            resolve();
-          reject(new Error("Unexpected state: " + (install && install.state)))
-        });
+        if (!install || install.state != AddonManager.STATE_DOWNLOAD_FAILED)
+          throw new Error("Unexpected state: " + (install && install.state));
       });
     });
 

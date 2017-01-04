@@ -5,6 +5,7 @@
 
 package org.mozilla.gecko.mozglue;
 
+import android.support.annotation.Keep;
 import org.mozilla.gecko.annotation.JNITarget;
 
 import java.io.InputStream;
@@ -17,6 +18,7 @@ public class NativeZip implements NativeReference {
     private static final int STORE = 0;
 
     private volatile long mObj;
+    @Keep
     private InputStream mInput;
 
     public NativeZip(String path) {
@@ -34,11 +36,7 @@ public class NativeZip implements NativeReference {
     }
 
     @Override
-    public void finalize() {
-        release();
-    }
-
-    public void close() {
+    protected void finalize() {
         release();
     }
 

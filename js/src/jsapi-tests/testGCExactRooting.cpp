@@ -18,13 +18,13 @@ using namespace js;
 BEGIN_TEST(testGCExactRooting)
 {
     JS::RootedObject rootCx(cx, JS_NewPlainObject(cx));
-    JS::RootedObject rootRt(cx->runtime(), JS_NewPlainObject(cx));
+    JS::RootedObject rootRootingCx(JS::RootingContext::get(cx), JS_NewPlainObject(cx));
 
     JS_GC(cx);
 
     /* Use the objects we just created to ensure that they are still alive. */
     JS_DefineProperty(cx, rootCx, "foo", JS::UndefinedHandleValue, 0);
-    JS_DefineProperty(cx, rootRt, "foo", JS::UndefinedHandleValue, 0);
+    JS_DefineProperty(cx, rootRootingCx, "foo", JS::UndefinedHandleValue, 0);
 
     return true;
 }
@@ -32,11 +32,11 @@ END_TEST(testGCExactRooting)
 
 BEGIN_TEST(testGCSuppressions)
 {
-    JS::AutoAssertOnGC nogc;
+    JS::AutoAssertNoGC nogc;
     JS::AutoCheckCannotGC checkgc;
     JS::AutoSuppressGCAnalysis noanalysis;
 
-    JS::AutoAssertOnGC nogcCx(cx);
+    JS::AutoAssertNoGC nogcCx(cx);
     JS::AutoCheckCannotGC checkgcCx(cx);
     JS::AutoSuppressGCAnalysis noanalysisCx(cx);
 
@@ -93,7 +93,7 @@ BEGIN_TEST(testGCRootedStaticStructInternalStackStorageAugmented)
         bool same;
 
         // Automatic move from stack to heap.
-        JS::PersistentRooted<MyContainer> heap(cx->runtime(), container);
+        JS::PersistentRooted<MyContainer> heap(cx, container);
 
         // clear prior rooting.
         container.obj() = nullptr;

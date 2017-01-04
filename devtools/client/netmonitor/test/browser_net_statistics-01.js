@@ -8,13 +8,15 @@
  */
 
 add_task(function* () {
-  let [,, monitor] = yield initNetMonitor(STATISTICS_URL);
+  let { monitor } = yield initNetMonitor(STATISTICS_URL);
   info("Starting test... ");
 
   let panel = monitor.panelWin;
-  let { $, $all, EVENTS, NetMonitorView } = panel;
+  let { $, $all, EVENTS, NetMonitorView, gStore, windowRequire } = panel;
+  let Actions = windowRequire("devtools/client/netmonitor/actions/index");
+
   is(NetMonitorView.currentFrontendMode, "network-inspector-view",
-    "The initial frontend mode is correct.");
+   "The initial frontend mode is correct.");
 
   is($("#primed-cache-chart").childNodes.length, 0,
     "There should be no primed cache chart created yet.");
@@ -22,15 +24,15 @@ add_task(function* () {
     "There should be no empty cache chart created yet.");
 
   let onChartDisplayed = Promise.all([
-    waitFor(panel, EVENTS.PRIMED_CACHE_CHART_DISPLAYED),
-    waitFor(panel, EVENTS.EMPTY_CACHE_CHART_DISPLAYED)
+    panel.once(EVENTS.PRIMED_CACHE_CHART_DISPLAYED),
+    panel.once(EVENTS.EMPTY_CACHE_CHART_DISPLAYED)
   ]);
-  let onPlaceholderDisplayed = waitFor(panel, EVENTS.PLACEHOLDER_CHARTS_DISPLAYED);
+  let onPlaceholderDisplayed = panel.once(EVENTS.PLACEHOLDER_CHARTS_DISPLAYED);
 
   info("Displaying statistics view");
-  NetMonitorView.toggleFrontendMode();
+  gStore.dispatch(Actions.openStatistics(true));
   is(NetMonitorView.currentFrontendMode, "network-statistics-view",
-    "The current frontend mode is correct.");
+   "The current frontend mode is correct.");
 
   info("Waiting for placeholder to display");
   yield onPlaceholderDisplayed;
@@ -51,25 +53,13 @@ add_task(function* () {
   is($("#empty-cache-chart").childNodes.length, 1,
     "There should be a real empty cache chart created now.");
 
-  yield until(() => $all(".pie-chart-container:not([placeholder=true])").length == 2);
+  yield waitUntil(
+    () => $all(".pie-chart-container:not([placeholder=true])").length == 2);
   ok(true, "Two real pie charts appear to be rendered correctly.");
 
-  yield until(() => $all(".table-chart-container:not([placeholder=true])").length == 2);
+  yield waitUntil(
+    () => $all(".table-chart-container:not([placeholder=true])").length == 2);
   ok(true, "Two real table charts appear to be rendered correctly.");
 
   yield teardown(monitor);
 });
-
-function waitForTick() {
-  let deferred = promise.defer();
-  executeSoon(deferred.resolve);
-  return deferred.promise;
-}
-
-function until(predicate) {
-  return Task.spawn(function* () {
-    while (!predicate()) {
-      yield waitForTick();
-    }
-  });
-}

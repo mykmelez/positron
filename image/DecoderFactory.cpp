@@ -8,6 +8,7 @@
 #include "nsMimeTypes.h"
 #include "mozilla/RefPtr.h"
 
+#include "AnimationSurfaceProvider.h"
 #include "Decoder.h"
 #include "IDecodingTask.h"
 #include "nsPNGDecoder.h"
@@ -33,6 +34,8 @@ DecoderFactory::GetDecoderType(const char* aMimeType)
   if (!strcmp(aMimeType, IMAGE_PNG)) {
     type = DecoderType::PNG;
   } else if (!strcmp(aMimeType, IMAGE_X_PNG)) {
+    type = DecoderType::PNG;
+  } else if (!strcmp(aMimeType, IMAGE_APNG)) {
     type = DecoderType::PNG;
 
   // GIF
@@ -111,8 +114,7 @@ DecoderFactory::CreateDecoder(DecoderType aType,
                               const IntSize& aIntrinsicSize,
                               const IntSize& aOutputSize,
                               DecoderFlags aDecoderFlags,
-                              SurfaceFlags aSurfaceFlags,
-                              int aSampleSize)
+                              SurfaceFlags aSurfaceFlags)
 {
   if (aType == DecoderType::UNKNOWN) {
     return nullptr;
@@ -130,7 +132,6 @@ DecoderFactory::CreateDecoder(DecoderType aType,
   decoder->SetOutputSize(aOutputSize);
   decoder->SetDecoderFlags(aDecoderFlags | DecoderFlags::FIRST_FRAME_ONLY);
   decoder->SetSurfaceFlags(aSurfaceFlags);
-  decoder->SetSampleSize(aSampleSize);
 
   if (NS_FAILED(decoder->Init())) {
     return nullptr;
@@ -139,17 +140,15 @@ DecoderFactory::CreateDecoder(DecoderType aType,
   // Create a DecodedSurfaceProvider which will manage the decoding process and
   // make this decoder's output available in the surface cache.
   SurfaceKey surfaceKey =
-    RasterSurfaceKey(aOutputSize, aSurfaceFlags, /* aFrameNum = */ 0);
+    RasterSurfaceKey(aOutputSize, aSurfaceFlags, PlaybackType::eStatic);
   NotNull<RefPtr<DecodedSurfaceProvider>> provider =
     WrapNotNull(new DecodedSurfaceProvider(aImage,
-                                           WrapNotNull(decoder),
-                                           surfaceKey));
+                                           surfaceKey,
+                                           WrapNotNull(decoder)));
 
   // Attempt to insert the surface provider into the surface cache right away so
   // we won't trigger any more decoders with the same parameters.
-  InsertOutcome outcome =
-    SurfaceCache::Insert(provider, ImageKey(aImage.get()), surfaceKey);
-  if (outcome != InsertOutcome::SUCCESS) {
+  if (SurfaceCache::Insert(provider) != InsertOutcome::SUCCESS) {
     return nullptr;
   }
 
@@ -173,8 +172,9 @@ DecoderFactory::CreateAnimationDecoder(DecoderType aType,
   MOZ_ASSERT(aType == DecoderType::GIF || aType == DecoderType::PNG,
              "Calling CreateAnimationDecoder for non-animating DecoderType");
 
-  RefPtr<Decoder> decoder =
-    GetDecoder(aType, aImage, /* aIsRedecode = */ true);
+  // Create an anonymous decoder. Interaction with the SurfaceCache and the
+  // owning RasterImage will be mediated by AnimationSurfaceProvider.
+  RefPtr<Decoder> decoder = GetDecoder(aType, nullptr, /* aIsRedecode = */ true);
   MOZ_ASSERT(decoder, "Should have a decoder now");
 
   // Initialize the decoder.
@@ -187,25 +187,30 @@ DecoderFactory::CreateAnimationDecoder(DecoderType aType,
     return nullptr;
   }
 
-  // Add a placeholder for the first frame to the SurfaceCache so we won't
-  // trigger any more decoders with the same parameters.
+  // Create an AnimationSurfaceProvider which will manage the decoding process
+  // and make this decoder's output available in the surface cache.
   SurfaceKey surfaceKey =
-    RasterSurfaceKey(aIntrinsicSize, aSurfaceFlags, /* aFrameNum = */ 0);
-  InsertOutcome outcome =
-    SurfaceCache::InsertPlaceholder(ImageKey(aImage.get()), surfaceKey);
-  if (outcome != InsertOutcome::SUCCESS) {
+    RasterSurfaceKey(aIntrinsicSize, aSurfaceFlags, PlaybackType::eAnimated);
+  NotNull<RefPtr<AnimationSurfaceProvider>> provider =
+    WrapNotNull(new AnimationSurfaceProvider(aImage,
+                                             surfaceKey,
+                                             WrapNotNull(decoder)));
+
+  // Attempt to insert the surface provider into the surface cache right away so
+  // we won't trigger any more decoders with the same parameters.
+  if (SurfaceCache::Insert(provider) != InsertOutcome::SUCCESS) {
     return nullptr;
   }
 
-  RefPtr<IDecodingTask> task = new AnimationDecodingTask(WrapNotNull(decoder));
+  // Return the surface provider in its IDecodingTask guise.
+  RefPtr<IDecodingTask> task = provider.get();
   return task.forget();
 }
 
 /* static */ already_AddRefed<IDecodingTask>
 DecoderFactory::CreateMetadataDecoder(DecoderType aType,
                                       NotNull<RasterImage*> aImage,
-                                      NotNull<SourceBuffer*> aSourceBuffer,
-                                      int aSampleSize)
+                                      NotNull<SourceBuffer*> aSourceBuffer)
 {
   if (aType == DecoderType::UNKNOWN) {
     return nullptr;
@@ -218,7 +223,6 @@ DecoderFactory::CreateMetadataDecoder(DecoderType aType,
   // Initialize the decoder.
   decoder->SetMetadataDecode(true);
   decoder->SetIterator(aSourceBuffer->Iterator());
-  decoder->SetSampleSize(aSampleSize);
 
   if (NS_FAILED(decoder->Init())) {
     return nullptr;

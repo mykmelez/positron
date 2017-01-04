@@ -54,6 +54,13 @@
               type="bool"/>
 #endif
 
+  <!-- Data Choices tab -->
+#ifdef MOZ_CRASHREPORTER
+  <preference id="browser.crashReports.unsubmittedCheck.autoSubmit"
+              name="browser.crashReports.unsubmittedCheck.autoSubmit"
+              type="bool"/>
+#endif
+
   <!-- Network tab -->
   <preference id="browser.cache.disk.capacity"
               name="browser.cache.disk.capacity"
@@ -120,8 +127,7 @@
       hidden="true"
       data-category="paneAdvanced">
   <label class="header-name" flex="1">&paneAdvanced.title;</label>
-  <button class="help-button"
-          aria-label="&helpButton.label;"/>
+  <html:a class="help-button" target="_blank" aria-label="&helpButton.label;"></html:a>
 </hbox>
 
 <tabbox id="advancedPrefs"
@@ -230,11 +236,13 @@
 #ifdef MOZ_CRASHREPORTER
       <groupbox>
         <caption>
-          <checkbox id="submitCrashesBox" label="&enableCrashReporter.label;"
-                    accesskey="&enableCrashReporter.accesskey;"/>
+          <checkbox id="automaticallySubmitCrashesBox"
+                    preference="browser.crashReports.unsubmittedCheck.autoSubmit"
+                    label="&alwaysSubmitCrashReports.label;"
+                    accesskey="&alwaysSubmitCrashReports.accesskey;"/>
         </caption>
         <hbox class="indent">
-          <label flex="1">&crashReporterDesc.label;</label>
+          <label flex="1">&crashReporterDesc2.label;</label>
           <spacer flex="10"/>
           <label id="crashReporterLearnMore"
                  class="text-link">&crashReporterLearnMore.label;</label>
@@ -320,13 +328,29 @@
           </vbox>
         </hbox>
       </groupbox>
+
+      <!-- Site Data -->
+      <groupbox id="siteDataGroup" hidden="true">
+        <caption><label>&siteData.label;</label></caption>
+
+        <hbox align="center">
+          <label id="totalSiteDataSize" flex="1"></label>
+          <button id="clearSiteDataButton" icon="clear"
+                  label="&clearSiteData.label;" accesskey="&clearSiteData.accesskey;"/>
+        </hbox>
+        <vbox align="end">
+          <button id="siteDataSettings"
+                  label="&siteDataSettings.label;"
+                  accesskey="&siteDataSettings.accesskey;"/>
+        </vbox>
+      </groupbox>
     </tabpanel>
 
     <!-- Update -->
     <tabpanel id="updatePanel" orient="vertical">
 #ifdef MOZ_UPDATER
       <groupbox id="updateApp" align="start">
-        <caption><label>&updateApp.label;</label></caption>
+        <caption><label>&updateApplication.label;</label></caption>
         <radiogroup id="updateRadioGroup" align="start">
           <radio id="autoDesktop"
                  value="auto"
@@ -356,7 +380,7 @@
       </groupbox>
 #endif
       <groupbox id="updateOthers" align="start">
-        <caption><label>&updateOthers.label;</label></caption>
+        <caption><label>&autoUpdateOthers.label;</label></caption>
         <checkbox id="enableSearchUpdate"
                   label="&enableSearchUpdate.label;"
                   accesskey="&enableSearchUpdate.accesskey;"

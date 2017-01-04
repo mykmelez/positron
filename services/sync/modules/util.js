@@ -52,6 +52,7 @@ this.Utils = {
   digestBytes: CryptoUtils.digestBytes,
   sha1: CryptoUtils.sha1,
   sha1Base32: CryptoUtils.sha1Base32,
+  sha256: CryptoUtils.sha256,
   makeHMACKey: CryptoUtils.makeHMACKey,
   makeHMACHasher: CryptoUtils.makeHMACHasher,
   hkdfExpand: CryptoUtils.hkdfExpand,
@@ -94,7 +95,7 @@ this.Utils = {
         return func.call(thisArg);
       }
       catch(ex) {
-        thisArg._log.debug("Exception", ex);
+        thisArg._log.debug("Exception calling " + (func.name || "anonymous function"), ex);
         if (exceptionCallback) {
           return exceptionCallback.call(thisArg, ex);
         }
@@ -331,6 +332,10 @@ this.Utils = {
     return Utils.encodeKeyBase32(atob(encodedKey));
   },
 
+  jsonFilePath(filePath) {
+    return OS.Path.normalize(OS.Path.join(OS.Constants.Path.profileDir, "weave", filePath + ".json"));
+  },
+
   /**
    * Load a JSON file from disk in the profile directory.
    *
@@ -345,7 +350,7 @@ this.Utils = {
    *        could not be loaded, the first argument will be undefined.
    */
   jsonLoad: Task.async(function*(filePath, that, callback) {
-    let path = OS.Path.join(OS.Constants.Path.profileDir, "weave", filePath + ".json");
+    let path = Utils.jsonFilePath(filePath);
 
     if (that._log) {
       that._log.trace("Loading json from disk: " + filePath);
@@ -357,7 +362,8 @@ this.Utils = {
       json = yield CommonUtils.readJSON(path);
     } catch (e) {
       if (e instanceof OS.File.Error && e.becauseNoSuchFile) {
-        // Ignore non-existent files.
+        // Ignore non-existent files, but explicitly return null.
+        json = null;
       } else {
         if (that._log) {
           that._log.debug("Failed to load json", e);
@@ -365,7 +371,10 @@ this.Utils = {
       }
     }
 
-    callback.call(that, json);
+    if (callback) {
+      callback.call(that, json);
+    }
+    return json;
   }),
 
   /**
@@ -408,6 +417,52 @@ this.Utils = {
       callback.call(that, error);
     }
   }),
+
+  /**
+   * Move a json file in the profile directory. Will fail if a file exists at the
+   * destination.
+   *
+   * @returns a promise that resolves to undefined on success, or rejects on failure
+   *
+   * @param aFrom
+   *        Current path to the JSON file saved on disk, relative to profileDir/weave
+   *        .json will be appended to the file name.
+   * @param aTo
+   *        New path to the JSON file saved on disk, relative to profileDir/weave
+   *        .json will be appended to the file name.
+   * @param that
+   *        Object to use for logging
+   */
+  jsonMove(aFrom, aTo, that) {
+    let pathFrom = OS.Path.join(OS.Constants.Path.profileDir, "weave",
+                                ...(aFrom + ".json").split("/"));
+    let pathTo = OS.Path.join(OS.Constants.Path.profileDir, "weave",
+                              ...(aTo + ".json").split("/"));
+    if (that._log) {
+      that._log.trace("Moving " + pathFrom + " to " + pathTo);
+    }
+    return OS.File.move(pathFrom, pathTo, { noOverwrite: true });
+  },
+
+  /**
+   * Removes a json file in the profile directory.
+   *
+   * @returns a promise that resolves to undefined on success, or rejects on failure
+   *
+   * @param filePath
+   *        Current path to the JSON file saved on disk, relative to profileDir/weave
+   *        .json will be appended to the file name.
+   * @param that
+   *        Object to use for logging
+   */
+  jsonRemove(filePath, that) {
+    let path = OS.Path.join(OS.Constants.Path.profileDir, "weave",
+                            ...(filePath + ".json").split("/"));
+    if (that._log) {
+      that._log.trace("Deleting " + path);
+    }
+    return OS.File.remove(path, { ignoreAbsent: true });
+  },
 
   getErrorString: function Utils_getErrorString(error, args) {
     try {
@@ -547,34 +602,20 @@ this.Utils = {
    * Is there a master password configured, regardless of current lock state?
    */
   mpEnabled: function mpEnabled() {
-    let modules = Cc["@mozilla.org/security/pkcs11moduledb;1"]
-                    .getService(Ci.nsIPKCS11ModuleDB);
-    let sdrSlot = modules.findSlotByName("");
-    let status  = sdrSlot.status;
-    let slots = Ci.nsIPKCS11Slot;
-
-    return status != slots.SLOT_UNINITIALIZED && status != slots.SLOT_READY;
+    let tokenDB = Cc["@mozilla.org/security/pk11tokendb;1"]
+                    .getService(Ci.nsIPK11TokenDB);
+    let token = tokenDB.getInternalKeyToken();
+    return token.hasPassword;
   },
 
   /**
    * Is there a master password configured and currently locked?
    */
   mpLocked: function mpLocked() {
-    let modules = Cc["@mozilla.org/security/pkcs11moduledb;1"]
-                    .getService(Ci.nsIPKCS11ModuleDB);
-    let sdrSlot = modules.findSlotByName("");
-    let status  = sdrSlot.status;
-    let slots = Ci.nsIPKCS11Slot;
-
-    if (status == slots.SLOT_READY || status == slots.SLOT_LOGGED_IN
-                                   || status == slots.SLOT_UNINITIALIZED)
-      return false;
-
-    if (status == slots.SLOT_NOT_LOGGED_IN)
-      return true;
-
-    // something wacky happened, pretend MP is locked
-    return true;
+    let tokenDB = Cc["@mozilla.org/security/pk11tokendb;1"]
+                    .getService(Ci.nsIPK11TokenDB);
+    let token = tokenDB.getInternalKeyToken();
+    return token.hasPassword && !token.isLoggedIn();
   },
 
   // If Master Password is enabled and locked, present a dialog to unlock it.
@@ -686,6 +727,18 @@ this.Utils = {
 
   getDeviceType() {
     return Svc.Prefs.get("client.type", DEVICE_TYPE_DESKTOP);
+  },
+
+  formatTimestamp(date) {
+    // Format timestamp as: "%Y-%m-%d %H:%M:%S"
+    let year = String(date.getFullYear());
+    let month = String(date.getMonth() + 1).padStart(2, "0");
+    let day = String(date.getDate()).padStart(2, "0");
+    let hours = String(date.getHours()).padStart(2, "0");
+    let minutes = String(date.getMinutes()).padStart(2, "0");
+    let seconds = String(date.getSeconds()).padStart(2, "0");
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 };
 

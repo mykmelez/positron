@@ -41,7 +41,6 @@ UNIFIED_SOURCES += [
     'nsSVGMarkerFrame.cpp',
     'nsSVGMaskFrame.cpp',
     'nsSVGOuterSVGFrame.cpp',
-    'nsSVGPathGeometryFrame.cpp',
     'nsSVGPatternFrame.cpp',
     'nsSVGStopFrame.cpp',
     'nsSVGSwitchFrame.cpp',
@@ -52,19 +51,21 @@ UNIFIED_SOURCES += [
     'SVGFEImageFrame.cpp',
     'SVGFELeafFrame.cpp',
     'SVGFEUnstyledLeafFrame.cpp',
+    'SVGGeometryFrame.cpp',
     'SVGTextFrame.cpp',
     'SVGViewFrame.cpp',
 ]
 
 if CONFIG['CPU_ARCH'] == 'arm' and CONFIG['BUILD_ARM_NEON']:
     SOURCES += ['nsSVGMaskFrameNEON.cpp']
-    SOURCES['nsSVGMaskFrameNEON.cpp'].flags += ['-mfpu=neon']
+    SOURCES['nsSVGMaskFrameNEON.cpp'].flags += CONFIG['NEON_FLAGS']
 
 FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '../../widget',
     '../base',
     '../generic',
+    '../painting',
     '../style',
     '../xul',
     '/dom/base',

@@ -38,13 +38,6 @@ static inline bool IS_TABLE_CELL(nsIAtom* frameType) {
     nsGkAtoms::bcTableCellFrame == frameType;
 }
 
-static inline bool FrameHasBorderOrBackground(nsIFrame* f) {
-  return (f->StyleVisibility()->IsVisible() &&
-          (!f->StyleBackground()->IsTransparent() ||
-           f->StyleDisplay()->mAppearance ||
-           f->StyleBorder()->HasBorder()));
-}
-
 class nsDisplayTableItem : public nsDisplayItem
 {
 public:
@@ -263,7 +256,7 @@ public:
   /** @return true if aDisplayType represents a rowgroup of any sort
     * (header, footer, or body)
     */
-  bool IsRowGroup(int32_t aDisplayType) const;
+  bool IsRowGroup(mozilla::StyleDisplay aDisplayType) const;
 
   virtual const nsFrameList& GetChildList(ChildListID aListID) const override;
   virtual void GetChildLists(nsTArray<ChildList>* aLists) const override;
@@ -327,24 +320,24 @@ public:
   virtual IntrinsicISizeOffsetData IntrinsicISizeOffsets() override;
 
   virtual mozilla::LogicalSize
-  ComputeSize(nsRenderingContext *aRenderingContext,
-              mozilla::WritingMode aWritingMode,
+  ComputeSize(nsRenderingContext*         aRenderingContext,
+              mozilla::WritingMode        aWM,
               const mozilla::LogicalSize& aCBSize,
-              nscoord aAvailableISize,
+              nscoord                     aAvailableISize,
               const mozilla::LogicalSize& aMargin,
               const mozilla::LogicalSize& aBorder,
               const mozilla::LogicalSize& aPadding,
-              ComputeSizeFlags aFlags) override;
+              ComputeSizeFlags            aFlags) override;
 
   virtual mozilla::LogicalSize
-  ComputeAutoSize(nsRenderingContext *aRenderingContext,
-                  mozilla::WritingMode aWritingMode,
+  ComputeAutoSize(nsRenderingContext*         aRenderingContext,
+                  mozilla::WritingMode        aWM,
                   const mozilla::LogicalSize& aCBSize,
-                  nscoord aAvailableISize,
+                  nscoord                     aAvailableISize,
                   const mozilla::LogicalSize& aMargin,
                   const mozilla::LogicalSize& aBorder,
                   const mozilla::LogicalSize& aPadding,
-                  bool aShrinkWrap) override;
+                  ComputeSizeFlags            aFlags) override;
 
   /**
    * A copy of nsFrame::ShrinkWidthToFit that calls a different
@@ -472,6 +465,10 @@ private:
 
 public:
   virtual nscoord GetLogicalBaseline(mozilla::WritingMode aWritingMode) const override;
+  bool GetNaturalBaselineBOffset(mozilla::WritingMode aWM,
+                                 BaselineSharingGroup aBaselineGroup,
+                                 nscoord*             aBaseline) const override;
+
   /** return the row span of a cell, taking into account row span magic at the bottom
     * of a table. The row span equals the number of rows spanned by aCell starting at
     * aStartRowIndex, and can be smaller if aStartRowIndex is greater than the row
@@ -883,11 +880,11 @@ protected:
 };
 
 
-inline bool nsTableFrame::IsRowGroup(int32_t aDisplayType) const
+inline bool nsTableFrame::IsRowGroup(mozilla::StyleDisplay aDisplayType) const
 {
-  return bool((NS_STYLE_DISPLAY_TABLE_HEADER_GROUP == aDisplayType) ||
-                (NS_STYLE_DISPLAY_TABLE_FOOTER_GROUP == aDisplayType) ||
-                (NS_STYLE_DISPLAY_TABLE_ROW_GROUP    == aDisplayType));
+  return mozilla::StyleDisplay::TableHeaderGroup == aDisplayType ||
+         mozilla::StyleDisplay::TableFooterGroup == aDisplayType ||
+         mozilla::StyleDisplay::TableRowGroup    == aDisplayType;
 }
 
 inline void nsTableFrame::SetHaveReflowedColGroups(bool aValue)

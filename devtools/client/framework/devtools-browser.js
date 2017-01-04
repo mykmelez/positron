@@ -18,7 +18,6 @@ const promise = require("promise");
 const defer = require("devtools/shared/defer");
 const Telemetry = require("devtools/client/shared/telemetry");
 const { gDevTools } = require("./devtools");
-const { when: unload } = require("sdk/system/unload");
 
 // Load target and toolbox lazily as they need gDevTools to be fully initialized
 loader.lazyRequireGetter(this, "TargetFactory", "devtools/client/framework/target", true);
@@ -26,11 +25,13 @@ loader.lazyRequireGetter(this, "Toolbox", "devtools/client/framework/toolbox", t
 loader.lazyRequireGetter(this, "DebuggerServer", "devtools/server/main", true);
 loader.lazyRequireGetter(this, "DebuggerClient", "devtools/shared/client/main", true);
 loader.lazyRequireGetter(this, "BrowserMenus", "devtools/client/framework/browser-menus");
+loader.lazyRequireGetter(this, "findCssSelector", "devtools/shared/inspector/css-logic", true);
 
 loader.lazyImporter(this, "CustomizableUI", "resource:///modules/CustomizableUI.jsm");
 loader.lazyImporter(this, "AppConstants", "resource://gre/modules/AppConstants.jsm");
 
-const bundle = Services.strings.createBundle("chrome://devtools/locale/toolbox.properties");
+const {LocalizationHelper} = require("devtools/shared/l10n");
+const L10N = new LocalizationHelper("devtools/client/locales/toolbox.properties");
 
 const TABS_OPEN_PEAK_HISTOGRAM = "DEVTOOLS_TABS_OPEN_PEAK_LINEAR";
 const TABS_OPEN_AVG_HISTOGRAM = "DEVTOOLS_TABS_OPEN_AVERAGE_LINEAR";
@@ -140,6 +141,16 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
           }
         }
         break;
+      case "quit-application":
+        gDevToolsBrowser.destroy({ shuttingDown: true });
+        break;
+      case "sdk:loader:destroy":
+        // This event is fired when the devtools loader unloads, which happens
+        // only when the add-on workflow ask devtools to be reloaded.
+        if (subject.wrappedJSObject == require('@loader/unload')) {
+          gDevToolsBrowser.destroy({ shuttingDown: false });
+        }
+        break;
     }
   },
 
@@ -227,7 +238,32 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     }
   },
 
-  _getContentProcessTarget: function () {
+  inspectNode: function (tab, node) {
+    let target = TargetFactory.forTab(tab);
+    let selector = findCssSelector(node);
+
+    return gDevTools.showToolbox(target, "inspector").then(toolbox => {
+      let inspector = toolbox.getCurrentPanel();
+
+      // new-node-front tells us when the node has been selected, whether the
+      // browser is remote or not.
+      let onNewNode = inspector.selection.once("new-node-front");
+
+      inspector.walker.getRootNode().then(rootNode => {
+        return inspector.walker.querySelector(rootNode, selector);
+      }).then(node => {
+        inspector.selection.setNodeFront(node, "browser-context-menu");
+      });
+
+      return onNewNode.then(() => {
+        // Now that the node has been selected, wait until the inspector is
+        // fully updated.
+        return inspector.once("inspector-updated");
+      });
+    });
+  },
+
+  _getContentProcessTarget: function (processId) {
     // Create a DebuggerServer in order to connect locally to it
     if (!DebuggerServer.initialized) {
       DebuggerServer.init();
@@ -240,49 +276,54 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
     let deferred = defer();
     client.connect().then(() => {
-      client.mainRoot.listProcesses(response => {
-        // Do nothing if there is only one process, the parent process.
-        let contentProcesses = response.processes.filter(p => (!p.parent));
-        if (contentProcesses.length < 1) {
-          let msg = bundle.GetStringFromName("toolbox.noContentProcess.message");
-          Services.prompt.alert(null, "", msg);
-          deferred.reject("No content processes available.");
-          return;
-        }
-        // Otherwise, arbitrary connect to the unique content process.
-        client.getProcess(contentProcesses[0].id)
-              .then(response => {
-                let options = {
-                  form: response.form,
-                  client: client,
-                  chrome: true,
-                  isTabActor: false
-                };
-                return TargetFactory.forRemoteTab(options);
-              })
-              .then(target => {
-                // Ensure closing the connection in order to cleanup
-                // the debugger client and also the server created in the
-                // content process
-                target.on("close", () => {
-                  client.close();
-                });
-                deferred.resolve(target);
+      client.getProcess(processId)
+            .then(response => {
+              let options = {
+                form: response.form,
+                client: client,
+                chrome: true,
+                isTabActor: false
+              };
+              return TargetFactory.forRemoteTab(options);
+            })
+            .then(target => {
+              // Ensure closing the connection in order to cleanup
+              // the debugger client and also the server created in the
+              // content process
+              target.on("close", () => {
+                client.close();
               });
-      });
+              deferred.resolve(target);
+            });
     });
 
     return deferred.promise;
   },
 
-   // Used by browser-sets.inc, command
-  openContentProcessToolbox: function () {
-    this._getContentProcessTarget()
-        .then(target => {
-          // Display a new toolbox, in a new window, with debugger by default
-          return gDevTools.showToolbox(target, "jsdebugger",
-                                       Toolbox.HostType.WINDOW);
-        });
+   // Used by menus.js
+  openContentProcessToolbox: function (gBrowser) {
+    let { childCount } = Services.ppmm;
+    // Get the process message manager for the current tab
+    let mm = gBrowser.selectedBrowser.messageManager.processMessageManager;
+    let processId = null;
+    for (let i = 1; i < childCount; i++) {
+      let child = Services.ppmm.getChildAt(i);
+      if (child == mm) {
+        processId = i;
+        break;
+      }
+    }
+    if (processId) {
+      this._getContentProcessTarget(processId)
+          .then(target => {
+            // Display a new toolbox, in a new window, with debugger by default
+            return gDevTools.showToolbox(target, "jsdebugger",
+                                         Toolbox.HostType.WINDOW);
+          });
+    } else {
+      let msg = L10N.getStr("toolbox.noContentProcessForTab.message");
+      Services.prompt.alert(null, "", msg);
+    }
   },
 
   /**
@@ -628,7 +669,7 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
 
     // Destroy toolboxes for closed window
     for (let [target, toolbox] of gDevTools._toolboxes) {
-      if (toolbox.frame && toolbox.frame.ownerDocument.defaultView == win) {
+      if (toolbox.win.top == win) {
         toolbox.destroy();
       }
     }
@@ -698,12 +739,19 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
   },
 
   /**
-   * All browser windows have been closed, tidy up remaining objects.
+   * Either the SDK Loader has been destroyed by the add-on contribution
+   * workflow, or firefox is shutting down.
+
+   * @param {boolean} shuttingDown
+   *        True if firefox is currently shutting down. We may prevent doing
+   *        some cleanups to speed it up. Otherwise everything need to be
+   *        cleaned up in order to be able to load devtools again.
    */
-  destroy: function () {
+  destroy: function ({ shuttingDown }) {
     Services.prefs.removeObserver("devtools.", gDevToolsBrowser);
     Services.obs.removeObserver(gDevToolsBrowser, "browser-delayed-startup-finished");
-    Services.obs.removeObserver(gDevToolsBrowser.destroy, "quit-application");
+    Services.obs.removeObserver(gDevToolsBrowser, "quit-application");
+    Services.obs.removeObserver(gDevToolsBrowser, "sdk:loader:destroy");
 
     gDevToolsBrowser._pingTelemetry();
     gDevToolsBrowser._telemetry = null;
@@ -711,6 +759,8 @@ var gDevToolsBrowser = exports.gDevToolsBrowser = {
     for (let win of gDevToolsBrowser._trackedBrowserWindows) {
       gDevToolsBrowser._forgetBrowserWindow(win);
     }
+
+    gDevTools.destroy({ shuttingDown });
   },
 };
 
@@ -720,21 +770,24 @@ gDevTools.getToolDefinitionArray()
 // and the new ones.
 gDevTools.on("tool-registered", function (ev, toolId) {
   let toolDefinition = gDevTools._tools.get(toolId);
-  gDevToolsBrowser._addToolToWindows(toolDefinition);
+  // If the tool has been registered globally, add to all the
+  // available windows.
+  if (toolDefinition) {
+    gDevToolsBrowser._addToolToWindows(toolDefinition);
+  }
 });
 
 gDevTools.on("tool-unregistered", function (ev, toolId) {
-  if (typeof toolId != "string") {
-    toolId = toolId.id;
-  }
   gDevToolsBrowser._removeToolFromWindows(toolId);
 });
 
 gDevTools.on("toolbox-ready", gDevToolsBrowser._updateMenuCheckbox);
 gDevTools.on("toolbox-destroyed", gDevToolsBrowser._updateMenuCheckbox);
 
-Services.obs.addObserver(gDevToolsBrowser.destroy, "quit-application", false);
+Services.obs.addObserver(gDevToolsBrowser, "quit-application", false);
 Services.obs.addObserver(gDevToolsBrowser, "browser-delayed-startup-finished", false);
+// Watch for module loader unload. Fires when the tools are reloaded.
+Services.obs.addObserver(gDevToolsBrowser, "sdk:loader:destroy", false);
 
 // Fake end of browser window load event for all already opened windows
 // that is already fully loaded.
@@ -745,8 +798,3 @@ while (enumerator.hasMoreElements()) {
     gDevToolsBrowser._registerBrowserWindow(win);
   }
 }
-
-// Watch for module loader unload. Fires when the tools are reloaded.
-unload(function () {
-  gDevToolsBrowser.destroy();
-});

@@ -61,9 +61,9 @@ UNIFIED_SOURCES += [
     'TaskbarTabPreview.cpp',
     'TaskbarWindowPreview.cpp',
     'WidgetTraceEvent.cpp',
-    'WinCompositorWidget.cpp',
     'WindowHook.cpp',
     'WinIMEHandler.cpp',
+    'WinPointerEvents.cpp',
     'WinTaskbar.cpp',
     'WinTextEventDispatcherListener.cpp',
     'WinUtils.cpp',
@@ -75,6 +75,7 @@ SOURCES += [
     'nsBidiKeyboard.cpp',
     'nsFilePicker.cpp',
     'nsWidgetFactory.cpp',
+    'WinCompositorWidget.cpp',
     'WindowsUIUtils.cpp',
     'WinMouseScrollHandler.cpp',
 ]

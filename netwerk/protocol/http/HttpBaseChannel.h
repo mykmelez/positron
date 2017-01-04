@@ -43,6 +43,12 @@
 #include "nsISecurityConsoleMessage.h"
 #include "nsCOMArray.h"
 #include "mozilla/net/ChannelEventQueue.h"
+#include "nsIThrottledInputChannel.h"
+
+#define HTTP_BASE_CHANNEL_IID \
+{ 0x9d5cde03, 0xe6e9, 0x4612, \
+    { 0xbf, 0xef, 0xbb, 0x66, 0xf3, 0xbb, 0x74, 0x46 } }
+
 
 class nsISecurityConsoleMessage;
 class nsIPrincipal;
@@ -79,6 +85,7 @@ class HttpBaseChannel : public nsHashPropertyBag
                       , public nsITimedChannel
                       , public nsIForcePendingChannel
                       , public nsIConsoleReportCollector
+                      , public nsIThrottledInputChannel
 {
 protected:
   virtual ~HttpBaseChannel();
@@ -90,6 +97,9 @@ public:
   NS_DECL_NSIUPLOADCHANNEL2
   NS_DECL_NSITRACEABLECHANNEL
   NS_DECL_NSITIMEDCHANNEL
+  NS_DECL_NSITHROTTLEDINPUTCHANNEL
+
+  NS_DECLARE_STATIC_IID_ACCESSOR(HTTP_BASE_CHANNEL_IID)
 
   HttpBaseChannel();
 
@@ -185,6 +195,9 @@ public:
   NS_IMETHOD GetProtocolVersion(nsACString & aProtocolVersion) override;
   NS_IMETHOD GetChannelId(nsACString& aChannelId) override;
   NS_IMETHOD SetChannelId(const nsACString& aChannelId) override;
+  NS_IMETHOD GetTopLevelContentWindowId(uint64_t *aContentWindowId) override;
+  NS_IMETHOD SetTopLevelContentWindowId(uint64_t aContentWindowId) override;
+  NS_IMETHOD GetIsTrackingResource(bool* aIsTrackingResource) override;
 
   // nsIHttpChannelInternal
   NS_IMETHOD GetDocumentURI(nsIURI **aDocumentURI) override;
@@ -208,6 +221,8 @@ public:
   NS_IMETHOD SetAllowSpdy(bool aAllowSpdy) override;
   NS_IMETHOD GetAllowAltSvc(bool *aAllowAltSvc) override;
   NS_IMETHOD SetAllowAltSvc(bool aAllowAltSvc) override;
+  NS_IMETHOD GetBeConservative(bool *aBeConservative) override;
+  NS_IMETHOD SetBeConservative(bool aBeConservative) override;
   NS_IMETHOD GetApiRedirectToURI(nsIURI * *aApiRedirectToURI) override;
   virtual nsresult AddSecurityMessage(const nsAString &aMessageTag, const nsAString &aMessageCategory);
   NS_IMETHOD TakeAllSecurityMessages(nsCOMArray<nsISecurityConsoleMessage> &aMessages) override;
@@ -230,6 +245,10 @@ public:
   NS_IMETHOD GetTopWindowURI(nsIURI **aTopWindowURI) override;
   NS_IMETHOD GetProxyURI(nsIURI **proxyURI) override;
   virtual void SetCorsPreflightParameters(const nsTArray<nsCString>& unsafeHeaders) override;
+  NS_IMETHOD GetConnectionInfoHashKey(nsACString& aConnectionInfoHashKey) override;
+  NS_IMETHOD GetIntegrityMetadata(nsAString& aIntegrityMetadata) override;
+  NS_IMETHOD SetIntegrityMetadata(const nsAString& aIntegrityMetadata) override;
+  virtual mozilla::net::nsHttpChannel * QueryHttpChannelImpl(void) override;
 
   inline void CleanRedirectCacheChainIfNecessary()
   {
@@ -259,10 +278,18 @@ public:
                    const nsTArray<nsString>& aStringParams) override;
 
   void
-  FlushConsoleReports(nsIDocument* aDocument) override;
+  FlushConsoleReports(nsIDocument* aDocument,
+                      ReportAction aAction = ReportAction::Forget) override;
 
   void
   FlushConsoleReports(nsIConsoleReportCollector* aCollector) override;
+
+  void
+  FlushReportsByWindowId(uint64_t aWindowId,
+                         ReportAction aAction = ReportAction::Forget) override;
+
+  void
+  ClearConsoleReports() override;
 
   class nsContentEncodings : public nsIUTF8StringEnumerator
     {
@@ -314,7 +341,10 @@ public: /* Necko internal use only... */
     // the new mUploadStream.
     void EnsureUploadStreamIsCloneableComplete(nsresult aStatus);
 
-    bool HaveListenerForTraceableChannel() { return mHaveListenerForTraceableChannel; }
+    void SetIsTrackingResource()
+    {
+      mIsTrackingResource = true;
+    }
 
 protected:
   nsCOMArray<nsISecurityConsoleMessage> mSecurityConsoleMessages;
@@ -325,6 +355,12 @@ protected:
 
   // drop reference to listener, its callbacks, and the progress sink
   void ReleaseListeners();
+
+  // This is fired only when a cookie is created due to the presence of
+  // Set-Cookie header in the response header of any network request.
+  // This notification will come only after the "http-on-examine-response"
+  // was fired.
+  void NotifySetCookie(char const *aCookie);
 
   mozilla::dom::Performance* GetPerformance();
   nsIURI* GetReferringPage();
@@ -364,6 +400,11 @@ protected:
   // for a possible synthesized response instead.
   bool ShouldIntercept(nsIURI* aURI = nullptr);
 
+#ifdef DEBUG
+  // Check if mPrivateBrowsingId matches between LoadInfo and LoadContext.
+  void AssertPrivateBrowsingId();
+#endif
+
   friend class PrivateBrowsingChannel<HttpBaseChannel>;
   friend class InterceptFailedOnStop;
 
@@ -384,10 +425,12 @@ protected:
   nsCOMPtr<nsIStreamListener>       mCompressListener;
 
   nsHttpRequestHead                 mRequestHead;
+  // Upload throttling.
+  nsCOMPtr<nsIInputChannelThrottleQueue> mThrottleQueue;
   nsCOMPtr<nsIInputStream>          mUploadStream;
   nsCOMPtr<nsIRunnable>             mUploadCloneableCallback;
   nsAutoPtr<nsHttpResponseHead>     mResponseHead;
-  RefPtr<nsHttpConnectionInfo>    mConnectionInfo;
+  RefPtr<nsHttpConnectionInfo>      mConnectionInfo;
   nsCOMPtr<nsIProxyInfo>            mProxyInfo;
   nsCOMPtr<nsISupports>             mSecurityInfo;
 
@@ -414,30 +457,30 @@ protected:
   int16_t                           mPriority;
   uint8_t                           mRedirectionLimit;
 
-  uint32_t                          mApplyConversion                 : 1;
-  uint32_t                          mHaveListenerForTraceableChannel : 1;
-  uint32_t                          mCanceled                        : 1;
-  uint32_t                          mIsPending                       : 1;
-  uint32_t                          mWasOpened                       : 1;
+  uint32_t                          mApplyConversion            : 1;
+  uint32_t                          mCanceled                   : 1;
+  uint32_t                          mIsPending                  : 1;
+  uint32_t                          mWasOpened                  : 1;
   // if 1 all "http-on-{opening|modify|etc}-request" observers have been called
-  uint32_t                          mRequestObserversCalled          : 1;
-  uint32_t                          mResponseHeadersModified         : 1;
-  uint32_t                          mAllowPipelining                 : 1;
-  uint32_t                          mAllowSTS                        : 1;
-  uint32_t                          mThirdPartyFlags                 : 3;
-  uint32_t                          mUploadStreamHasHeaders          : 1;
-  uint32_t                          mInheritApplicationCache         : 1;
-  uint32_t                          mChooseApplicationCache          : 1;
-  uint32_t                          mLoadedFromApplicationCache      : 1;
-  uint32_t                          mChannelIsForDownload            : 1;
-  uint32_t                          mTracingEnabled                  : 1;
+  uint32_t                          mRequestObserversCalled     : 1;
+  uint32_t                          mResponseHeadersModified    : 1;
+  uint32_t                          mAllowPipelining            : 1;
+  uint32_t                          mAllowSTS                   : 1;
+  uint32_t                          mThirdPartyFlags            : 3;
+  uint32_t                          mUploadStreamHasHeaders     : 1;
+  uint32_t                          mInheritApplicationCache    : 1;
+  uint32_t                          mChooseApplicationCache     : 1;
+  uint32_t                          mLoadedFromApplicationCache : 1;
+  uint32_t                          mChannelIsForDownload       : 1;
+  uint32_t                          mTracingEnabled             : 1;
   // True if timing collection is enabled
-  uint32_t                          mTimingEnabled                   : 1;
-  uint32_t                          mAllowSpdy                       : 1;
-  uint32_t                          mAllowAltSvc                     : 1;
-  uint32_t                          mResponseTimeoutEnabled          : 1;
+  uint32_t                          mTimingEnabled              : 1;
+  uint32_t                          mAllowSpdy                  : 1;
+  uint32_t                          mAllowAltSvc                : 1;
+  uint32_t                          mBeConservative             : 1;
+  uint32_t                          mResponseTimeoutEnabled     : 1;
   // A flag that should be false only if a cross-domain redirect occurred
-  uint32_t                          mAllRedirectsSameOrigin          : 1;
+  uint32_t                          mAllRedirectsSameOrigin     : 1;
 
   // Is 1 if no redirects have occured or if all redirects
   // pass the Resource Timing timing-allow-check
@@ -508,6 +551,10 @@ protected:
   bool mOnStartRequestCalled;
   bool mOnStopRequestCalled;
 
+  // Defaults to false. Is set to true at the begining of OnStartRequest.
+  // Used to ensure methods can't be called before OnStartRequest.
+  bool mAfterOnStartRequestBegun;
+
   uint64_t mTransferSize;
   uint64_t mDecodedBodySize;
   uint64_t mEncodedBodySize;
@@ -518,15 +565,29 @@ protected:
   nsID mRequestContextID;
   bool EnsureRequestContextID();
 
+  // ID of the top-level document's inner window this channel is being
+  // originated from.
+  uint64_t mContentWindowId;
+
   bool                              mRequireCORSPreflight;
   nsTArray<nsCString>               mUnsafeHeaders;
 
   nsCOMPtr<nsIConsoleReportCollector> mReportCollector;
 
+  // Holds the name of the preferred alt-data type.
+  nsCString mPreferredCachedAltDataType;
+  // Holds the name of the alternative data type the channel returned.
+  nsCString mAvailableCachedAltDataType;
+
   bool mForceMainDocumentChannel;
+  bool mIsTrackingResource;
 
   nsID mChannelId;
+
+  nsString mIntegrityMetadata;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(HttpBaseChannel, HTTP_BASE_CHANNEL_IID)
 
 // Share some code while working around C++'s absurd inability to handle casting
 // of member functions between base/derived types.

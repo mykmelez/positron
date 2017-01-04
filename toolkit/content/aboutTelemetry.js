@@ -175,7 +175,7 @@ function removeAllChildNodes(node) {
  * Pad a number to two digits with leading "0".
  */
 function padToTwoDigits(n) {
-  return (n > 9) ? n: "0" + n;
+  return (n > 9) ? n : "0" + n;
 }
 
 /**
@@ -234,7 +234,7 @@ var Settings = {
       el.addEventListener("click", function() {
         if (AppConstants.platform == "android") {
           Cu.import("resource://gre/modules/Messaging.jsm");
-          Messaging.sendRequest({
+          EventDispatcher.instance.sendRequest({
             type: "Settings:Show",
             resource: "preferences_privacy",
           });
@@ -305,6 +305,10 @@ var PingPicker = {
     document.getElementById("older-ping")
             .addEventListener("click", () => this._movePingIndex(1), false);
     document.getElementById("choose-payload")
+            .addEventListener("change", () => displayPingData(gPingData), false);
+    document.getElementById("histograms-processes")
+            .addEventListener("change", () => displayPingData(gPingData), false);
+    document.getElementById("keyed-histograms-processes")
             .addEventListener("change", () => displayPingData(gPingData), false);
   },
 
@@ -410,7 +414,6 @@ var PingPicker = {
     let weekSelector = document.getElementById("choose-ping-week");
     removeAllChildNodes(weekSelector);
 
-    let index = 0;
     for (let week of this._weeks) {
       let text = shortDateString(week.startDate)
                  + " - " + shortDateString(yesterday(week.endDate));
@@ -624,7 +627,6 @@ var EnvironmentData = {
   },
 
   renderActivePlugins: function(addonObj, addonSection, sectionTitle) {
-    let data = explodeObject(addonObj);
     let table = document.createElement("table");
     table.setAttribute("id", sectionTitle);
     this.appendAddonSubsectionTitle(sectionTitle, table);
@@ -1104,6 +1106,28 @@ var ChromeHangs = {
   }
 };
 
+var CapturedStacks = {
+  symbolRequest: null,
+
+  render: function CapturedStacks_render(payload) {
+    // Retrieve captured stacks from telemetry payload.
+    let capturedStacks = "processes" in payload && "parent" in payload.processes
+      ? payload.processes.parent.capturedStacks
+      : false;
+    let hasData = capturedStacks && capturedStacks.stacks &&
+                  capturedStacks.stacks.length > 0;
+    setHasData("captured-stacks-section", hasData);
+    if (!hasData) {
+      return;
+    }
+
+    let stacks = capturedStacks.stacks;
+    let memoryMap = capturedStacks.memoryMap;
+
+    StackRenderer.renderStacks("captured-stacks", stacks, memoryMap, () => {});
+  },
+};
+
 var ThreadHangStats = {
 
   /**
@@ -1499,6 +1523,72 @@ var KeyValueTable = {
   }
 };
 
+var GenericTable = {
+  /**
+   * Returns a n-column table.
+   * @param rows An array of arrays, each containing data to render
+   *             for one row.
+   * @param headings The column header strings.
+   */
+  render: function(rows, headings) {
+    let table = document.createElement("table");
+    this.renderHeader(table, headings);
+    this.renderBody(table, rows);
+    return table;
+  },
+
+  /**
+   * Create the table header.
+   * Tabs & newlines added to cells to make it easier to copy-paste.
+   *
+   * @param table Table element
+   * @param headings Array of column header strings.
+   */
+  renderHeader: function(table, headings) {
+    let headerRow = document.createElement("tr");
+    table.appendChild(headerRow);
+
+    for (let i = 0; i < headings.length; ++i) {
+      let suffix = (i == (headings.length - 1)) ? "\n" : "\t";
+      let column = document.createElement("th");
+      column.appendChild(document.createTextNode(headings[i] + suffix));
+      headerRow.appendChild(column);
+    }
+  },
+
+  /**
+   * Create the table body
+   * Tabs & newlines added to cells to make it easier to copy-paste.
+   *
+   * @param table Table element
+   * @param rows An array of arrays, each containing data to render
+   *             for one row.
+   */
+  renderBody: function(table, rows) {
+    for (let row of rows) {
+      row = row.map(value => {
+        // use .valueOf() to unbox Number, String, etc. objects
+        if (value &&
+           (typeof value == "object") &&
+           (typeof value.valueOf() == "object")) {
+          return RenderObject(value);
+        }
+        return value;
+      });
+
+      let newRow = document.createElement("tr");
+      table.appendChild(newRow);
+
+      for (let i = 0; i < row.length; ++i) {
+        let suffix = (i == (row.length - 1)) ? "\n" : "\t";
+        let field = document.createElement("td");
+        field.appendChild(document.createTextNode(row[i] + suffix));
+        newRow.appendChild(field);
+      }
+    }
+  }
+};
+
 var KeyedHistogram = {
   render: function(parent, id, keyedHistogram) {
     let outerDiv = document.createElement("div");
@@ -1576,6 +1666,74 @@ var Scalars = {
   }
 };
 
+var KeyedScalars = {
+  /**
+   * Render the keyed scalar data - if present - from the payload in a simple key-value table.
+   * @param aPayload A payload object to render the data from.
+   */
+  render: function(aPayload) {
+    let scalarsSection = document.getElementById("keyed-scalars");
+    removeAllChildNodes(scalarsSection);
+
+    if (!aPayload.processes || !aPayload.processes.parent) {
+      return;
+    }
+
+    let keyedScalars = aPayload.processes.parent.keyedScalars;
+    const hasData = keyedScalars && Object.keys(keyedScalars).length > 0;
+    setHasData("keyed-scalars-section", hasData);
+    if (!hasData) {
+      return;
+    }
+
+    const headingName = bundle.GetStringFromName("namesHeader");
+    const headingValue = bundle.GetStringFromName("valuesHeader");
+    for (let scalar in keyedScalars) {
+      // Add the name of the scalar.
+      let scalarNameSection = document.createElement("h2");
+      scalarNameSection.appendChild(document.createTextNode(scalar));
+      scalarsSection.appendChild(scalarNameSection);
+      // Populate the section with the key-value pairs from the scalar.
+      const table = KeyValueTable.render(keyedScalars[scalar], headingName, headingValue);
+      scalarsSection.appendChild(table);
+    }
+  }
+};
+
+var Events = {
+  /**
+   * Render the event data - if present - from the payload in a simple table.
+   * @param aPayload A payload object to render the data from.
+   */
+  render: function(aPayload) {
+    let eventsSection = document.getElementById("events");
+    removeAllChildNodes(eventsSection);
+
+    if (!aPayload.processes || !aPayload.processes.parent) {
+      return;
+    }
+
+    const events = aPayload.processes.parent.events;
+    const hasData = events && Object.keys(events).length > 0;
+    setHasData("events-section", hasData);
+    if (!hasData) {
+      return;
+    }
+
+    const headings = [
+      "timestampHeader",
+      "categoryHeader",
+      "methodHeader",
+      "objectHeader",
+      "valuesHeader",
+      "extraHeader",
+    ].map(h => bundle.GetStringFromName(h));
+
+    const table = GenericTable.render(events, headings);
+    eventsSection.appendChild(table);
+  }
+};
+
 /**
  * Helper function for showing either the toggle element or "No data collected" message for a section
  *
@@ -1636,7 +1794,7 @@ function setupListeners() {
   }, false);
 
   document.getElementById("chrome-hangs-fetch-symbols").addEventListener("click",
-    function () {
+    function() {
       if (!gPingData) {
         return;
       }
@@ -1651,7 +1809,7 @@ function setupListeners() {
   }, false);
 
   document.getElementById("chrome-hangs-hide-symbols").addEventListener("click",
-    function () {
+    function() {
       if (!gPingData) {
         return;
       }
@@ -1659,8 +1817,31 @@ function setupListeners() {
       ChromeHangs.render(gPingData);
   }, false);
 
+  document.getElementById("captured-stacks-fetch-symbols").addEventListener("click",
+    function() {
+      if (!gPingData) {
+        return;
+      }
+      let capturedStacks = gPingData.payload.processes.parent.capturedStacks;
+      let req = new SymbolicationRequest("captured-stacks",
+                                         CapturedStacks.render,
+                                         capturedStacks.memoryMap,
+                                         capturedStacks.stacks,
+                                         null);
+      req.fetchSymbols();
+  }, false);
+
+  document.getElementById("captured-stacks-hide-symbols").addEventListener("click",
+    function() {
+      if (!gPingData) {
+        return;
+      }
+
+      CapturedStacks.render(gPingData);
+  }, false);
+
   document.getElementById("late-writes-fetch-symbols").addEventListener("click",
-    function () {
+    function() {
       if (!gPingData) {
         return;
       }
@@ -1674,7 +1855,7 @@ function setupListeners() {
   }, false);
 
   document.getElementById("late-writes-hide-symbols").addEventListener("click",
-    function () {
+    function() {
       if (!gPingData) {
         return;
       }
@@ -1782,6 +1963,33 @@ function sortStartupMilestones(aSimpleMeasurements) {
   return result;
 }
 
+function renderProcessList(ping, selectEl) {
+  removeAllChildNodes(selectEl);
+  let option = document.createElement("option");
+  option.appendChild(document.createTextNode("parent"));
+  option.setAttribute("value", "");
+  option.selected = true;
+  selectEl.appendChild(option);
+
+  if (!("processes" in ping.payload)) {
+    selectEl.disabled = true;
+    return;
+  }
+  selectEl.disabled = false;
+
+  for (let process of Object.keys(ping.payload.processes)) {
+    // TODO: parent hgrams are on root payload, not in payload.processes.parent
+    // When/If that gets moved, you'll need to remove this:
+    if (process === "parent") {
+      continue;
+    }
+    option = document.createElement("option");
+    option.appendChild(document.createTextNode(process));
+    option.setAttribute("value", process);
+    selectEl.appendChild(option);
+  }
+}
+
 function renderPayloadList(ping) {
   // Rebuild the payload select with options:
   //   Parent Payload (selected)
@@ -1850,9 +2058,11 @@ function displayPingData(ping, updatePayloadList = false) {
   const keysHeader = bundle.GetStringFromName("keysHeader");
   const valuesHeader = bundle.GetStringFromName("valuesHeader");
 
-  // Update the payload list
+  // Update the payload list and process lists
   if (updatePayloadList) {
     renderPayloadList(ping);
+    renderProcessList(ping, document.getElementById("histograms-processes"));
+    renderProcessList(ping, document.getElementById("keyed-histograms-processes"));
   }
 
   // Show general data.
@@ -1896,6 +2106,9 @@ function displayPingData(ping, updatePayloadList = false) {
   // Show thread hang stats
   ThreadHangStats.render(payload);
 
+  // Show captured stacks.
+  CapturedStacks.render(payload);
+
   // Show simple measurements
   let simpleMeasurements = sortStartupMilestones(payload.simpleMeasurements);
   let hasData = Object.keys(simpleMeasurements).length > 0;
@@ -1923,14 +2136,25 @@ function displayPingData(ping, updatePayloadList = false) {
 
   // Show scalar data.
   Scalars.render(payload);
+  KeyedScalars.render(payload);
 
   // Show histogram data
   let hgramDiv = document.getElementById("histograms");
   removeAllChildNodes(hgramDiv);
 
   let histograms = payload.histograms;
+
+  let hgramsSelect = document.getElementById("histograms-processes");
+  let hgramsOption = hgramsSelect.selectedOptions.item(0);
+  let hgramsProcess = hgramsOption.getAttribute("value");
+  if (hgramsProcess &&
+      "processes" in ping.payload &&
+      hgramsProcess in ping.payload.processes) {
+    histograms = ping.payload.processes[hgramsProcess].histograms;
+  }
+
   hasData = Object.keys(histograms).length > 0;
-  setHasData("histograms-section", hasData);
+  setHasData("histograms-section", hasData || hgramsSelect.options.length);
 
   if (hasData) {
     for (let [name, hgram] of Object.entries(histograms)) {
@@ -1950,8 +2174,18 @@ function displayPingData(ping, updatePayloadList = false) {
   let keyedDiv = document.getElementById("keyed-histograms");
   removeAllChildNodes(keyedDiv);
 
-  setHasData("keyed-histograms-section", false);
   let keyedHistograms = payload.keyedHistograms;
+
+  let keyedHgramsSelect = document.getElementById("keyed-histograms-processes");
+  let keyedHgramsOption = keyedHgramsSelect.selectedOptions.item(0);
+  let keyedHgramsProcess = keyedHgramsOption.getAttribute("value");
+  if (keyedHgramsProcess &&
+      "processes" in ping.payload &&
+      keyedHgramsProcess in ping.payload.processes) {
+    keyedHistograms = ping.payload.processes[keyedHgramsProcess].keyedHistograms;
+  }
+
+  setHasData("keyed-histograms-section", keyedHgramsSelect.options.length);
   if (keyedHistograms) {
     let hasData = false;
     for (let [id, keyed] of Object.entries(keyedHistograms)) {
@@ -1960,8 +2194,11 @@ function displayPingData(ping, updatePayloadList = false) {
         KeyedHistogram.render(keyedDiv, id, keyed, {unpacked: true});
       }
     }
-    setHasData("keyed-histograms-section", hasData);
+    setHasData("keyed-histograms-section", hasData || keyedHgramsSelect.options.length);
   }
+
+  // Show event data.
+  Events.render(payload);
 
   // Show addon histogram data
   let addonDiv = document.getElementById("addon-histograms");

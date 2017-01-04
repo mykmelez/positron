@@ -14,15 +14,11 @@ STRIP_FLAGS="--strip-debug"
 # Needed to enable breakpad in application.ini
 export MOZILLA_OFFICIAL=1
 
-# Treat warnings as errors in directories with FAIL_ON_WARNINGS.
-ac_add_options --enable-warnings-as-errors
-
 # Use sccache
 no_sccache=
 . "$topsrcdir/build/mozconfig.cache"
 
 # graphene options
-ENABLE_MARIONETTE=1
 export CXXFLAGS=-DMOZ_ENABLE_JS_DUMP
 
 . "$topsrcdir/b2g/graphene/config/mozconfigs/common.override"

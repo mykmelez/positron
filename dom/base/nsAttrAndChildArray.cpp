@@ -484,7 +484,7 @@ nsAttrAndChildArray::RemoveAttrAt(uint32_t aPos, nsAttrValue& aValue)
   return MakeMappedUnique(mapped);
 }
 
-BorrowedAttrInfo
+mozilla::dom::BorrowedAttrInfo
 nsAttrAndChildArray::AttrInfoAt(uint32_t aPos) const
 {
   NS_ASSERTION(aPos < AttrCount(),
@@ -800,7 +800,12 @@ nsAttrAndChildArray::GrowBy(uint32_t aGrowSize)
     } while (size.value() < minSize.value());
   }
   else {
-    size = 1u << mozilla::CeilingLog2(minSize.value());
+    uint32_t shift = mozilla::CeilingLog2(minSize.value());
+    if (shift >= 32) {
+      return false;
+    }
+
+    size = 1u << shift;
   }
 
   bool needToInitialize = !mImpl;

@@ -190,7 +190,6 @@ class LAllocation : public TempObject
     UniqueChars toString() const;
     bool aliases(const LAllocation& other) const;
     void dump() const;
-
 };
 
 class LUse : public LAllocation
@@ -807,6 +806,7 @@ class LInstruction
     LSafepoint* safepoint_;
 
     LMoveGroup* inputMoves_;
+    LMoveGroup* fixReuseMoves_;
     LMoveGroup* movesAfter_;
 
   protected:
@@ -814,6 +814,7 @@ class LInstruction
       : snapshot_(nullptr),
         safepoint_(nullptr),
         inputMoves_(nullptr),
+        fixReuseMoves_(nullptr),
         movesAfter_(nullptr)
     { }
 
@@ -829,6 +830,12 @@ class LInstruction
     }
     void setInputMoves(LMoveGroup* moves) {
         inputMoves_ = moves;
+    }
+    LMoveGroup* fixReuseMoves() const {
+        return fixReuseMoves_;
+    }
+    void setFixReuseMoves(LMoveGroup* moves) {
+        fixReuseMoves_ = moves;
     }
     LMoveGroup* movesAfter() const {
         return movesAfter_;
@@ -1806,7 +1813,8 @@ class LIRGraph
         return mir_.numBlockIds();
     }
     MOZ_MUST_USE bool initBlock(MBasicBlock* mir) {
-        LBlock* lir = new (&blocks_[mir->id()]) LBlock(mir);
+        auto* block = &blocks_[mir->id()];
+        auto* lir = new (block) LBlock(mir);
         return lir->init(mir_.alloc());
     }
     uint32_t getVirtualRegister() {

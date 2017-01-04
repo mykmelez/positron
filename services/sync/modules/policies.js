@@ -401,6 +401,10 @@ SyncScheduler.prototype = {
       return;
     }
 
+    if (!Async.isAppReady()) {
+      this._log.debug("Not initiating sync: app is shutting down");
+      return;
+    }
     Utils.nextTick(this.service.sync, this.service);
   },
 
@@ -572,6 +576,7 @@ ErrorHandler.prototype = {
     let logs = ["Sync", "FirefoxAccounts", "Hawk", "Common.TokenServerClient",
                 "Sync.SyncMigration", "browserwindow.syncui",
                 "Services.Common.RESTRequest", "Services.Common.RESTRequest",
+                "BookmarkSyncUtils"
                ];
 
     this._logManager = new LogManager(Svc.Prefs, logs, "sync");
@@ -698,14 +703,12 @@ ErrorHandler.prototype = {
   _dumpAddons: function _dumpAddons() {
     // Just dump the items that sync may be concerned with. Specifically,
     // active extensions that are not hidden.
-    let addonPromise = new Promise(resolve => {
-      try {
-        AddonManager.getAddonsByTypes(["extension"], resolve);
-      } catch (e) {
-        this._log.warn("Failed to dump addons", e)
-        resolve([])
-      }
-    });
+    let addonPromise = Promise.resolve([]);
+    try {
+      addonPromise = AddonManager.getAddonsByTypes(["extension"]);
+    } catch (e) {
+      this._log.warn("Failed to dump addons", e)
+    }
 
     return addonPromise.then(addons => {
       let relevantAddons = addons.filter(x => x.isActive && !x.hidden);

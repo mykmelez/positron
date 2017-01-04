@@ -2,11 +2,14 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * The origin of this IDL file is
+ * https://w3c.github.io/presentation-api/#interface-presentationrequest
  */
 
 [Constructor(DOMString url),
- Pref="dom.presentation.enabled",
- Func="Navigator::HasPresentationSupport"]
+ Constructor(sequence<DOMString> urls),
+ Pref="dom.presentation.controller.enabled"]
 interface PresentationRequest : EventTarget {
   /*
    * A requesting page use start() to start a new connection, and it will be
@@ -50,6 +53,7 @@ interface PresentationRequest : EventTarget {
   *
   * The promise may be rejected duo to one of the following reasons:
   * - "NotSupportedError": Unable to continuously monitor the availability.
+  * - "SecurityError":  This operation is insecure.
   */
   [Throws]
   Promise<PresentationAvailability> getAvailability();

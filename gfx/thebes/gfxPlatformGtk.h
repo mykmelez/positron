@@ -132,6 +132,10 @@ public:
       return true;
     }
 
+    bool AccelerateLayersByDefault() override {
+      return false;
+    }
+
 #ifdef GL_PROVIDER_GLX
     already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource() override;
 #endif

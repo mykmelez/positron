@@ -102,6 +102,7 @@ module.exports = createClass({
 
   stopFrameScript: Task.async(function* () {
     let { onContentResize } = this;
+
     let browser = this.refs.browserContainer.querySelector("iframe.browser");
     let mm = browser.frameLoader.messageManager;
     e10s.off(mm, "OnContentResize", onContentResize);
@@ -126,9 +127,9 @@ module.exports = createClass({
          * React uses a whitelist for attributes, so we need some way to set
          * attributes it does not know about, such as @mozbrowser.  If this were
          * the only issue, we could use componentDidMount or ref: node => {} to
-         * set the atttibutes. In the case of @remote, the attribute must be set
-         * before the element is added to the DOM to have any effect, which we
-         * are able to do with this approach.
+         * set the atttibutes. In the case of @remote and @remoteType, the
+         * attribute must be set before the element is added to the DOM to have
+         * any effect, which we are able to do with this approach.
          *
          * @noisolation and @allowfullscreen are needed so that these frames
          * have the same access to browser features as regular browser tabs.
@@ -136,7 +137,8 @@ module.exports = createClass({
          * before allowing the swap to proceed.
          */
         dangerouslySetInnerHTML: {
-          __html: `<iframe class="browser" mozbrowser="true" remote="true"
+          __html: `<iframe class="browser" mozbrowser="true"
+                           remote="true" remoteType="web"
                            noisolation="true" allowfullscreen="true"
                            src="${location}" width="100%" height="100%">
                    </iframe>`

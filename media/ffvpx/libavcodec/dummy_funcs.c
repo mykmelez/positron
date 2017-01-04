@@ -10,6 +10,7 @@ typedef struct H264PredContext H264PredContext;
 typedef struct VideoDSPContext VideoDSPContext;
 typedef struct VP8DSPContext VP8DSPContext;
 typedef struct VP9DSPContext VP9DSPContext;
+typedef struct FLACDSPContext FLACDSPContext;
 
 AVHWAccel ff_h263_vaapi_hwaccel;
 AVHWAccel ff_h263_vdpau_hwaccel;
@@ -61,6 +62,17 @@ AVHWAccel ff_vp8_cuvid_hwaccel;
 AVHWAccel ff_vc1_cuvid_hwaccel;
 AVHWAccel ff_hevc_cuvid_hwaccel;
 AVHWAccel ff_h264_cuvid_hwaccel;
+/* Added by FFmpeg 3.2 */
+AVHWAccel ff_h263_cuvid_hwaccel;
+AVHWAccel ff_mjpeg_cuvid_hwaccel;
+AVHWAccel ff_mpeg1_cuvid_hwaccel;
+AVHWAccel ff_mpeg2_cuvid_hwaccel;
+AVHWAccel ff_mpeg4_cuvid_hwaccel;
+AVHWAccel ff_h264_mediacodec_hwaccel;
+AVHWAccel ff_hevc_mediacodec_hwaccel;
+AVHWAccel ff_mpeg4_mediacodec_hwaccel;
+AVHWAccel ff_vp8_mediacodec_hwaccel;
+AVHWAccel ff_vp9_mediacodec_hwaccel;
 
 AVCodec ff_a64multi_encoder;
 AVCodec ff_a64multi5_encoder;
@@ -400,7 +412,6 @@ AVCodec ff_eac3_decoder;
 AVCodec ff_evrc_decoder;
 AVCodec ff_ffwavesynth_decoder;
 AVCodec ff_flac_encoder;
-AVCodec ff_flac_decoder;
 AVCodec ff_g723_1_encoder;
 AVCodec ff_g723_1_decoder;
 AVCodec ff_g729_decoder;
@@ -713,6 +724,23 @@ AVCodec ff_sheervideo_decoder;
 AVCodec ff_magicyuv_decoder;
 AVCodec ff_m101_decoder;
 AVCodec ff_h264_mediacodec_decoder;
+/* Added by FFmpeg 3.2 */
+AVCodec ff_vp9_mediacodec_decoder;
+AVCodec ff_vp8_mediacodec_decoder;
+AVCodec ff_mpeg4_mediacodec_decoder;
+AVCodec ff_mpeg4_cuvid_decoder;
+AVCodec ff_mpeg2_cuvid_decoder;
+AVCodec ff_mpeg1_cuvid_decoder;
+AVCodec ff_mjpeg_cuvid_decoder;
+AVCodec ff_hevc_mediacodec_decoder;
+AVCodec ff_h263_cuvid_decoder;
+AVCodec ff_libopenh264_decoder;
+AVCodec ff_pcm_s64le_decoder;
+AVCodec ff_pcm_s64le_encoder;
+AVCodec ff_pcm_s64be_decoder;
+AVCodec ff_pcm_s64be_encoder;
+AVCodec ff_truehd_encoder;
+AVCodec ff_mlp_encoder;
 
 AVCodecParser ff_aac_parser;
 AVCodecParser ff_aac_latm_parser;
@@ -729,7 +757,6 @@ AVCodecParser ff_dvaudio_parser;
 AVCodecParser ff_dvbsub_parser;
 AVCodecParser ff_dvdsub_parser;
 AVCodecParser ff_dvd_nav_parser;
-AVCodecParser ff_flac_parser;
 AVCodecParser ff_g729_parser;
 AVCodecParser ff_gsm_parser;
 AVCodecParser ff_h261_parser;
@@ -785,7 +812,13 @@ void ff_vp78dsp_init_ppc(VP8DSPContext *c) {}
 void ff_vp8dsp_init_arm(VP8DSPContext *c) {}
 void ff_vp8dsp_init_mips(VP8DSPContext *c) {}
 void ff_vp9dsp_init_mips(VP9DSPContext *dsp, int bpp) {}
-
+void ff_flacdsp_init_arm(FLACDSPContext *c, enum AVSampleFormat fmt, int channels, int bps) {}
+#if !defined(HAVE_64BIT_BUILD)
+void ff_flac_decorrelate_indep8_16_sse2(uint8_t **out, int32_t **in, int channels, int len, int shift) {}
+void ff_flac_decorrelate_indep8_32_avx(uint8_t **out, int32_t **in, int channels, int len, int shift) {}
+void ff_flac_decorrelate_indep8_16_avx(uint8_t **out, int32_t **in, int channels, int len, int shift) {}
+void ff_flac_decorrelate_indep8_32_sse2(uint8_t **out, int32_t **in, int channels, int len, int shift) {}
+#endif
 void av_bitstream_filter_close(AVBitStreamFilterContext *bsf) {}
 int av_bitstream_filter_filter(AVBitStreamFilterContext *bsfc,
                                AVCodecContext *avctx, const char *args,

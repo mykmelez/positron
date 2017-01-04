@@ -9,20 +9,23 @@
 
 #include "nsINodeLoader.h"
 #include "nsISupports.h"
+#include "NodeBindings.h"
+#include "nsITimer.h"
 
 class NodeLoader final : public nsINodeLoader
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSINODELOADER
 
   NodeLoader();
+  RefPtr<mozilla::NodeBindings> nodeBindings;
+  nsCOMPtr<nsITimer> timer;
 
 private:
   ~NodeLoader();
 
 protected:
-  /* additional members */
 };
 
 #endif // mozilla_dom_NodeLoader_h

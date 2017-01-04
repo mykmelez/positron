@@ -8,6 +8,7 @@
 
 #include "base/win/windows_version.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Logging.h"
 #include "sandbox/win/src/sandbox.h"
 #include "sandbox/win/src/security_level.h"
 
@@ -15,6 +16,10 @@ namespace mozilla
 {
 
 sandbox::BrokerServices *SandboxBroker::sBrokerService = nullptr;
+
+static LazyLogModule sSandboxBrokerLog("SandboxBroker");
+
+#define LOG_E(...) MOZ_LOG(sSandboxBrokerLog, LogLevel::Error, (__VA_ARGS__))
 
 /* static */
 void
@@ -87,7 +92,8 @@ SandboxBroker::LaunchApp(const wchar_t *aPath,
 
 #if defined(MOZ_CONTENT_SANDBOX)
 void
-SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel)
+SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
+                                                 base::ChildPrivileges aPrivs)
 {
   MOZ_RELEASE_ASSERT(mPolicy, "mPolicy must be set before this call.");
 
@@ -122,13 +128,29 @@ SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel)
     delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
   }
 
+  // If PRIVILEGES_FILEREAD required, don't allow settings that block reads.
+  if (aPrivs == base::ChildPrivileges::PRIVILEGES_FILEREAD) {
+    if (accessTokenLevel < sandbox::USER_NON_ADMIN) {
+      accessTokenLevel = sandbox::USER_NON_ADMIN;
+    }
+    if (delayedIntegrityLevel > sandbox::INTEGRITY_LEVEL_LOW) {
+      delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+    }
+  }
+
   sandbox::ResultCode result = mPolicy->SetJobLevel(jobLevel,
                                                     0 /* ui_exceptions */);
   MOZ_RELEASE_ASSERT(sandbox::SBOX_ALL_OK == result,
                      "Setting job level failed, have you set memory limit when jobLevel == JOB_NONE?");
 
-  result = mPolicy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
-                                  accessTokenLevel);
+  // If the delayed access token is not restricted we don't want the initial one
+  // to be either, because it can interfere with running from a network drive.
+  sandbox::TokenLevel initialAccessTokenLevel =
+    (accessTokenLevel == sandbox::USER_UNPROTECTED ||
+     accessTokenLevel == sandbox::USER_NON_ADMIN)
+    ? sandbox::USER_UNPROTECTED : sandbox::USER_RESTRICTED_SAME_ACCESS;
+
+  result = mPolicy->SetTokenLevel(initialAccessTokenLevel, accessTokenLevel);
   MOZ_RELEASE_ASSERT(sandbox::SBOX_ALL_OK == result,
                      "Lockdown level cannot be USER_UNPROTECTED or USER_LAST if initial level was USER_RESTRICTED_SAME_ACCESS");
 
@@ -306,6 +328,20 @@ SandboxBroker::SetSecurityLevelForPluginProcess(int32_t aSandboxLevel)
   SANDBOX_ENSURE_SUCCESS(result,
                          "With these static arguments AddRule should never fail, what happened?");
 
+  // These register keys are used by the file-browser dialog box.  They
+  // remember the most-recently-used folders.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_REGISTRY,
+                            sandbox::TargetPolicy::REG_ALLOW_ANY,
+                            L"HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\*");
+  SANDBOX_ENSURE_SUCCESS(result,
+                         "With these static arguments AddRule should never fail, what happened?");
+
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_REGISTRY,
+                            sandbox::TargetPolicy::REG_ALLOW_ANY,
+                            L"HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRULegacy\\*");
+  SANDBOX_ENSURE_SUCCESS(result,
+                         "With these static arguments AddRule should never fail, what happened?");
+
   return true;
 }
 
@@ -443,6 +479,27 @@ SandboxBroker::SetSecurityLevelForGMPlugin(SandboxLevel aLevel)
   SANDBOX_ENSURE_SUCCESS(result,
                          "With these static arguments AddRule should never fail, what happened?");
 
+  // The following rules were added to allow a GMP to be loaded when any
+  // AppLocker DLL rules are specified. If the rules specifically block the DLL
+  // then it will not load.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
+                            sandbox::TargetPolicy::FILES_ALLOW_READONLY,
+                            L"\\Device\\SrpDevice");
+  SANDBOX_ENSURE_SUCCESS(result,
+                         "With these static arguments AddRule should never fail, what happened?");
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_REGISTRY,
+                            sandbox::TargetPolicy::REG_ALLOW_READONLY,
+                            L"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Srp\\GP\\");
+  SANDBOX_ENSURE_SUCCESS(result,
+                         "With these static arguments AddRule should never fail, what happened?");
+  // On certain Windows versions there is a double slash before GP in the path.
+  result = mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_REGISTRY,
+                            sandbox::TargetPolicy::REG_ALLOW_READONLY,
+                            L"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Srp\\\\GP\\");
+  SANDBOX_ENSURE_SUCCESS(result,
+                         "With these static arguments AddRule should never fail, what happened?");
+
+
   return true;
 }
 #undef SANDBOX_ENSURE_SUCCESS
@@ -458,7 +515,12 @@ SandboxBroker::AllowReadFile(wchar_t const *file)
     mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                      sandbox::TargetPolicy::FILES_ALLOW_READONLY,
                      file);
-  return (sandbox::SBOX_ALL_OK == result);
+  if (sandbox::SBOX_ALL_OK != result) {
+    LOG_E("Failed (ResultCode %d) to add read access to: %S", result, file);
+    return false;
+  }
+
+  return true;
 }
 
 bool
@@ -472,7 +534,13 @@ SandboxBroker::AllowReadWriteFile(wchar_t const *file)
     mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                      sandbox::TargetPolicy::FILES_ALLOW_ANY,
                      file);
-  return (sandbox::SBOX_ALL_OK == result);
+  if (sandbox::SBOX_ALL_OK != result) {
+    LOG_E("Failed (ResultCode %d) to add read/write access to: %S",
+          result, file);
+    return false;
+  }
+
+  return true;
 }
 
 bool
@@ -486,7 +554,12 @@ SandboxBroker::AllowDirectory(wchar_t const *dir)
     mPolicy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                      sandbox::TargetPolicy::FILES_ALLOW_DIR_ANY,
                      dir);
-  return (sandbox::SBOX_ALL_OK == result);
+  if (sandbox::SBOX_ALL_OK != result) {
+    LOG_E("Failed (ResultCode %d) to add directory access to: %S", result, dir);
+    return false;
+  }
+
+  return true;
 }
 
 bool

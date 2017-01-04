@@ -27,7 +27,6 @@
 #include "nsAttrValueInlines.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIDOMEventListener.h"
-#include "nsIEditorIMESupport.h"
 #include "nsIEditorObserver.h"
 #include "nsIWidget.h"
 #include "nsIDocumentEncoder.h"
@@ -91,7 +90,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() override {
     if (!mTextEditorState) {
       return NS_OK;
     }
@@ -1115,7 +1114,7 @@ public:
     aState.mValueTransferInProgress = true;
   }
 
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() override {
     NS_ENSURE_TRUE(mState, NS_ERROR_NULL_POINTER);
 
     // Transfer the saved value to the editor if we have one
@@ -1157,9 +1156,11 @@ nsTextEditorState::BindToFrame(nsTextControlFrame* aFrame)
 
   mBoundFrame = aFrame;
 
-  nsIContent *rootNode = GetRootNode();
+  nsresult rv = CreateRootNode();
+  NS_ENSURE_SUCCESS(rv, rv);
 
-  nsresult rv = InitializeRootNode();
+  nsIContent *rootNode = GetRootNode();
+  rv = InitializeRootNode();
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsIPresShell *shell = mBoundFrame->PresContext()->GetPresShell();
@@ -1536,6 +1537,19 @@ nsTextEditorState::GetSelectionProperties()
   return mSelectionProperties;
 }
 
+void
+nsTextEditorState::SetSelectionProperties(nsTextEditorState::SelectionProperties& aProps)
+{
+  if (mBoundFrame) {
+    mBoundFrame->SetSelectionRange(aProps.GetStart(),
+                                   aProps.GetEnd(),
+                                   aProps.GetDirection());
+  } else {
+    mSelectionProperties = aProps;
+  }
+}
+
+
 HTMLInputElement*
 nsTextEditorState::GetParentNumberControl(nsFrame* aFrame) const
 {
@@ -1740,8 +1754,8 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
 nsresult
 nsTextEditorState::CreateRootNode()
 {
-  NS_ENSURE_TRUE(!mRootNode, NS_ERROR_UNEXPECTED);
-  NS_ENSURE_ARG_POINTER(mBoundFrame);
+  MOZ_ASSERT(!mRootNode);
+  MOZ_ASSERT(mBoundFrame);
 
   nsIPresShell *shell = mBoundFrame->PresContext()->GetPresShell();
   NS_ENSURE_TRUE(shell, NS_ERROR_FAILURE);
@@ -1792,6 +1806,7 @@ nsTextEditorState::InitializeRootNode()
         disp->mOverflowX != NS_STYLE_OVERFLOW_CLIP) {
       classValue.AppendLiteral(" inherit-overflow");
     }
+    classValue.AppendLiteral(" inherit-scroll-behavior");
   }
   nsresult rv = mRootNode->SetAttr(kNameSpaceID_None, nsGkAtoms::_class,
                                    classValue, false);
@@ -2001,10 +2016,7 @@ nsTextEditorState::SetValue(const nsAString& aValue, uint32_t aFlags)
         // document may be unloaded.
         mValueBeingSet = aValue;
         mIsCommittingComposition = true;
-        nsCOMPtr<nsIEditorIMESupport> editorIMESupport =
-                                        do_QueryInterface(mEditor);
-        MOZ_RELEASE_ASSERT(editorIMESupport);
-        nsresult rv = editorIMESupport->ForceCompositionEnd();
+        nsresult rv = mEditor->ForceCompositionEnd();
         if (!self.get()) {
           return true;
         }
@@ -2091,7 +2103,7 @@ nsTextEditorState::SetValue(const nsAString& aValue, uint32_t aFlags)
             !StringBeginsWith(newValue, currentValue)) {
           // Replace the whole text.
           currentLength = 0;
-          mSelCon->SelectAll();
+          kungFuDeathGrip->SelectAll();
         } else {
           // Collapse selection to the end so that we can append data.
           mBoundFrame->SelectAllOrCollapseToEndOfText(false);
@@ -2268,9 +2280,8 @@ bool
 nsTextEditorState::EditorHasComposition()
 {
   bool isComposing = false;
-  nsCOMPtr<nsIEditorIMESupport> editorIMESupport = do_QueryInterface(mEditor);
-  return editorIMESupport &&
-         NS_SUCCEEDED(editorIMESupport->GetComposing(&isComposing)) &&
+  return mEditor &&
+         NS_SUCCEEDED(mEditor->GetComposing(&isComposing)) &&
          isComposing;
 }
 

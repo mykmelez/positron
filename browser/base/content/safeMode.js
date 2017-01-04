@@ -65,7 +65,6 @@ function onExtra1() {
 }
 
 function onLoad() {
-  let dialog = document.documentElement;
   if (appStartup.automaticSafeModeNecessary) {
     document.getElementById("autoSafeMode").hidden = false;
     document.getElementById("safeMode").hidden = true;
@@ -75,11 +74,9 @@ function onLoad() {
       // Hide the reset button is it's not supported.
       document.documentElement.getButton("extra1").hidden = true;
     }
-  } else {
-    if (!ResetProfile.resetSupported()) {
-      // Hide the reset button and text if it's not supported.
-      document.documentElement.getButton("extra1").hidden = true;
-      document.getElementById("resetProfileInstead").hidden = true;
-    }
+  } else if (!ResetProfile.resetSupported()) {
+    // Hide the reset button and text if it's not supported.
+    document.documentElement.getButton("extra1").hidden = true;
+    document.getElementById("resetProfileInstead").hidden = true;
   }
 }

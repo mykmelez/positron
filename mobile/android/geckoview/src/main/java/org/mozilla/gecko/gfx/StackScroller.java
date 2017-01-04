@@ -15,7 +15,7 @@ import org.mozilla.gecko.annotation.WrapForJNI;
  * This class is vastly copied from {@link android.widget.OverScroller} but decouples the time
  * from the app time so it can be specified manually.
  */
-@WrapForJNI(allowMultithread = true, catchException = true)
+@WrapForJNI(exceptionMode = "nsresult")
 public class StackScroller {
     private int mMode;
 
@@ -261,9 +261,14 @@ public class StackScroller {
         if (mFlywheel && !isFinished()) {
             float oldVelocityX = mScrollerX.mCurrVelocity;
             float oldVelocityY = mScrollerY.mCurrVelocity;
-            if (Math.signum(velocityX) == Math.signum(oldVelocityX)
-                    && Math.signum(velocityY) == Math.signum(oldVelocityY)) {
+            boolean sameXDirection = (velocityX == 0) || (oldVelocityX == 0) ||
+                ((velocityX < 0) == (oldVelocityX < 0));
+            boolean sameYDirection = (velocityY == 0) || (oldVelocityY == 0) ||
+                ((velocityY < 0) == (oldVelocityY < 0));
+            if (sameXDirection) {
                 velocityX += oldVelocityX;
+            }
+            if (sameYDirection) {
                 velocityY += oldVelocityY;
             }
         }

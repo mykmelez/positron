@@ -18,12 +18,12 @@ const { GlobalManager, Management } = Components.utils.import("resource://gre/mo
 
 function promiseAddonStartup() {
   return new Promise(resolve => {
-    let listener = (extension) => {
-      Management.off("startup", listener);
+    let listener = (evt, extension) => {
+      Management.off("ready", listener);
       resolve(extension);
     };
 
-    Management.on("startup", listener);
+    Management.on("ready", listener);
   });
 }
 
@@ -33,8 +33,6 @@ function promiseInstallWebExtension(aData) {
   return promiseInstallAllFiles([addonFile]).then(() => {
     Services.obs.notifyObservers(addonFile, "flush-cache-entry", null);
     return promiseAddonStartup();
-  }).then(() => {
-    return promiseAddonByID(aData.id);
   });
 }
 
@@ -126,7 +124,7 @@ add_task(function*() {
 
 // Writing the manifest direct to the profile should work
 add_task(function*() {
-  writeWebManifestForExtension({
+  yield promiseWriteWebManifestForExtension({
     name: "Web Extension Name",
     version: "1.0",
     manifest_version: 2,
@@ -160,12 +158,12 @@ add_task(function*() {
 });
 
 add_task(function* test_manifest_localization() {
-  const ID = "webextension3@tests.mozilla.org";
+  const extensionId = "webextension3@tests.mozilla.org";
 
   yield promiseInstallAllFiles([do_get_addon("webextension_3")], true);
   yield promiseAddonStartup();
 
-  let addon = yield promiseAddonByID(ID);
+  let addon = yield promiseAddonByID(extensionId);
   addon.userDisabled = true;
 
   equal(addon.name, "Web Extensiøn foo ☹");
@@ -174,7 +172,7 @@ add_task(function* test_manifest_localization() {
   Services.prefs.setCharPref(PREF_SELECTED_LOCALE, "fr-FR");
   yield promiseRestartManager();
 
-  addon = yield promiseAddonByID(ID);
+  addon = yield promiseAddonByID(extensionId);
 
   equal(addon.name, "Web Extensiøn le foo ☺");
   equal(addon.description, "Descriptïon le bar ☺ of add-on");
@@ -182,7 +180,7 @@ add_task(function* test_manifest_localization() {
   Services.prefs.setCharPref(PREF_SELECTED_LOCALE, "de");
   yield promiseRestartManager();
 
-  addon = yield promiseAddonByID(ID);
+  addon = yield promiseAddonByID(extensionId);
 
   equal(addon.name, "Web Extensiøn foo ☹");
   equal(addon.description, "Descriptïon bar ☹ of add-on");
@@ -192,7 +190,7 @@ add_task(function* test_manifest_localization() {
 
 // Missing version should cause a failure
 add_task(function*() {
-  writeWebManifestForExtension({
+  yield promiseWriteWebManifestForExtension({
     name: "Web Extension Name",
     manifest_version: 2,
     applications: {
@@ -215,7 +213,7 @@ add_task(function*() {
 
 // Incorrect manifest version should cause a failure
 add_task(function*() {
-  writeWebManifestForExtension({
+  yield promiseWriteWebManifestForExtension({
     name: "Web Extension Name",
     version: "1.0",
     manifest_version: 1,
@@ -253,7 +251,7 @@ add_task(function*() {
   do_check_true(first_addon.isActive);
   do_check_false(first_addon.isSystem);
 
-  let manifestjson_id= "last-webextension2@tests.mozilla.org";
+  let manifestjson_id = "last-webextension2@tests.mozilla.org";
   let last_addon = yield promiseAddonByID(manifestjson_id);
   do_check_eq(last_addon, null);
 
@@ -264,14 +262,17 @@ add_task(function*() {
 add_task(function* test_options_ui() {
   let OPTIONS_RE = /^moz-extension:\/\/[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\/options\.html$/;
 
-  let addon = yield promiseInstallWebExtension({
+  const extensionId = "webextension@tests.mozilla.org";
+  yield promiseInstallWebExtension({
     manifest: {
+      applications: {gecko: {id: extensionId}},
       "options_ui": {
         "page": "options.html",
       },
     },
   });
 
+  let addon = yield promiseAddonByID(extensionId);
   equal(addon.optionsType, AddonManager.OPTIONS_TYPE_INLINE_BROWSER,
         "Addon should have an INLINE_BROWSER options type");
 
@@ -280,8 +281,10 @@ add_task(function* test_options_ui() {
 
   addon.uninstall();
 
-  addon = yield promiseInstallWebExtension({
+  const ID2 = "webextension2@tests.mozilla.org";
+  yield promiseInstallWebExtension({
     manifest: {
+      applications: {gecko: {id: ID2}},
       "options_ui": {
         "page": "options.html",
         "open_in_tab": true,
@@ -289,6 +292,7 @@ add_task(function* test_options_ui() {
     },
   });
 
+  addon = yield promiseAddonByID(ID2);
   equal(addon.optionsType, AddonManager.OPTIONS_TYPE_TAB,
         "Addon should have a TAB options type");
 
@@ -300,20 +304,20 @@ add_task(function* test_options_ui() {
 
 // Test that experiments permissions add the appropriate dependencies.
 add_task(function* test_experiments_dependencies() {
-  if (AppConstants.RELEASE_BUILD)
+  if (AppConstants.RELEASE_OR_BETA)
     // Experiments are not enabled on release builds.
     return;
 
   let addonFile = createTempWebExtensionFile({
-    id: "meh@experiment",
     manifest: {
+      applications: {gecko: {id: "meh@experiment"}},
       "permissions": ["experiments.meh"],
     },
   });
 
   yield promiseInstallAllFiles([addonFile]);
 
-  let addon = yield new Promise(resolve => AddonManager.getAddonByID("meh@experiment", resolve));
+  let addon = yield AddonManager.getAddonByID("meh@experiment");
 
   deepEqual(addon.dependencies, ["meh@experiments.addons.mozilla.org"],
             "Addon should have the expected dependencies");
@@ -325,14 +329,14 @@ add_task(function* test_experiments_dependencies() {
 
 // Test that experiments API extensions install correctly.
 add_task(function* test_experiments_api() {
-  if (AppConstants.RELEASE_BUILD)
+  if (AppConstants.RELEASE_OR_BETA)
     // Experiments are not enabled on release builds.
     return;
 
-  const ID = "meh@experiments.addons.mozilla.org";
+  const extensionId = "meh@experiments.addons.mozilla.org";
 
   let addonFile = createTempXPIFile({
-    id: ID,
+    id: extensionId,
     type: 256,
     version: "0.1",
     name: "Meh API",
@@ -340,12 +344,78 @@ add_task(function* test_experiments_api() {
 
   yield promiseInstallAllFiles([addonFile]);
 
-  let addons = yield new Promise(resolve => AddonManager.getAddonsByTypes(["apiextension"], resolve));
+  let addons = yield AddonManager.getAddonsByTypes(["apiextension"]);
   let addon = addons.pop();
-  equal(addon.id, ID, "Add-on should be installed as an API extension");
+  equal(addon.id, extensionId, "Add-on should be installed as an API extension");
 
-  addons = yield new Promise(resolve => AddonManager.getAddonsByTypes(["extension"], resolve));
-  equal(addons.pop().id, ID, "Add-on type should be aliased to extension");
+  addons = yield AddonManager.getAddonsByTypes(["extension"]);
+  equal(addons.pop().id, extensionId, "Add-on type should be aliased to extension");
 
   addon.uninstall();
+});
+
+add_task(function* developerShouldOverride() {
+  let addon = yield promiseInstallWebExtension({
+    manifest: {
+      default_locale: "en",
+      developer: {
+        name: "__MSG_name__",
+        url: "__MSG_url__"
+      },
+      author: "Will be overridden by developer",
+      homepage_url: "https://will.be.overridden",
+    },
+    files: {
+      "_locales/en/messages.json": `{
+        "name": {
+          "message": "en name"
+        },
+        "url": {
+          "message": "https://example.net/en"
+        }
+      }`
+    }
+  });
+
+  addon = yield promiseAddonByID(addon.id);
+  equal(addon.creator, "en name");
+  equal(addon.homepageURL, "https://example.net/en");
+  addon.uninstall();
+});
+
+add_task(function* developerEmpty() {
+  for (let developer of [{}, null, {name: null, url: null}]) {
+    let addon = yield promiseInstallWebExtension({
+      manifest: {
+        author: "Some author",
+        developer: developer,
+        homepage_url: "https://example.net",
+        manifest_version: 2,
+        name: "Web Extension Name",
+        version: "1.0",
+      }
+    });
+
+    addon = yield promiseAddonByID(addon.id);
+    equal(addon.creator, "Some author");
+    equal(addon.homepageURL, "https://example.net");
+    addon.uninstall();
+  }
+});
+
+add_task(function* authorNotString() {
+  for (let author of [{}, [], 42]) {
+    let addon = yield promiseInstallWebExtension({
+      manifest: {
+        author: author,
+        manifest_version: 2,
+        name: "Web Extension Name",
+        version: "1.0",
+      }
+    });
+
+    addon = yield promiseAddonByID(addon.id);
+    equal(addon.creator, null);
+    addon.uninstall();
+  }
 });

@@ -30,6 +30,8 @@
 #include "nsToolkitCompsCID.h"
 #include "nsGeoPosition.h"
 
+#include "mozilla/ArrayUtils.h"
+#include "mozilla/Telemetry.h"
 #include "mozilla/Services.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Hal.h"
@@ -53,13 +55,21 @@
 #include "mozilla/Logging.h"
 #endif
 
+#ifdef MOZ_CRASHREPORTER
+#include "nsICrashReporter.h"
+#include "nsExceptionHandler.h"
+#endif
+
 #include "AndroidAlerts.h"
+#include "AndroidUiThread.h"
 #include "ANRReporter.h"
+#include "GeckoBatteryManager.h"
 #include "GeckoNetworkManager.h"
 #include "GeckoScreenOrientation.h"
 #include "PrefsHelper.h"
-#include "Telemetry.h"
-#include "ThumbnailHelper.h"
+#include "fennec/MemoryMonitor.h"
+#include "fennec/Telemetry.h"
+#include "fennec/ThumbnailHelper.h"
 
 #ifdef DEBUG_ANDROID_EVENTS
 #define EVLOG(args...)  ALOG(args)
@@ -73,6 +83,9 @@ nsIGeolocationUpdate *gLocationCallback = nullptr;
 
 nsAppShell* nsAppShell::sAppShell;
 StaticAutoPtr<Mutex> nsAppShell::sAppShellLock;
+
+uint32_t nsAppShell::Queue::sLatencyCount[];
+uint64_t nsAppShell::Queue::sLatencyTime[];
 
 NS_IMPL_ISUPPORTS_INHERITED(nsAppShell, nsBaseAppShell, nsIObserver)
 
@@ -96,23 +109,12 @@ StaticRefPtr<WakeLockListener> sWakeLockListener;
 
 class GeckoThreadSupport final
     : public java::GeckoThread::Natives<GeckoThreadSupport>
-    , public UsesGeckoThreadProxy
 {
-    static uint32_t sPauseCount;
+    // When this number goes above 0, the app is paused. When less than or
+    // equal to zero, the app is resumed.
+    static int32_t sPauseCount;
 
 public:
-    template<typename Functor>
-    static void OnNativeCall(Functor&& aCall)
-    {
-        if (aCall.IsTarget(&SpeculativeConnect) ||
-            aCall.IsTarget(&WaitOnGecko)) {
-
-            aCall();
-            return;
-        }
-        return UsesGeckoThreadProxy::OnNativeCall(aCall);
-    }
-
     static void SpeculativeConnect(jni::String::Param aUriStr)
     {
         if (!NS_IsMainThread()) {
@@ -148,8 +150,10 @@ public:
     {
         MOZ_ASSERT(NS_IsMainThread());
 
-        if ((++sPauseCount) > 1) {
-            // Already paused.
+        sPauseCount++;
+        // If sPauseCount is now 1, we just crossed the threshold from "resumed"
+        // "paused". so we should notify observers and so on.
+        if (sPauseCount != 1) {
             return;
         }
 
@@ -180,8 +184,10 @@ public:
     {
         MOZ_ASSERT(NS_IsMainThread());
 
-        if (!sPauseCount || (--sPauseCount) > 0) {
-            // Still paused.
+        sPauseCount--;
+        // If sPauseCount is now 0, we just crossed the threshold from "paused"
+        // to "resumed", so we should notify observers and so on.
+        if (sPauseCount != 0) {
             return;
         }
 
@@ -201,6 +207,8 @@ public:
 
     static void CreateServices(jni::String::Param aCategory, jni::String::Param aData)
     {
+        MOZ_ASSERT(NS_IsMainThread());
+
         nsCString category(aCategory->ToCString());
 
         NS_CreateServicesFromCategory(
@@ -209,24 +217,36 @@ public:
                 category.get(),
                 aData ? aData->ToString().get() : nullptr);
     }
+
+    static int64_t RunUiThreadCallback()
+    {
+        if (!AndroidBridge::Bridge()) {
+            return -1;
+        }
+
+        return AndroidBridge::Bridge()->RunDelayedUiThreadTasks();
+    }
 };
 
-uint32_t GeckoThreadSupport::sPauseCount;
+int32_t GeckoThreadSupport::sPauseCount;
 
 
 class GeckoAppShellSupport final
     : public java::GeckoAppShell::Natives<GeckoAppShellSupport>
-    , public UsesGeckoThreadProxy
 {
 public:
-    template<typename Functor>
-    static void OnNativeCall(Functor&& aCall)
+    static void ReportJavaCrash(const jni::Class::LocalRef& aCls,
+                                jni::Throwable::Param aException,
+                                jni::String::Param aStack)
     {
-        if (aCall.IsTarget(&SyncNotifyObservers)) {
-            aCall();
+        if (!jni::ReportException(aCls.Env(), aException.Get(), aStack.Get())) {
+            // Only crash below if crash reporter is initialized and annotation
+            // succeeded. Otherwise try other means of reporting the crash in
+            // Java.
             return;
         }
-        return UsesGeckoThreadProxy::OnNativeCall(aCall);
+
+        MOZ_CRASH("Uncaught Java exception");
     }
 
     static void SyncNotifyObservers(jni::String::Param aTopic,
@@ -325,14 +345,21 @@ public:
     }
 
     static void NotifyAlertListener(jni::String::Param aName,
-                                    jni::String::Param aTopic)
+                                    jni::String::Param aTopic,
+                                    jni::String::Param aCookie)
     {
-        if (!aName || !aTopic) {
+        if (!aName || !aTopic || !aCookie) {
             return;
         }
 
         AndroidAlerts::NotifyListener(
-                aName->ToString(), aTopic->ToCString().get());
+                aName->ToString(), aTopic->ToCString().get(),
+                aCookie->ToString().get());
+    }
+
+    static void OnFullScreenPluginHidden(jni::Object::Param aView)
+    {
+        nsPluginInstanceOwner::ExitFullScreen(aView.Get());
     }
 };
 
@@ -355,15 +382,22 @@ nsAppShell::nsAppShell()
         AndroidBridge::ConstructBridge();
         GeckoAppShellSupport::Init();
         GeckoThreadSupport::Init();
-        mozilla::ANRReporter::Init();
+        mozilla::GeckoBatteryManager::Init();
         mozilla::GeckoNetworkManager::Init();
         mozilla::GeckoScreenOrientation::Init();
         mozilla::PrefsHelper::Init();
-        mozilla::widget::Telemetry::Init();
-        mozilla::ThumbnailHelper::Init();
         nsWindow::InitNatives();
 
+        if (jni::IsFennec()) {
+            mozilla::ANRReporter::Init();
+            mozilla::MemoryMonitor::Init();
+            mozilla::widget::Telemetry::Init();
+            mozilla::ThumbnailHelper::Init();
+        }
+
         java::GeckoThread::SetState(java::GeckoThread::State::JNI_READY());
+
+        CreateAndroidUiThread();
     }
 
     sPowerManagerService = do_GetService(POWERMANAGERSERVICE_CONTRACTID);
@@ -394,6 +428,7 @@ nsAppShell::~nsAppShell()
     }
 
     if (jni::IsAvailable()) {
+        DestroyAndroidUiThread();
         AndroidBridge::DeconstructBridge();
     }
 }
@@ -402,6 +437,43 @@ void
 nsAppShell::NotifyNativeEvent()
 {
     mEventQueue.Signal();
+}
+
+void
+nsAppShell::RecordLatencies()
+{
+    if (!mozilla::Telemetry::CanRecordExtended()) {
+        return;
+    }
+
+    const mozilla::Telemetry::ID timeIDs[] = {
+        mozilla::Telemetry::ID::FENNEC_LOOP_UI_LATENCY,
+        mozilla::Telemetry::ID::FENNEC_LOOP_OTHER_LATENCY
+    };
+
+    static_assert(ArrayLength(Queue::sLatencyCount) == Queue::LATENCY_COUNT,
+                  "Count array length mismatch");
+    static_assert(ArrayLength(Queue::sLatencyTime) == Queue::LATENCY_COUNT,
+                  "Time array length mismatch");
+    static_assert(ArrayLength(timeIDs) == Queue::LATENCY_COUNT,
+                  "Time ID array length mismatch");
+
+    for (size_t i = 0; i < Queue::LATENCY_COUNT; i++) {
+        if (!Queue::sLatencyCount[i]) {
+            continue;
+        }
+
+        const uint64_t time = Queue::sLatencyTime[i] / 1000ull /
+                              Queue::sLatencyCount[i];
+        if (time) {
+            mozilla::Telemetry::Accumulate(
+                    timeIDs[i], uint32_t(std::min<uint64_t>(UINT32_MAX, time)));
+        }
+
+        // Reset latency counts.
+        Queue::sLatencyCount[i] = 0;
+        Queue::sLatencyTime[i] = 0;
+    }
 }
 
 #define PREFNAME_COALESCE_TOUCHES "dom.event.touch.coalescing.enabled"
@@ -627,118 +699,6 @@ nsAppShell::ResolveURI(const nsCString& aUriStr)
         return uri.forget();
     }
     return nullptr;
-}
-
-class nsAppShell::LegacyGeckoEvent : public Event
-{
-    mozilla::UniquePtr<AndroidGeckoEvent> ae;
-
-public:
-    LegacyGeckoEvent(AndroidGeckoEvent* e) : ae(e) {}
-
-    void Run() override;
-    void PostTo(mozilla::LinkedList<Event>& queue) override;
-
-    Event::Type ActivityType() const override
-    {
-        return ae->IsInputEvent() ? mozilla::HangMonitor::kUIActivity
-                                  : mozilla::HangMonitor::kGeneralActivity;
-    }
-};
-
-void
-nsAppShell::PostEvent(AndroidGeckoEvent* event)
-{
-    mozilla::MutexAutoLock lock(*sAppShellLock);
-    if (!sAppShell) {
-        return;
-    }
-    sAppShell->mEventQueue.Post(mozilla::MakeUnique<LegacyGeckoEvent>(event));
-}
-
-void
-nsAppShell::LegacyGeckoEvent::Run()
-{
-    const mozilla::UniquePtr<AndroidGeckoEvent>& curEvent = ae;
-
-    EVLOG("nsAppShell: event %p %d", (void*)curEvent.get(), curEvent->Type());
-
-    switch (curEvent->Type()) {
-    case AndroidGeckoEvent::VIEWPORT: {
-        if (curEvent->Characters().Length() == 0)
-            break;
-
-        nsCOMPtr<nsIObserverService> obsServ =
-            mozilla::services::GetObserverService();
-
-        const NS_ConvertUTF16toUTF8 topic(curEvent->Characters());
-
-        obsServ->NotifyObservers(nullptr, topic.get(), curEvent->CharactersExtra().get());
-        break;
-    }
-
-    case AndroidGeckoEvent::NOOP:
-        break;
-
-    default:
-        nsWindow::OnGlobalAndroidEvent(curEvent.get());
-        break;
-    }
-
-    EVLOG("nsAppShell: -- done event %p %d", (void*)curEvent.get(), curEvent->Type());
-}
-
-void
-nsAppShell::LegacyGeckoEvent::PostTo(mozilla::LinkedList<Event>& queue)
-{
-    {
-        EVLOG("nsAppShell::PostEvent %p %d", ae, ae->Type());
-        switch (ae->Type()) {
-        case AndroidGeckoEvent::VIEWPORT:
-            // Coalesce a previous viewport event with this one, while
-            // allowing coalescing to happen across native callback events.
-            for (Event* event = queue.getLast(); event;
-                    event = event->getPrevious())
-            {
-                if (event->HasSameTypeAs(this) &&
-                        static_cast<LegacyGeckoEvent*>(event)->ae->Type()
-                            == AndroidGeckoEvent::VIEWPORT) {
-                    // Found a previous viewport event; remove it.
-                    delete event;
-                    break;
-                }
-                NativeCallbackEvent callbackEvent(nullptr);
-                if (event->HasSameTypeAs(&callbackEvent)) {
-                    // Allow coalescing viewport events across callback events.
-                    continue;
-                }
-                // End of search for viewport events to coalesce.
-                break;
-            }
-            queue.insertBack(this);
-            break;
-
-        case AndroidGeckoEvent::MOTION_EVENT:
-        case AndroidGeckoEvent::APZ_INPUT_EVENT:
-            if (sAppShell->mAllowCoalescingTouches) {
-                Event* const event = queue.getLast();
-                if (event && event->HasSameTypeAs(this) && ae->CanCoalesceWith(
-                        static_cast<LegacyGeckoEvent*>(event)->ae.get())) {
-
-                    // consecutive motion-move events; drop the last one before adding the new one
-                    EVLOG("nsAppShell: Dropping old move event at %p in favour of new move event %p", event, ae);
-                    // Delete the event and remove from list.
-                    delete event;
-                }
-            }
-            queue.insertBack(this);
-            break;
-
-        default:
-            queue.insertBack(this);
-            break;
-        }
-    }
 }
 
 nsresult

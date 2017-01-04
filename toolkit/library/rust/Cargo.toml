@@ -6,7 +6,7 @@ license = "MPL-2.0"
 description = "Rust code for libxul"
 
 [dependencies]
-mp4parse = { path = "../../../media/libstagefright/binding/mp4parse" }
+gkrust-shared = { path = "shared" }
 
 [lib]
 path = "lib.rs"
@@ -26,6 +26,7 @@ rpath = false
 lto = false
 debug-assertions = true
 codegen-units = 1
+panic = "abort"
 
 [profile.release]
 opt-level = 2
@@ -33,3 +34,4 @@ debug = true
 rpath = false
 lto = true
 debug-assertions = false
+panic = "abort"

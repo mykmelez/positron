@@ -111,6 +111,9 @@ interface Element : Node {
   [Throws, Pref="dom.w3c_pointer_events.enabled"]
   void releasePointerCapture(long pointerId);
 
+  [Pref="dom.w3c_pointer_events.enabled"]
+  boolean hasPointerCapture(long pointerId);
+
   // Proprietary extensions
   /**
    * Set this during a mousedown event to grab and retarget all mouse events
@@ -127,6 +130,12 @@ interface Element : Node {
    * element has captured the mouse, this method has no effect.
    */
   void releaseCapture();
+
+  /*
+   * Chrome-only version of setCapture that works outside of a mousedown event.
+   */
+  [ChromeOnly]
+  void setCaptureAlways(optional boolean retargetToElement = false);
 
   // Mozilla extensions
 
@@ -205,14 +214,6 @@ partial interface Element {
                readonly attribute long scrollLeftMax;
 };
 
-// http://dvcs.w3.org/hg/undomanager/raw-file/tip/undomanager.html
-partial interface Element {
-  [Pref="dom.undo_manager.enabled"]
-  readonly attribute UndoManager? undoManager;
-  [SetterThrows,Pref="dom.undo_manager.enabled"]
-  attribute boolean undoScope;
-};
-
 // http://domparsing.spec.whatwg.org/#extensions-to-the-element-interface
 partial interface Element {
   [Pure,SetterThrows,TreatNullAs=EmptyString]
@@ -247,29 +248,18 @@ Element implements ParentNode;
 Element implements Animatable;
 Element implements GeometryUtils;
 
-// non-standard: allows passing options to Element.requestFullscreen
-dictionary RequestFullscreenOptions {
-  // Which HMDVRDevice to go full screen on; also enables VR rendering.
-  // If null, normal fullscreen is entered.
-  HMDVRDevice? vrDisplay = null;
-};
-
 // https://fullscreen.spec.whatwg.org/#api
 partial interface Element {
-  /**
-   * The options parameter is non-standard. In Gecko, it can be:
-   *  a RequestFullscreenOptions object
-   */
-  [Throws, UnsafeInPrerendering, Func="nsDocument::IsUnprefixedFullscreenEnabled"]
-  void requestFullscreen(optional any options);
-  [Throws, UnsafeInPrerendering, BinaryName="requestFullscreen"]
-  void mozRequestFullScreen(optional any options);
+  [Throws, UnsafeInPrerendering, Func="nsDocument::IsUnprefixedFullscreenEnabled", NeedsCallerType]
+  void requestFullscreen();
+  [Throws, UnsafeInPrerendering, BinaryName="requestFullscreen", NeedsCallerType]
+  void mozRequestFullScreen();
 };
 
 // https://w3c.github.io/pointerlock/#extensions-to-the-element-interface
 partial interface Element {
-  [UnsafeInPrerendering]
+  [UnsafeInPrerendering, NeedsCallerType]
   void requestPointerLock();
-  [UnsafeInPrerendering, BinaryName="requestPointerLock", Pref="pointer-lock-api.prefixed.enabled"]
+  [UnsafeInPrerendering, BinaryName="requestPointerLock", Pref="pointer-lock-api.prefixed.enabled", NeedsCallerType]
   void mozRequestPointerLock();
 };

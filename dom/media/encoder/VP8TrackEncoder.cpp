@@ -14,6 +14,7 @@
 #include "vpx/vp8cx.h"
 #include "vpx/vpx_encoder.h"
 #include "WebMWriter.h"
+#include "mozilla/media/MediaUtils.h"
 
 namespace mozilla {
 
@@ -27,6 +28,31 @@ LazyLogModule gVP8TrackEncoderLog("VP8TrackEncoder");
 
 using namespace mozilla::gfx;
 using namespace mozilla::layers;
+using namespace mozilla::media;
+
+static already_AddRefed<SourceSurface>
+GetSourceSurface(already_AddRefed<Image> aImg)
+{
+  RefPtr<Image> img = aImg;
+  if (!img) {
+    return nullptr;
+  }
+
+  if (!img->AsGLImage() || NS_IsMainThread()) {
+    RefPtr<SourceSurface> surf = img->GetAsSourceSurface();
+    return surf.forget();
+  }
+
+  // GLImage::GetAsSourceSurface() only supports main thread
+  RefPtr<SourceSurface> surf;
+  RefPtr<Runnable> runnable = NewRunnableFrom([img, &surf]() -> nsresult {
+    surf = img->GetAsSourceSurface();
+    return NS_OK;
+  });
+
+  NS_DispatchToMainThread(runnable, NS_DISPATCH_SYNC);
+  return surf.forget();
+}
 
 VP8TrackEncoder::VP8TrackEncoder(TrackRate aTrackRate)
   : VideoTrackEncoder(aTrackRate)
@@ -364,7 +390,7 @@ nsresult VP8TrackEncoder::PrepareRawFrame(VideoChunk &aChunk)
   } else {
     // Not YCbCr at all. Try to get access to the raw data and convert.
 
-    RefPtr<SourceSurface> surf = img->GetAsSourceSurface();
+    RefPtr<SourceSurface> surf = GetSourceSurface(img.forget());
     if (!surf) {
       VP8LOG("Getting surface from %s image failed\n", Stringify(format).c_str());
       return NS_ERROR_FAILURE;

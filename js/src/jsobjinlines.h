@@ -19,9 +19,9 @@
 #include "gc/Allocator.h"
 #include "vm/ArrayObject.h"
 #include "vm/DateObject.h"
+#include "vm/EnvironmentObject.h"
 #include "vm/NumberObject.h"
 #include "vm/Probes.h"
-#include "vm/ScopeObject.h"
 #include "vm/StringObject.h"
 #include "vm/TypedArrayCommon.h"
 
@@ -106,12 +106,18 @@ JSObject::finalize(js::FreeOp* fop)
         }
     }
 
+    nobj->sweepDictionaryListPointer();
+}
+
+MOZ_ALWAYS_INLINE void
+js::NativeObject::sweepDictionaryListPointer()
+{
     // For dictionary objects (which must be native), it's possible that
-    // unreachable shapes may be marked whose listp points into this object.
-    // In case this happens, null out the shape's pointer here so that a moving
-    // GC will not try to access the dead object.
-    if (nobj->shape_->listp == &nobj->shape_)
-        nobj->shape_->listp = nullptr;
+    // unreachable shapes may be marked whose listp points into this object.  In
+    // case this happens, null out the shape's pointer so that a moving GC will
+    // not try to access the dead object.
+    if (shape_->listp == &shape_)
+        shape_->listp = nullptr;
 }
 
 /* static */ inline bool
@@ -243,23 +249,25 @@ js::DeleteElement(JSContext* cx, HandleObject obj, uint32_t index, ObjectOpResul
 inline bool
 JSObject::isQualifiedVarObj() const
 {
-    if (is<js::DebugScopeObject>())
-        return as<js::DebugScopeObject>().scope().isQualifiedVarObj();
+    if (is<js::DebugEnvironmentProxy>())
+        return as<js::DebugEnvironmentProxy>().environment().isQualifiedVarObj();
     bool rv = hasAllFlags(js::BaseShape::QUALIFIED_VAROBJ);
     MOZ_ASSERT_IF(rv,
                   is<js::GlobalObject>() ||
                   is<js::CallObject>() ||
+                  is<js::VarEnvironmentObject>() ||
                   is<js::ModuleEnvironmentObject>() ||
                   is<js::NonSyntacticVariablesObject>() ||
-                  (is<js::DynamicWithObject>() && !as<js::DynamicWithObject>().isSyntactic()));
+                  (is<js::WithEnvironmentObject>() &&
+                   !as<js::WithEnvironmentObject>().isSyntactic()));
     return rv;
 }
 
 inline bool
 JSObject::isUnqualifiedVarObj() const
 {
-    if (is<js::DebugScopeObject>())
-        return as<js::DebugScopeObject>().scope().isUnqualifiedVarObj();
+    if (is<js::DebugEnvironmentProxy>())
+        return as<js::DebugEnvironmentProxy>().environment().isUnqualifiedVarObj();
     return is<js::GlobalObject>() || is<js::NonSyntacticVariablesObject>();
 }
 
@@ -313,39 +321,55 @@ SetNewObjectMetadata(ExclusiveContext* cxArg, JSObject* obj)
 
 } // namespace js
 
-/* static */ inline JSObject*
+/* static */ inline JS::Result<JSObject*, JS::OOM&>
 JSObject::create(js::ExclusiveContext* cx, js::gc::AllocKind kind, js::gc::InitialHeap heap,
                  js::HandleShape shape, js::HandleObjectGroup group)
 {
+    const js::Class* clasp = group->clasp();
+
     MOZ_ASSERT(shape && group);
-    MOZ_ASSERT(group->clasp() == shape->getObjectClass());
-    MOZ_ASSERT(group->clasp() != &js::ArrayObject::class_);
-    MOZ_ASSERT_IF(!js::ClassCanHaveFixedData(group->clasp()),
-                  js::gc::GetGCKindSlots(kind, group->clasp()) == shape->numFixedSlots());
-    MOZ_ASSERT_IF(group->clasp()->flags & JSCLASS_BACKGROUND_FINALIZE,
-                  IsBackgroundFinalized(kind));
-    MOZ_ASSERT_IF(group->clasp()->hasFinalize(),
-                  heap == js::gc::TenuredHeap ||
-                  (group->clasp()->flags & JSCLASS_SKIP_NURSERY_FINALIZE));
-    MOZ_ASSERT_IF(group->hasUnanalyzedPreliminaryObjects(),
-                  heap == js::gc::TenuredHeap);
+    MOZ_ASSERT(clasp == shape->getObjectClass());
+    MOZ_ASSERT(clasp != &js::ArrayObject::class_);
+    MOZ_ASSERT_IF(!js::ClassCanHaveFixedData(clasp),
+                  js::gc::GetGCKindSlots(kind, clasp) == shape->numFixedSlots());
+
+#ifdef DEBUG
+    static const uint32_t FinalizeMask = JSCLASS_FOREGROUND_FINALIZE | JSCLASS_BACKGROUND_FINALIZE;
+    uint32_t flags = clasp->flags;
+    uint32_t finalizeFlags = flags & FinalizeMask;
+
+    // Classes with a finalizer must specify whether instances will be finalized
+    // on the main thread or in the background, except proxies whose behaviour
+    // depends on the target object.
+    if (clasp->hasFinalize() && !clasp->isProxy()) {
+        MOZ_ASSERT(finalizeFlags == JSCLASS_FOREGROUND_FINALIZE ||
+                   finalizeFlags == JSCLASS_BACKGROUND_FINALIZE);
+        MOZ_ASSERT((finalizeFlags == JSCLASS_BACKGROUND_FINALIZE) == IsBackgroundFinalized(kind));
+    } else {
+        MOZ_ASSERT(finalizeFlags == 0);
+    }
+
+    MOZ_ASSERT_IF(clasp->hasFinalize(), heap == js::gc::TenuredHeap ||
+                                        CanNurseryAllocateFinalizedClass(clasp) ||
+                                        clasp->isProxy());
+    MOZ_ASSERT_IF(group->hasUnanalyzedPreliminaryObjects(), heap == js::gc::TenuredHeap);
+#endif
+
     MOZ_ASSERT(!cx->compartment()->hasObjectPendingMetadata());
 
     // Non-native classes cannot have reserved slots or private data, and the
     // objects can't have any fixed slots, for compatibility with
     // GetReservedOrProxyPrivateSlot.
-    MOZ_ASSERT_IF(!group->clasp()->isNative(), JSCLASS_RESERVED_SLOTS(group->clasp()) == 0);
-    MOZ_ASSERT_IF(!group->clasp()->isNative(), !group->clasp()->hasPrivate());
-    MOZ_ASSERT_IF(!group->clasp()->isNative(), shape->numFixedSlots() == 0);
-    MOZ_ASSERT_IF(!group->clasp()->isNative(), shape->slotSpan() == 0);
-
-    const js::Class* clasp = group->clasp();
+    MOZ_ASSERT_IF(!clasp->isNative(), JSCLASS_RESERVED_SLOTS(clasp) == 0);
+    MOZ_ASSERT_IF(!clasp->isNative(), !clasp->hasPrivate());
+    MOZ_ASSERT_IF(!clasp->isNative(), shape->numFixedSlots() == 0);
+    MOZ_ASSERT_IF(!clasp->isNative(), shape->slotSpan() == 0);
 
     size_t nDynamicSlots = 0;
-    if (group->clasp()->isNative()) {
+    if (clasp->isNative()) {
         nDynamicSlots = js::NativeObject::dynamicSlotsCount(shape->numFixedSlots(),
                                                             shape->slotSpan(), clasp);
-    } else if (group->clasp()->isProxy()) {
+    } else if (clasp->isProxy()) {
         // Proxy objects overlay the |slots| field with a ProxyValueArray.
         MOZ_ASSERT(sizeof(js::detail::ProxyValueArray) % sizeof(js::HeapSlot) == 0);
         nDynamicSlots = sizeof(js::detail::ProxyValueArray) / sizeof(js::HeapSlot);
@@ -353,7 +377,7 @@ JSObject::create(js::ExclusiveContext* cx, js::gc::AllocKind kind, js::gc::Initi
 
     JSObject* obj = js::Allocate<JSObject>(cx, kind, nDynamicSlots, heap, clasp);
     if (!obj)
-        return nullptr;
+        return cx->alreadyReportedOOM();
 
     obj->group_.init(group);
 
@@ -374,7 +398,7 @@ JSObject::create(js::ExclusiveContext* cx, js::gc::AllocKind kind, js::gc::Initi
         obj->as<js::NativeObject>().initializeSlotRange(0, span);
 
     // JSFunction's fixed slots expect POD-style initialization.
-    if (group->clasp()->isJSFunction()) {
+    if (clasp->isJSFunction()) {
         MOZ_ASSERT(kind == js::gc::AllocKind::FUNCTION ||
                    kind == js::gc::AllocKind::FUNCTION_EXTENDED);
         size_t size =
@@ -387,7 +411,7 @@ JSObject::create(js::ExclusiveContext* cx, js::gc::AllocKind kind, js::gc::Initi
         }
     }
 
-    if (group->clasp()->shouldDelayMetadataBuilder())
+    if (clasp->shouldDelayMetadataBuilder())
         cx->compartment()->setObjectPendingMetadata(cx, obj);
     else
         obj = SetNewObjectMetadata(cx, obj);
@@ -550,53 +574,36 @@ IsNativeFunction(const js::Value& v, JSNative native)
     return IsFunctionObject(v, &fun) && fun->maybeNative() == native;
 }
 
-/*
- * When we have an object of a builtin class, we don't quite know what its
- * valueOf/toString methods are, since these methods may have been overwritten
- * or shadowed. However, we can still do better than the general case by
- * hard-coding the necessary properties for us to find the native we expect.
- *
- * TODO: a per-thread shape-based cache would be faster and simpler.
- */
-static MOZ_ALWAYS_INLINE bool
-ClassMethodIsNative(JSContext* cx, NativeObject* obj, const Class* clasp, jsid methodid, JSNative native)
-{
-    MOZ_ASSERT(obj->getClass() == clasp);
 
+// Return whether looking up a method on 'obj' definitely resolves to the
+// original specified native function. The method may conservatively return
+// 'false' in the case of proxies or other non-native objects.
+static MOZ_ALWAYS_INLINE bool
+HasNativeMethodPure(JSObject* obj, PropertyName* name, JSNative native, JSContext* cx)
+{
     Value v;
-    if (!HasDataProperty(cx, obj, methodid, &v)) {
-        JSObject* proto = obj->staticPrototype();
-        if (!proto || proto->getClass() != clasp || !HasDataProperty(cx, &proto->as<NativeObject>(), methodid, &v))
-            return false;
-    }
+    if (!GetPropertyPure(cx, obj, NameToId(name), &v))
+        return false;
 
     return IsNativeFunction(v, native);
 }
 
-// Return whether looking up 'valueOf' on 'obj' definitely resolves to the
-// original Object.prototype.valueOf. The method may conservatively return
-// 'false' in the case of proxies or other non-native objects.
+// Return whether 'obj' definitely has no @@toPrimitive method.
 static MOZ_ALWAYS_INLINE bool
-HasObjectValueOf(JSObject* obj, JSContext* cx)
+HasNoToPrimitiveMethodPure(JSObject* obj, JSContext* cx)
 {
-    if (obj->is<ProxyObject>() || !obj->isNative())
+    jsid id = SYMBOL_TO_JSID(cx->wellKnownSymbols().toPrimitive);
+    JSObject* pobj;
+    Shape* shape;
+    if (!LookupPropertyPure(cx, obj, id, &pobj, &shape))
         return false;
 
-    jsid valueOf = NameToId(cx->names().valueOf);
-
-    Value v;
-    while (!HasDataProperty(cx, &obj->as<NativeObject>(), valueOf, &v)) {
-        obj = obj->staticPrototype();
-        if (!obj || obj->is<ProxyObject>() || !obj->isNative())
-            return false;
-    }
-
-    return IsNativeFunction(v, obj_valueOf);
+    return !shape;
 }
 
 /* ES6 draft rev 28 (2014 Oct 14) 7.1.14 */
 inline bool
-ToPropertyKey(JSContext* cx, Value argument, MutableHandleId result)
+ToPropertyKey(JSContext* cx, HandleValue argument, MutableHandleId result)
 {
     // Steps 1-2.
     RootedValue key(cx, argument);
@@ -713,7 +720,7 @@ NewObjectWithClassProto(ExclusiveContext* cx, const Class* clasp, HandleObject p
 
 template<class T>
 inline T*
-NewObjectWithClassProto(ExclusiveContext* cx, HandleObject proto,
+NewObjectWithClassProto(ExclusiveContext* cx, HandleObject proto = nullptr,
                         NewObjectKind newKind = GenericObject)
 {
     JSObject* obj = NewObjectWithClassProto(cx, &T::class_, proto, newKind);

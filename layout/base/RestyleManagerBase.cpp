@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/RestyleManagerBase.h"
-#include "mozilla/StyleSetHandle.h"
+#include "mozilla/StyleSetHandleInlines.h"
 #include "nsIFrame.h"
 
 namespace mozilla {
@@ -15,6 +15,7 @@ RestyleManagerBase::RestyleManagerBase(nsPresContext* aPresContext)
   , mRestyleGeneration(1)
   , mHoverGeneration(0)
   , mObservingRefreshDriver(false)
+  , mInStyleRefresh(false)
 {
   MOZ_ASSERT(mPresContext);
 }
@@ -133,6 +134,91 @@ RestyleManagerBase::RestyleHintToString(nsRestyleHint aHint)
     }
   }
   return result;
+}
+
+#ifdef DEBUG
+/* static */ nsCString
+RestyleManagerBase::ChangeHintToString(nsChangeHint aHint)
+{
+  nsCString result;
+  bool any = false;
+  const char* names[] = {
+    "RepaintFrame", "NeedReflow", "ClearAncestorIntrinsics",
+    "ClearDescendantIntrinsics", "NeedDirtyReflow", "SyncFrameView",
+    "UpdateCursor", "UpdateEffects", "UpdateOpacityLayer",
+    "UpdateTransformLayer", "ReconstructFrame", "UpdateOverflow",
+    "UpdateSubtreeOverflow", "UpdatePostTransformOverflow",
+    "UpdateParentOverflow",
+    "ChildrenOnlyTransform", "RecomputePosition", "AddOrRemoveTransform",
+    "BorderStyleNoneChange", "UpdateTextPath", "SchedulePaint",
+    "NeutralChange", "InvalidateRenderingObservers",
+    "ReflowChangesSizeOrPosition", "UpdateComputedBSize",
+    "UpdateUsesOpacity", "UpdateBackgroundPosition",
+    "AddOrRemoveTransform"
+  };
+  static_assert(nsChangeHint_AllHints == (1 << ArrayLength(names)) - 1,
+                "Name list doesn't match change hints.");
+  uint32_t hint = aHint & ((1 << ArrayLength(names)) - 1);
+  uint32_t rest = aHint & ~((1 << ArrayLength(names)) - 1);
+  if (hint == nsChangeHint_Hints_NotHandledForDescendants) {
+    result.AppendLiteral("nsChangeHint_Hints_NotHandledForDescendants");
+    hint = 0;
+    any = true;
+  } else {
+    if ((hint & NS_STYLE_HINT_REFLOW) == NS_STYLE_HINT_REFLOW) {
+      result.AppendLiteral("NS_STYLE_HINT_REFLOW");
+      hint = hint & ~NS_STYLE_HINT_REFLOW;
+      any = true;
+    } else if ((hint & nsChangeHint_AllReflowHints) == nsChangeHint_AllReflowHints) {
+      result.AppendLiteral("nsChangeHint_AllReflowHints");
+      hint = hint & ~nsChangeHint_AllReflowHints;
+      any = true;
+    } else if ((hint & NS_STYLE_HINT_VISUAL) == NS_STYLE_HINT_VISUAL) {
+      result.AppendLiteral("NS_STYLE_HINT_VISUAL");
+      hint = hint & ~NS_STYLE_HINT_VISUAL;
+      any = true;
+    }
+  }
+  for (uint32_t i = 0; i < ArrayLength(names); i++) {
+    if (hint & (1 << i)) {
+      if (any) {
+        result.AppendLiteral(" | ");
+      }
+      result.AppendPrintf("nsChangeHint_%s", names[i]);
+      any = true;
+    }
+  }
+  if (rest) {
+    if (any) {
+      result.AppendLiteral(" | ");
+    }
+    result.AppendPrintf("0x%0x", rest);
+  } else {
+    if (!any) {
+      result.AppendLiteral("nsChangeHint(0)");
+    }
+  }
+  return result;
+}
+#endif
+
+void
+RestyleManagerBase::PostRestyleEventInternal(bool aForLazyConstruction)
+{
+  // Make sure we're not in a style refresh; if we are, we still have
+  // a call to ProcessPendingRestyles coming and there's no need to
+  // add ourselves as a refresh observer until then.
+  bool inRefresh = !aForLazyConstruction && mInStyleRefresh;
+  nsIPresShell* presShell = PresContext()->PresShell();
+  if (!ObservingRefreshDriver() && !inRefresh) {
+    SetObservingRefreshDriver(PresContext()->RefreshDriver()->
+        AddStyleFlushObserver(presShell));
+  }
+
+  // Unconditionally flag our document as needing a flush.  The other
+  // option here would be a dedicated boolean to track whether we need
+  // to do so (set here and unset in ProcessPendingRestyles).
+  presShell->GetDocument()->SetNeedStyleFlush();
 }
 
 /**
@@ -433,7 +519,14 @@ RecomputePosition(nsIFrame* aFrame)
         // ReflowInput::ApplyRelativePositioning would work here, but
         // since we've already checked mPosition and aren't changing the frame's
         // normal position, go ahead and add the offsets directly.
-        cont->SetPosition(cont->GetNormalPosition() +
+        // First, we need to ensure that the normal position is stored though.
+        nsPoint normalPosition = cont->GetNormalPosition();
+        auto props = cont->Properties();
+        const auto& prop = nsIFrame::NormalPositionProperty();
+        if (!props.Get(prop)) {
+          props.Set(prop, new nsPoint(normalPosition));
+        }
+        cont->SetPosition(normalPosition +
                           nsPoint(newOffsets.left, newOffsets.top));
       }
     }
@@ -478,9 +571,9 @@ RecomputePosition(nsIFrame* aFrame)
     parentReflowInput.mCBReflowInput = cbReflowInput.ptr();
   }
 
-  NS_WARN_IF_FALSE(parentSize.ISize(parentWM) != NS_INTRINSICSIZE &&
-                   parentSize.BSize(parentWM) != NS_INTRINSICSIZE,
-                   "parentSize should be valid");
+  NS_WARNING_ASSERTION(parentSize.ISize(parentWM) != NS_INTRINSICSIZE &&
+                       parentSize.BSize(parentWM) != NS_INTRINSICSIZE,
+                       "parentSize should be valid");
   parentReflowInput.SetComputedISize(std::max(parentSize.ISize(parentWM), 0));
   parentReflowInput.SetComputedBSize(std::max(parentSize.BSize(parentWM), 0));
   parentReflowInput.ComputedPhysicalMargin().SizeTo(0, 0, 0, 0);
@@ -569,25 +662,32 @@ static bool
 FrameHasPositionedPlaceholderDescendants(nsIFrame* aFrame,
                                          uint32_t aPositionMask)
 {
-  const nsIFrame::ChildListIDs skip(nsIFrame::kAbsoluteList |
-                                    nsIFrame::kFixedList);
+  MOZ_ASSERT(aPositionMask & (1 << NS_STYLE_POSITION_FIXED));
+
   for (nsIFrame::ChildListIterator lists(aFrame); !lists.IsDone(); lists.Next()) {
-    if (!skip.Contains(lists.CurrentID())) {
-      for (nsIFrame* f : lists.CurrentList()) {
-        if (f->GetType() == nsGkAtoms::placeholderFrame) {
-          nsIFrame* outOfFlow =
-            nsPlaceholderFrame::GetRealFrameForPlaceholder(f);
-          // If SVG text frames could appear here, they could confuse us since
-          // they ignore their position style ... but they can't.
-          NS_ASSERTION(!outOfFlow->IsSVGText(),
-                       "SVG text frames can't be out of flow");
-          if (aPositionMask & (1 << outOfFlow->StyleDisplay()->mPosition)) {
-            return true;
-          }
-        }
-        if (FrameHasPositionedPlaceholderDescendants(f, aPositionMask)) {
+    for (nsIFrame* f : lists.CurrentList()) {
+      if (f->GetType() == nsGkAtoms::placeholderFrame) {
+        nsIFrame* outOfFlow =
+          nsPlaceholderFrame::GetRealFrameForPlaceholder(f);
+        // If SVG text frames could appear here, they could confuse us since
+        // they ignore their position style ... but they can't.
+        NS_ASSERTION(!outOfFlow->IsSVGText(),
+                     "SVG text frames can't be out of flow");
+        if (aPositionMask & (1 << outOfFlow->StyleDisplay()->mPosition)) {
           return true;
         }
+      }
+      uint32_t positionMask = aPositionMask;
+      // NOTE:  It's tempting to check f->IsAbsPosContainingBlock() or
+      // f->IsFixedPosContainingBlock() here.  However, that would only
+      // be testing the *new* style of the frame, which might exclude
+      // descendants that currently have this frame as an abs-pos
+      // containing block.  Taking the codepath where we don't reframe
+      // could lead to an unsafe call to
+      // cont->MarkAsNotAbsoluteContainingBlock() before we've reframed
+      // the descendant and taken it off the absolute list.
+      if (FrameHasPositionedPlaceholderDescendants(f, positionMask)) {
+        return true;
       }
     }
   }
@@ -960,8 +1060,7 @@ RestyleManagerBase::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
 {
   NS_ASSERTION(!nsContentUtils::IsSafeToRunScript(),
                "Someone forgot a script blocker");
-  int32_t count = aChangeList.Count();
-  if (!count)
+  if (aChangeList.IsEmpty())
     return NS_OK;
 
   PROFILER_LABEL("RestyleManager", "ProcessRestyledFrames",
@@ -978,26 +1077,19 @@ RestyleManagerBase::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
   // Mark frames so that we skip frames that die along the way, bug 123049.
   // A frame can be in the list multiple times with different hints. Further
   // optmization is possible if nsStyleChangeList::AppendChange could coalesce
-  int32_t index = count;
-
-  while (0 <= --index) {
-    const nsStyleChangeData* changeData;
-    aChangeList.ChangeAt(index, &changeData);
-    if (changeData->mFrame) {
-      propTable->Set(changeData->mFrame, ChangeListProperty(), true);
+  for (const nsStyleChangeData& data : aChangeList) {
+    if (data.mFrame) {
+      propTable->Set(data.mFrame, ChangeListProperty(), true);
     }
   }
 
-  index = count;
-
   bool didUpdateCursor = false;
 
-  while (0 <= --index) {
-    nsIFrame* frame;
-    nsIContent* content;
+  for (const nsStyleChangeData& data : aChangeList) {
+    nsIFrame* frame = data.mFrame;
+    nsIContent* content = data.mContent;
+    nsChangeHint hint = data.mHint;
     bool didReflowThisFrame = false;
-    nsChangeHint hint;
-    aChangeList.ChangeAt(index, frame, content, hint);
 
     NS_ASSERTION(!(hint & nsChangeHint_AllReflowHints) ||
                  (hint & nsChangeHint_NeedReflow),
@@ -1032,26 +1124,45 @@ RestyleManagerBase::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
           // but we're not going to reconstruct the frame so we need to set them.
           // It's because we need to set this state on each affected frame
           // that we can't coalesce nsChangeHint_UpdateContainingBlock hints up
-          // to ancestors (i.e. it can't be an inherited change hint).
-          if (cont->IsAbsPosContaininingBlock()) {
-            if (cont->StyleDisplay()->HasTransform(cont)) {
-              cont->AddStateBits(NS_FRAME_MAY_BE_TRANSFORMED);
-            }
+          // to ancestors (i.e. it can't be an change hint that is handled for
+          // descendants).
+          if (cont->IsAbsPosContainingBlock()) {
             if (!cont->IsAbsoluteContainer() &&
                 (cont->GetStateBits() & NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN)) {
               cont->MarkAsAbsoluteContainingBlock();
             }
           } else {
-            // Don't remove NS_FRAME_MAY_BE_TRANSFORMED since it may still by
-            // transformed by other means. It's OK to have the bit even if it's
-            // not needed.
             if (cont->IsAbsoluteContainer()) {
-              cont->MarkAsNotAbsoluteContainingBlock();
+              if (cont->HasAbsolutelyPositionedChildren()) {
+                // If |cont| still has absolutely positioned children,
+                // we can't call MarkAsNotAbsoluteContainingBlock.  This
+                // will remove a frame list that still has children in
+                // it that we need to keep track of.
+                // The optimization of removing it isn't particularly
+                // important, although it does mean we skip some tests.
+                NS_WARNING("skipping removal of absolute containing block");
+              } else {
+                cont->MarkAsNotAbsoluteContainingBlock();
+              }
             }
           }
         }
       }
     }
+
+    if ((hint & nsChangeHint_AddOrRemoveTransform) && frame &&
+        !(hint & nsChangeHint_ReconstructFrame)) {
+      for (nsIFrame* cont = frame; cont;
+           cont = nsLayoutUtils::GetNextContinuationOrIBSplitSibling(cont)) {
+        if (cont->StyleDisplay()->HasTransform(cont)) {
+          cont->AddStateBits(NS_FRAME_MAY_BE_TRANSFORMED);
+        }
+        // Don't remove NS_FRAME_MAY_BE_TRANSFORMED since it may still be
+        // transformed by other means. It's OK to have the bit even if it's
+        // not needed.
+      }
+    }
+
     if (hint & nsChangeHint_ReconstructFrame) {
       // If we ever start passing true here, be careful of restyles
       // that involve a reframe and animations.  In particular, if the
@@ -1233,23 +1344,20 @@ RestyleManagerBase::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
   // cleanup references and verify the style tree.  Note that the latter needs
   // to happen once we've processed the whole list, since until then the tree
   // is not in fact in a consistent state.
-  index = count;
-  while (0 <= --index) {
-    const nsStyleChangeData* changeData;
-    aChangeList.ChangeAt(index, &changeData);
-    if (changeData->mFrame) {
-      propTable->Delete(changeData->mFrame, ChangeListProperty());
+  for (const nsStyleChangeData& data : aChangeList) {
+    if (data.mFrame) {
+      propTable->Delete(data.mFrame, ChangeListProperty());
     }
 
 #ifdef DEBUG
     // reget frame from content since it may have been regenerated...
-    if (changeData->mContent) {
-      nsIFrame* frame = changeData->mContent->GetPrimaryFrame();
+    if (data.mContent) {
+      nsIFrame* frame = data.mContent->GetPrimaryFrame();
       if (frame) {
         DebugVerifyStyleTree(frame);
       }
-    } else if (!changeData->mFrame ||
-               changeData->mFrame->GetType() != nsGkAtoms::viewportFrame) {
+    } else if (!data.mFrame ||
+               data.mFrame->GetType() != nsGkAtoms::viewportFrame) {
       NS_WARNING("Unable to test style tree integrity -- no content node "
                  "(and not a viewport frame)");
     }

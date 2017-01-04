@@ -29,15 +29,15 @@ import android.util.Log;
 public class Telemetry {
     private static final String LOGTAG = "Telemetry";
 
-    @WrapForJNI(stubName = "AddHistogram")
+    @WrapForJNI(stubName = "AddHistogram", dispatchTo = "gecko")
     private static native void nativeAddHistogram(String name, int value);
-    @WrapForJNI(stubName = "AddKeyedHistogram")
+    @WrapForJNI(stubName = "AddKeyedHistogram", dispatchTo = "gecko")
     private static native void nativeAddKeyedHistogram(String name, String key, int value);
-    @WrapForJNI(stubName = "StartUISession")
+    @WrapForJNI(stubName = "StartUISession", dispatchTo = "gecko")
     private static native void nativeStartUiSession(String name, long timestamp);
-    @WrapForJNI(stubName = "StopUISession")
+    @WrapForJNI(stubName = "StopUISession", dispatchTo = "gecko")
     private static native void nativeStopUiSession(String name, String reason, long timestamp);
-    @WrapForJNI(stubName = "AddUIEvent")
+    @WrapForJNI(stubName = "AddUIEvent", dispatchTo = "gecko")
     private static native void nativeAddUiEvent(String action, String method,
                                                 long timestamp, String extras);
 
@@ -196,7 +196,7 @@ public class Telemetry {
             throw new IllegalArgumentException("Expected non-null method - use Method.NONE?");
         }
 
-        if (!AppConstants.RELEASE_BUILD) {
+        if (!AppConstants.RELEASE_OR_BETA) {
             final String logString = "SendUIEvent: event = " + eventName + " method = " + method + " timestamp = " +
                     timestamp + " extras = " + extras;
             Log.d(LOGTAG, logString);

@@ -48,28 +48,25 @@ public:
     static void DispatchTouchInput(mozilla::MultiTouchInput& aInput);
 
     using nsBaseWidget::Create; // for Create signature not overridden here
-    NS_IMETHOD Create(nsIWidget* aParent,
-                      void* aNativeParent,
-                      const LayoutDeviceIntRect& aRect,
-                      nsWidgetInitData* aInitData) override;
-    NS_IMETHOD Destroy(void);
+    virtual MOZ_MUST_USE nsresult Create(nsIWidget* aParent,
+                                         void* aNativeParent,
+                                         const LayoutDeviceIntRect& aRect,
+                                         nsWidgetInitData* aInitData) override;
+    virtual void Destroy();
 
     NS_IMETHOD Show(bool aState);
     virtual bool IsVisible() const;
-    NS_IMETHOD ConstrainPosition(bool aAllowSlop,
-                                 int32_t *aX,
-                                 int32_t *aY);
-    NS_IMETHOD Move(double aX,
-                    double aY);
-    NS_IMETHOD Resize(double aWidth,
-                      double aHeight,
-                      bool  aRepaint);
-    NS_IMETHOD Resize(double aX,
-                      double aY,
-                      double aWidth,
-                      double aHeight,
-                      bool aRepaint);
-    NS_IMETHOD Enable(bool aState);
+    virtual void Move(double aX,
+                      double aY);
+    virtual void Resize(double aWidth,
+                        double aHeight,
+                        bool  aRepaint);
+    virtual void Resize(double aX,
+                        double aY,
+                        double aWidth,
+                        double aHeight,
+                        bool aRepaint);
+    virtual void Enable(bool aState);
     virtual bool IsEnabled() const;
     NS_IMETHOD SetFocus(bool aRaise = false);
     NS_IMETHOD ConfigureChildren(const nsTArray<nsIWidget::Configuration>&);
@@ -95,14 +92,8 @@ public:
                                                 uint32_t aPointerOrientation,
                                                 nsIObserver* aObserver) override;
 
-    NS_IMETHOD CaptureRollupEvents(nsIRollupListener *aListener,
-                                   bool aDoCapture)
-    {
-        return NS_ERROR_NOT_IMPLEMENTED;
-    }
-    NS_IMETHOD ReparentNativeWidget(nsIWidget* aNewParent);
-
-    NS_IMETHOD MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen = nullptr) /*override*/;
+    virtual nsresult MakeFullScreen(
+        bool aFullScreen, nsIScreen* aTargetScreen = nullptr) override;
 
     virtual already_AddRefed<mozilla::gfx::DrawTarget>
         StartRemoteDrawing() override;

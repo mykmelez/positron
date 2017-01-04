@@ -5,29 +5,11 @@
 
 package org.mozilla.gecko.gfx;
 
-import org.mozilla.gecko.ZoomConstraints;
-
 import android.graphics.Matrix;
 import android.graphics.PointF;
 
 public interface PanZoomTarget {
-    public ImmutableViewportMetrics getViewportMetrics();
-    public ZoomConstraints getZoomConstraints();
-    public FullScreenState getFullScreenState();
-    public PointF getVisibleEndOfLayerView();
-
-    public void setAnimationTarget(ImmutableViewportMetrics viewport);
-    public void setViewportMetrics(ImmutableViewportMetrics viewport);
-    public void scrollBy(float dx, float dy);
     public void panZoomStopped();
-    /** This triggers an (asynchronous) viewport update/redraw. */
-    public void forceRedraw(DisplayPortMetrics displayPort);
-
-    public boolean post(Runnable action);
-    public void postRenderTask(RenderTask task);
-    public void removeRenderTask(RenderTask task);
-    public Object getLock();
-    public PointF convertViewPointToLayerPoint(PointF viewPoint);
-    public Matrix getMatrixForLayerRectToViewRect();
+    public boolean isGeckoReady();
     public void setScrollingRootContent(boolean isRootContent);
 }

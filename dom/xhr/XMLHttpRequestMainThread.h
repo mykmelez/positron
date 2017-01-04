@@ -34,10 +34,12 @@
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/NotNull.h"
+#include "mozilla/dom/MutableBlobStorage.h"
 #include "mozilla/dom/TypedArray.h"
 #include "mozilla/dom/XMLHttpRequest.h"
 #include "mozilla/dom/XMLHttpRequestBinding.h"
 #include "mozilla/dom/XMLHttpRequestEventTarget.h"
+#include "mozilla/dom/XMLHttpRequestString.h"
 
 #ifdef Status
 /* Xlib headers insist on this for some reason... Nuke it because
@@ -58,6 +60,7 @@ class BlobSet;
 class FormData;
 class URLSearchParams;
 class XMLHttpRequestUpload;
+struct OriginAttributesDictionary;
 
 // A helper for building up an ArrayBuffer object's data
 // before creating the ArrayBuffer itself.  Will do doubling
@@ -112,6 +115,43 @@ protected:
 
 class nsXMLHttpRequestXPCOMifier;
 
+class RequestHeaders
+{
+  struct RequestHeader
+  {
+    nsCString mName;
+    nsCString mValue;
+  };
+  nsTArray<RequestHeader> mHeaders;
+  RequestHeader* Find(const nsACString& aName);
+
+public:
+  class CharsetIterator
+  {
+    bool mValid;
+    int32_t mCurPos, mCurLen, mCutoff;
+    nsACString& mSource;
+
+  public:
+    explicit CharsetIterator(nsACString& aSource);
+    bool Equals(const nsACString& aOther, const nsCStringComparator& aCmp) const;
+    void Replace(const nsACString& aReplacement);
+    bool Next();
+  };
+
+  bool Has(const char* aName);
+  bool Has(const nsACString& aName);
+  void Get(const char* aName, nsACString& aValue);
+  void Get(const nsACString& aName, nsACString& aValue);
+  void Set(const char* aName, const nsACString& aValue);
+  void Set(const nsACString& aName, const nsACString& aValue);
+  void MergeOrSet(const char* aName, const nsACString& aValue);
+  void MergeOrSet(const nsACString& aName, const nsACString& aValue);
+  void Clear();
+  void ApplyToChannel(nsIHttpChannel* aChannel) const;
+  void GetCORSUnsafeHeaders(nsTArray<nsCString>& aArray) const;
+};
+
 // Make sure that any non-DOM interfaces added here are also added to
 // nsXMLHttpRequestXPCOMifier.
 class XMLHttpRequestMainThread final : public XMLHttpRequest,
@@ -123,7 +163,9 @@ class XMLHttpRequestMainThread final : public XMLHttpRequest,
                                        public nsIInterfaceRequestor,
                                        public nsSupportsWeakReference,
                                        public nsITimerCallback,
-                                       public nsISizeOfEventTarget
+                                       public nsISizeOfEventTarget,
+                                       public nsINamed,
+                                       public MutableBlobStorageCallback
 {
   friend class nsXHRParseEndListener;
   friend class nsXMLHttpRequestXPCOMifier;
@@ -189,6 +231,9 @@ public:
   // nsITimerCallback
   NS_DECL_NSITIMERCALLBACK
 
+  // nsINamed
+  NS_DECL_NSINAMED
+
   // nsISizeOfEventTarget
   virtual size_t
     SizeOfEventTargetIncludingThis(MallocSizeOf aMallocSizeOf) const override;
@@ -199,7 +244,10 @@ public:
   virtual uint16_t ReadyState() const override;
 
   // request
-  nsresult InitChannel();
+  nsresult CreateChannel();
+  nsresult InitiateFetch(nsIInputStream* aUploadStream,
+                         int64_t aUploadLength,
+                         nsACString& aUploadContentType);
 
   virtual void
   Open(const nsACString& aMethod, const nsAString& aUrl,
@@ -207,9 +255,15 @@ public:
 
   virtual void
   Open(const nsACString& aMethod, const nsAString& aUrl, bool aAsync,
-       const Optional<nsAString>& aUser,
-       const Optional<nsAString>& aPassword,
+       const nsAString& aUsername, const nsAString& aPassword,
        ErrorResult& aRv) override;
+
+  nsresult
+  Open(const nsACString& aMethod,
+       const nsACString& aUrl,
+       bool aAsync,
+       const nsAString& aUsername,
+       const nsAString& aPassword);
 
   virtual void
   SetRequestHeader(const nsACString& aName, const nsACString& aValue,
@@ -341,26 +395,14 @@ public:
   Send(JSContext* aCx, nsIInputStream* aStream, ErrorResult& aRv) override
   {
     NS_ASSERTION(aStream, "Null should go to string version");
-    nsCOMPtr<nsIXPConnectWrappedJS> wjs = do_QueryInterface(aStream);
-    if (wjs) {
-      JSObject* data = wjs->GetJSObject();
-      if (!data) {
-        aRv.Throw(NS_ERROR_DOM_TYPE_ERR);
-        return;
-      }
-      JS::Rooted<JS::Value> dataAsValue(aCx, JS::ObjectValue(*data));
-      nsAutoString dataAsString;
-      if (ConvertJSValueToString(aCx, dataAsValue, eNull,
-                                 eNull, dataAsString)) {
-        Send(aCx, dataAsString, aRv);
-      } else {
-        aRv.Throw(NS_ERROR_FAILURE);
-      }
-      return;
-    }
     RequestBody<nsIInputStream> body(aStream);
     aRv = SendInternal(&body);
   }
+
+  void
+  RequestErrorSteps(const ProgressEventType aEventType,
+                    const nsresult aOptionalException,
+                    ErrorResult& aRv);
 
   void
   Abort() {
@@ -428,6 +470,10 @@ public:
   virtual void
   GetResponseText(nsAString& aResponseText, ErrorResult& aRv) override;
 
+  void
+  GetResponseText(XMLHttpRequestStringSnapshot& aSnapshot,
+                  ErrorResult& aRv);
+
   virtual nsIDocument*
   GetResponseXML(ErrorResult& aRv) override;
 
@@ -486,7 +532,6 @@ public:
   NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS_INHERITED(XMLHttpRequestMainThread,
                                                                    XMLHttpRequest)
   bool AllowUploadProgress();
-  void RootJSResultObjects();
 
   virtual void DisconnectFromOwner() override;
 
@@ -498,6 +543,14 @@ public:
   {
     return sDontWarnAboutSyncXHR;
   }
+
+  virtual void
+  SetOriginAttributes(const mozilla::dom::OriginAttributesDictionary& aAttrs) override;
+
+  void BlobStoreCompleted(MutableBlobStorage* aBlobStorage,
+                          Blob* aBlob,
+                          nsresult aResult) override;
+
 protected:
   // XHR states are meant to mirror the XHR2 spec:
   //   https://xhr.spec.whatwg.org/#states
@@ -511,12 +564,12 @@ protected:
 
   nsresult DetectCharset();
   nsresult AppendToResponseText(const char * aBuffer, uint32_t aBufferLen);
-  static NS_METHOD StreamReaderFunc(nsIInputStream* in,
-                void* closure,
-                const char* fromRawSegment,
-                uint32_t toOffset,
-                uint32_t count,
-                uint32_t *writeCount);
+  static nsresult StreamReaderFunc(nsIInputStream* in,
+                                   void* closure,
+                                   const char* fromRawSegment,
+                                   uint32_t toOffset,
+                                   uint32_t count,
+                                   uint32_t *writeCount);
   nsresult CreateResponseParsedJSON(JSContext* aCx);
   void CreatePartialBlob(ErrorResult& aRv);
   bool CreateDOMBlob(nsIRequest *request);
@@ -529,6 +582,8 @@ protected:
   already_AddRefed<nsIHttpChannel> GetCurrentHttpChannel();
   already_AddRefed<nsIJARChannel> GetCurrentJARChannel();
 
+  void TruncateResponseText();
+
   bool IsSystemXHR() const;
   bool InUploadPhase() const;
 
@@ -538,13 +593,11 @@ protected:
   void StartProgressEventTimer();
   void StopProgressEventTimer();
 
+  void MaybeCreateBlobStorage();
+
   nsresult OnRedirectVerifyCallback(nsresult result);
 
-  nsresult OpenInternal(const nsACString& aMethod,
-                        const nsACString& aUrl,
-                        const Optional<bool>& aAsync,
-                        const Optional<nsAString>& aUsername,
-                        const Optional<nsAString>& aPassword);
+  void SetTimerEventTarget(nsITimer* aTimer);
 
   already_AddRefed<nsXMLHttpRequestXPCOMifier> EnsureXPCOMifier();
 
@@ -584,7 +637,7 @@ protected:
   // lazily decode into this from mResponseBody only when .responseText is
   // accessed.
   // Only used for DEFAULT and TEXT responseTypes.
-  nsString mResponseText;
+  XMLHttpRequestString mResponseText;
 
   // For DEFAULT responseType we use this to keep track of how far we've
   // lazily decoded from mResponseBody to mResponseText
@@ -600,6 +653,8 @@ protected:
 
   nsCString mResponseCharset;
 
+  void MatchCharsetAndDecoderToResponseDocument();
+
   XMLHttpRequestResponseType mResponseType;
 
   // It is either a cached blob-response from the last call to GetResponse,
@@ -608,8 +663,11 @@ protected:
   // Non-null only when we are able to get a os-file representation of the
   // response, i.e. when loading from a file.
   RefPtr<Blob> mDOMBlob;
-  // We stream data to mBlobSet when response type is "blob" or "moz-blob"
-  // and mDOMBlob is null.
+  // We stream data to mBlobStorage when response type is "blob" and mDOMBlob is
+  // null.
+  RefPtr<MutableBlobStorage> mBlobStorage;
+  // We stream data to mBlobStorage when response type is "moz-blob" and
+  // mDOMBlob is null.
   nsAutoPtr<BlobSet> mBlobSet;
 
   nsString mOverrideMimeType;
@@ -663,13 +721,26 @@ protected:
   void StartTimeoutTimer();
   void HandleTimeoutCallback();
 
+  nsCOMPtr<nsITimer> mSyncTimeoutTimer;
+
+  enum SyncTimeoutType {
+    eErrorOrExpired,
+    eTimerStarted,
+    eNoTimerNeeded
+  };
+
+  SyncTimeoutType MaybeStartSyncTimeoutTimer();
+  void HandleSyncTimeoutTimer();
+  void CancelSyncTimeoutTimer();
+
   bool mErrorLoad;
+  bool mErrorParsingXML;
   bool mWaitingForOnStopRequest;
   bool mProgressTimerIsActive;
   bool mIsHtml;
   bool mWarnAboutMultipartHtml;
   bool mWarnAboutSyncHtml;
-  int64_t mLoadTotal; // 0 if not known.
+  int64_t mLoadTotal; // -1 if not known.
   // Amount of script-exposed (i.e. after undoing gzip compresion) data
   // received.
   uint64_t mDataAvailable;
@@ -720,15 +791,7 @@ protected:
 
   bool ShouldBlockAuthPrompt();
 
-  struct RequestHeader
-  {
-    nsCString name;
-    nsCString value;
-  };
-  nsTArray<RequestHeader> mAuthorRequestHeaders;
-
-  void GetAuthorRequestHeaderValue(const char* aName, nsACString& outValue);
-  void SetAuthorRequestHeadersOnChannel(nsCOMPtr<nsIHttpChannel> aChannel);
+  RequestHeaders mAuthorRequestHeaders;
 
   // Helper object to manage our XPCOM scriptability bits
   nsXMLHttpRequestXPCOMifier* mXPCOMifier;

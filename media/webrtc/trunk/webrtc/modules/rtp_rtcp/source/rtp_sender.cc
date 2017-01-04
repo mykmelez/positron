@@ -1234,7 +1234,7 @@ uint16_t RTPSender::BuildRTPHeaderExtension(uint8_t* data_buffer,
       case kRtpExtensionTransportSequenceNumber:
         block_length = BuildTransportSequenceNumberExtension(extension_data);
         break;
-      case kRtpExtensionRID:
+      case kRtpExtensionRtpStreamId:
         block_length = BuildRIDExtension(extension_data);
         break;
       default:
@@ -1422,15 +1422,21 @@ uint8_t RTPSender::BuildRIDExtension(
 
   // Get id defined by user.
   uint8_t id;
-  if (rtp_header_extension_map_.GetId(kRtpExtensionRID,
+  if (!rid_ ||
+    rtp_header_extension_map_.GetId(kRtpExtensionRtpStreamId,
                                       &id) != 0) {
-    // Not registered.
+    // No RtpStreamId or not registered
     return 0;
   }
   size_t pos = 0;
   // RID value is not null-terminated in header, so no +1
   const uint8_t len = strlen(rid_);
-  data_buffer[pos++] = (id << 4) + len;
+  if (len > 16 || len == 0) {
+    LOG(LS_ERROR) << "Failed to add RID header because of unsupported RID"
+                    " length: " << len;
+    return 0;
+  }
+  data_buffer[pos++] = (id << 4) + (len - 1);
   memcpy(data_buffer + pos, rid_, len);
   pos += len;
   return pos;

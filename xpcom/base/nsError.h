@@ -79,6 +79,8 @@
 #define NS_ERROR_MODULE_SIGNED_APP 38
 #define NS_ERROR_MODULE_DOM_ANIM 39
 #define NS_ERROR_MODULE_DOM_PUSH 40
+#define NS_ERROR_MODULE_DOM_MEDIA 41
+#define NS_ERROR_MODULE_URL_CLASSIFIER 42
 
 /* NS_ERROR_MODULE_GENERAL should be used by modules that do not
  * care if return code values overlap. Callers of methods that

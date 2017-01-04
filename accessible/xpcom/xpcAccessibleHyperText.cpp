@@ -47,7 +47,11 @@ xpcAccessibleHyperText::GetCharacterCount(int32_t* aCharacterCount)
   if (mIntl.IsAccessible()) {
     *aCharacterCount = Intl()->CharacterCount();
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     *aCharacterCount = mIntl.AsProxy()->CharacterCount();
+#endif
   }
   return NS_OK;
 }
@@ -163,7 +167,11 @@ xpcAccessibleHyperText::GetCharacterAtOffset(int32_t aOffset,
   if (mIntl.IsAccessible()) {
     *aCharacter = Intl()->CharAt(aOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     *aCharacter = mIntl.AsProxy()->CharAt(aOffset);
+#endif
   }
   return NS_OK;
 }
@@ -189,6 +197,9 @@ xpcAccessibleHyperText::GetTextAttributes(bool aIncludeDefAttrs,
     props = Intl()->TextAttributes(aIncludeDefAttrs, aOffset, aStartOffset,
                                    aEndOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     AutoTArray<Attribute, 10> attrs;
     mIntl.AsProxy()->TextAttributes(aIncludeDefAttrs, aOffset, &attrs,
         aStartOffset, aEndOffset);
@@ -197,6 +208,7 @@ xpcAccessibleHyperText::GetTextAttributes(bool aIncludeDefAttrs,
     for (uint32_t i = 0; i < attrCount; i++) {
       props->SetStringProperty(attrs[i].Name(), attrs[i].Value(), unused);
     }
+#endif
   }
   props.forget(aAttributes);
 
@@ -216,6 +228,9 @@ xpcAccessibleHyperText::GetDefaultTextAttributes(nsIPersistentProperties** aAttr
   if (mIntl.IsAccessible()) {
     props = Intl()->DefaultTextAttributes();
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     AutoTArray<Attribute, 10> attrs;
     mIntl.AsProxy()->DefaultTextAttributes(&attrs);
     uint32_t attrCount = attrs.Length();
@@ -223,6 +238,7 @@ xpcAccessibleHyperText::GetDefaultTextAttributes(nsIPersistentProperties** aAttr
     for (uint32_t i = 0; i < attrCount; i++) {
       props->SetStringProperty(attrs[i].Name(), attrs[i].Value(), unused);
     }
+#endif
   }
   props.forget(aAttributes);
 
@@ -248,7 +264,11 @@ xpcAccessibleHyperText::GetCharacterExtents(int32_t aOffset,
   if (mIntl.IsAccessible()) {
     rect = Intl()->CharBounds(aOffset, aCoordType);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     rect = mIntl.AsProxy()->CharBounds(aOffset, aCoordType);
+#endif
   }
   *aX = rect.x; *aY = rect.y;
   *aWidth = rect.width; *aHeight = rect.height;
@@ -274,7 +294,11 @@ xpcAccessibleHyperText::GetRangeExtents(int32_t aStartOffset, int32_t aEndOffset
   if (mIntl.IsAccessible()) {
     rect = Intl()->TextBounds(aStartOffset, aEndOffset, aCoordType);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     rect = mIntl.AsProxy()->TextBounds(aStartOffset, aEndOffset, aCoordType);
+#endif
   }
   *aX = rect.x; *aY = rect.y;
   *aWidth = rect.width; *aHeight = rect.height;
@@ -294,7 +318,11 @@ xpcAccessibleHyperText::GetOffsetAtPoint(int32_t aX, int32_t aY,
   if (mIntl.IsAccessible()) {
     *aOffset = Intl()->OffsetAtPoint(aX, aY, aCoordType);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     *aOffset = mIntl.AsProxy()->OffsetAtPoint(aX, aY, aCoordType);
+#endif
   }
   return NS_OK;
 }
@@ -342,7 +370,11 @@ xpcAccessibleHyperText::GetSelectionCount(int32_t* aSelectionCount)
   if (mIntl.IsAccessible()) {
     *aSelectionCount = Intl()->SelectionCount();
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     *aSelectionCount = mIntl.AsProxy()->SelectionCount();
+#endif
   }
   return NS_OK;
 }
@@ -368,9 +400,13 @@ xpcAccessibleHyperText::GetSelectionBounds(int32_t aSelectionNum,
       
     Intl()->SelectionBoundsAt(aSelectionNum, aStartOffset, aEndOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     nsString unused;
     mIntl.AsProxy()->SelectionBoundsAt(aSelectionNum, unused, aStartOffset, 
                                        aEndOffset);
+#endif
   }
   return NS_OK;
 }
@@ -392,10 +428,14 @@ xpcAccessibleHyperText::SetSelectionBounds(int32_t aSelectionNum,
         return NS_ERROR_INVALID_ARG;
       }
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
       if (!mIntl.AsProxy()->SetSelectionBoundsAt(aSelectionNum, aStartOffset, 
                                                 aEndOffset)) {
         return NS_ERROR_INVALID_ARG;
       }
+#endif
   }
   return NS_OK;
 }
@@ -583,8 +623,12 @@ xpcAccessibleHyperText::SetTextContents(const nsAString& aText)
   if (mIntl.IsAccessible()) {
     Intl()->ReplaceText(aText);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     nsString text(aText);
     mIntl.AsProxy()->ReplaceText(text);
+#endif
   }
   return NS_OK;
 }
@@ -598,8 +642,12 @@ xpcAccessibleHyperText::InsertText(const nsAString& aText, int32_t aOffset)
   if (mIntl.IsAccessible()) {
     Intl()->InsertText(aText, aOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     nsString text(aText);
     mIntl.AsProxy()->InsertText(text, aOffset);
+#endif
   }
   return NS_OK;
 }
@@ -613,7 +661,11 @@ xpcAccessibleHyperText::CopyText(int32_t aStartOffset, int32_t aEndOffset)
   if (mIntl.IsAccessible()) {
     Intl()->CopyText(aStartOffset, aEndOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     mIntl.AsProxy()->CopyText(aStartOffset, aEndOffset);
+#endif
   }
   return NS_OK;
 }
@@ -627,7 +679,11 @@ xpcAccessibleHyperText::CutText(int32_t aStartOffset, int32_t aEndOffset)
   if (mIntl.IsAccessible()) {
     Intl()->CutText(aStartOffset, aEndOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     mIntl.AsProxy()->CutText(aStartOffset, aEndOffset);
+#endif
   }
   return NS_OK;
 }
@@ -641,7 +697,11 @@ xpcAccessibleHyperText::DeleteText(int32_t aStartOffset, int32_t aEndOffset)
   if (mIntl.IsAccessible()) {
     Intl()->DeleteText(aStartOffset, aEndOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     mIntl.AsProxy()->DeleteText(aStartOffset, aEndOffset);
+#endif
   }
   return NS_OK;
 }
@@ -655,7 +715,11 @@ xpcAccessibleHyperText::PasteText(int32_t aOffset)
   if (mIntl.IsAccessible()) {
     Intl()->PasteText(aOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     mIntl.AsProxy()->PasteText(aOffset);
+#endif
   }
   return NS_OK;
 }
@@ -675,7 +739,11 @@ xpcAccessibleHyperText::GetLinkCount(int32_t* aLinkCount)
   if (mIntl.IsAccessible()) {
     *aLinkCount = Intl()->LinkCount();
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     *aLinkCount = mIntl.AsProxy()->LinkCount();
+#endif
   }
   return NS_OK;
 }
@@ -692,7 +760,11 @@ xpcAccessibleHyperText::GetLinkAt(int32_t aIndex, nsIAccessibleHyperLink** aLink
   if (mIntl.IsAccessible()) {
     NS_IF_ADDREF(*aLink = ToXPC(Intl()->LinkAt(aIndex)));
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     NS_IF_ADDREF(*aLink = ToXPC(mIntl.AsProxy()->LinkAt(aIndex)));
+#endif
   }
   return NS_OK;
 }
@@ -712,12 +784,16 @@ xpcAccessibleHyperText::GetLinkIndex(nsIAccessibleHyperLink* aLink,
   if (Accessible* accLink = xpcLink->ToInternalAccessible()) {
     *aIndex = Intl()->LinkIndexOf(accLink);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     xpcAccessibleHyperText* linkHyperText =
       static_cast<xpcAccessibleHyperText*>(xpcLink.get());
     ProxyAccessible* proxyLink = linkHyperText->mIntl.AsProxy();
     if (proxyLink) {
       *aIndex = mIntl.AsProxy()->LinkIndexOf(proxyLink);
     }
+#endif
   }
 
   return NS_OK;
@@ -736,7 +812,11 @@ xpcAccessibleHyperText::GetLinkIndexAtOffset(int32_t aOffset,
   if (mIntl.IsAccessible()) {
     *aLinkIndex = Intl()->LinkIndexAtOffset(aOffset);
   } else {
+#if defined(XP_WIN)
+    return NS_ERROR_NOT_IMPLEMENTED;
+#else
     *aLinkIndex = mIntl.AsProxy()->LinkIndexAtOffset(aOffset);
+#endif
   }
   return NS_OK;
 }

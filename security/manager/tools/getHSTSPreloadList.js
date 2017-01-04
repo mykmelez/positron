@@ -181,7 +181,19 @@ function getHSTSStatus(host, resultList) {
   var uri = "https://" + host.name + "/";
   req.open("GET", uri, true);
   req.timeout = REQUEST_TIMEOUT;
-  req.channel.notificationCallbacks = new RedirectAndAuthStopper();
+
+  let errorhandler = (evt) => {
+    dump(`ERROR: error making request to ${host.name} (type=${evt.type})\n`);
+    if (!inResultList) {
+      inResultList = true;
+      resultList.push(processStsHeader(host, null, req.status,
+                                       req.channel.securityInfo));
+    }
+  };
+  req.onerror = errorhandler;
+  req.ontimeout = errorhandler;
+  req.onabort = errorhandler;
+
   req.onload = function(event) {
     if (!inResultList) {
       inResultList = true;
@@ -190,10 +202,9 @@ function getHSTSStatus(host, resultList) {
                                        req.channel.securityInfo));
     }
   };
-  req.onerror = function(e) {
-    dump("ERROR: network error making request to " + host.name + ": " + e + "\n");
-  };
+
   try {
+    req.channel.notificationCallbacks = new RedirectAndAuthStopper();
     req.send();
   }
   catch (e) {
@@ -310,7 +321,7 @@ function output(sortedStatuses, currentList) {
       // lengths of string literals, and the preload list is large enough
       // that it runs into said limits.
       for (let c of status.name) {
-	writeTo("'" + c + "', ", fos);
+        writeTo("'" + c + "', ", fos);
       }
       writeTo("'\\0',\n", fos);
     }

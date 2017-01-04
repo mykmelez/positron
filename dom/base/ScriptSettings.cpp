@@ -7,7 +7,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/ThreadLocal.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/CycleCollectedJSRuntime.h"
+#include "mozilla/CycleCollectedJSContext.h"
 
 #include "jsapi.h"
 #include "xpcpublic.h"
@@ -289,14 +289,14 @@ namespace danger {
 JSContext*
 GetJSContext()
 {
-  return CycleCollectedJSRuntime::Get()->Context();
+  return CycleCollectedJSContext::Get()->Context();
 }
 } // namespace danger
 
-JSRuntime*
-GetJSRuntime()
+JS::RootingContext*
+RootingCx()
 {
-  return CycleCollectedJSRuntime::Get()->Runtime();
+  return CycleCollectedJSContext::Get()->RootingCx();
 }
 
 AutoJSAPI::AutoJSAPI()
@@ -332,8 +332,7 @@ AutoJSAPI::~AutoJSAPI()
 }
 
 void
-WarningOnlyErrorReporter(JSContext* aCx, const char* aMessage,
-                         JSErrorReport* aRep);
+WarningOnlyErrorReporter(JSContext* aCx, JSErrorReport* aRep);
 
 void
 AutoJSAPI::InitInternal(nsIGlobalObject* aGlobalObject, JSObject* aGlobal,
@@ -520,7 +519,7 @@ AutoJSAPI::Init(nsGlobalWindow* aWindow)
 // Eventually, SpiderMonkey will have a special-purpose callback for warnings
 // only.
 void
-WarningOnlyErrorReporter(JSContext* aCx, const char* aMessage, JSErrorReport* aRep)
+WarningOnlyErrorReporter(JSContext* aCx, JSErrorReport* aRep)
 {
   MOZ_ASSERT(JSREPORT_IS_WARNING(aRep->flags));
   if (!NS_IsMainThread()) {
@@ -534,7 +533,7 @@ WarningOnlyErrorReporter(JSContext* aCx, const char* aMessage, JSErrorReport* aR
     workers::WorkerPrivate* worker = workers::GetWorkerPrivateFromContext(aCx);
     MOZ_ASSERT(worker);
 
-    worker->ReportError(aCx, aMessage, aRep);
+    worker->ReportError(aCx, JS::ConstUTF8CharsZ(), aRep);
     return;
   }
 
@@ -546,7 +545,7 @@ WarningOnlyErrorReporter(JSContext* aCx, const char* aMessage, JSErrorReport* aR
     // DOM Window.
     win = xpc::AddonWindowOrNull(JS::CurrentGlobalOrNull(aCx));
   }
-  xpcReport->Init(aRep, aMessage, nsContentUtils::IsCallerChrome(),
+  xpcReport->Init(aRep, nullptr, nsContentUtils::IsSystemCaller(aCx),
                   win ? win->AsInner()->WindowID() : 0);
   xpcReport->LogToConsole();
 }
@@ -586,11 +585,14 @@ AutoJSAPI::ReportException()
         win = xpc::AddonWindowOrNull(errorGlobal);
       }
       nsPIDOMWindowInner* inner = win ? win->AsInner() : nullptr;
-      xpcReport->Init(jsReport.report(), jsReport.message(),
-                      nsContentUtils::IsCallerChrome(),
+      bool isChrome = nsContentUtils::IsSystemPrincipal(
+        nsContentUtils::ObjectPrincipal(errorGlobal));
+      xpcReport->Init(jsReport.report(), jsReport.toStringResult().c_str(),
+                      isChrome,
                       inner ? inner->WindowID() : 0);
       if (inner && jsReport.report()->errorNumber != JSMSG_OUT_OF_MEMORY) {
-        DispatchScriptErrorEvent(inner, JS_GetRuntime(cx()), xpcReport, exn);
+        JS::RootingContext* rcx = JS::RootingContext::get(cx());
+        DispatchScriptErrorEvent(inner, rcx, xpcReport, exn);
       } else {
         JS::Rooted<JSObject*> stack(cx(),
           xpc::FindExceptionStackForConsoleReport(inner, exn));
@@ -609,7 +611,7 @@ AutoJSAPI::ReportException()
       // to get hold of it.  After we invoke ReportError, clear the exception on
       // cx(), just in case ReportError didn't.
       JS_SetPendingException(cx(), exn);
-      worker->ReportError(cx(), jsReport.message(), jsReport.report());
+      worker->ReportError(cx(), jsReport.toStringResult(), jsReport.report());
       ClearException();
     }
   } else {
@@ -785,8 +787,8 @@ AutoJSContext::AutoJSContext(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM_IN_IMPL)
 
   MOZ_GUARD_OBJECT_NOTIFIER_INIT;
 
-  if (IsJSAPIActive()) {
-    mCx = danger::GetJSContext();
+  if (dom::IsJSAPIActive()) {
+    mCx = dom::danger::GetJSContext();
   } else {
     mJSAPI.Init();
     mCx = mJSAPI.cx();

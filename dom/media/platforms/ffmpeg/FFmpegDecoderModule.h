@@ -33,6 +33,13 @@ public:
   already_AddRefed<MediaDataDecoder>
   CreateVideoDecoder(const CreateDecoderParams& aParams) override
   {
+    // Temporary - forces use of VPXDecoder when alpha is present.
+    // Bug 1263836 will handle alpha scenario once implemented. It will shift
+    // the check for alpha to PDMFactory but not itself remove the need for a
+    // check.
+    if (aParams.VideoConfig().HasAlpha()) {
+      return nullptr;
+    }
     RefPtr<MediaDataDecoder> decoder =
       new FFmpegVideoDecoder<V>(mLib,
                                 aParams.mTaskQueue,
@@ -45,35 +52,24 @@ public:
   already_AddRefed<MediaDataDecoder>
   CreateAudioDecoder(const CreateDecoderParams& aParams) override
   {
-#ifdef USING_MOZFFVPX
-    return nullptr;
-#else
     RefPtr<MediaDataDecoder> decoder =
       new FFmpegAudioDecoder<V>(mLib,
                                 aParams.mTaskQueue,
                                 aParams.mCallback,
                                 aParams.AudioConfig());
     return decoder.forget();
-#endif
   }
 
   bool SupportsMimeType(const nsACString& aMimeType,
                         DecoderDoctorDiagnostics* aDiagnostics) const override
   {
     AVCodecID videoCodec = FFmpegVideoDecoder<V>::GetCodecId(aMimeType);
-#ifdef USING_MOZFFVPX
-    if (videoCodec == AV_CODEC_ID_NONE) {
-        return false;
-    }
-    return !!FFmpegDataDecoder<V>::FindAVCodec(mLib, videoCodec);
-#else
     AVCodecID audioCodec = FFmpegAudioDecoder<V>::GetCodecId(aMimeType);
     if (audioCodec == AV_CODEC_ID_NONE && videoCodec == AV_CODEC_ID_NONE) {
       return false;
     }
     AVCodecID codec = audioCodec != AV_CODEC_ID_NONE ? audioCodec : videoCodec;
     return !!FFmpegDataDecoder<V>::FindAVCodec(mLib, codec);
-#endif
   }
 
   ConversionRequired
@@ -82,9 +78,9 @@ public:
     if (aConfig.IsVideo() &&
         (aConfig.mMimeType.EqualsLiteral("video/avc") ||
          aConfig.mMimeType.EqualsLiteral("video/mp4"))) {
-      return PlatformDecoderModule::kNeedAVCC;
+      return ConversionRequired::kNeedAVCC;
     } else {
-      return kNeedNone;
+      return ConversionRequired::kNeedNone;
     }
   }
 

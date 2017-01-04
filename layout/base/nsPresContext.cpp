@@ -37,7 +37,7 @@
 #include "mozilla/RestyleManager.h"
 #include "mozilla/RestyleManagerHandle.h"
 #include "mozilla/RestyleManagerHandleInlines.h"
-#include "SurfaceCache.h"
+#include "SurfaceCacheUtils.h"
 #include "nsCSSRuleProcessor.h"
 #include "nsRuleNode.h"
 #include "gfxPlatform.h"
@@ -74,8 +74,9 @@
 #include "gfxTextRun.h"
 #include "nsFontFaceUtils.h"
 #include "nsLayoutStylesheetCache.h"
-#include "mozilla/StyleSheetHandle.h"
-#include "mozilla/StyleSheetHandleInlines.h"
+#include "mozilla/StyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
+#include "mozilla/ServoRestyleManagerInlines.h"
 
 #if defined(MOZ_WIDGET_GTK)
 #include "gfxPlatformGtk.h" // xxx - for UseFcFontList
@@ -120,7 +121,7 @@ public:
   {
   }
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
     mPresContext->DoChangeCharSet(mCharSet);
     return NS_OK;
@@ -205,7 +206,7 @@ IsVisualCharset(const nsCString& aCharset)
 
 nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   : mType(aType), mDocument(aDocument), mBaseMinFontSize(0),
-    mTextZoom(1.0), mFullZoom(1.0),
+    mTextZoom(1.0), mFullZoom(1.0), mOverrideDPPX(0.0),
     mLastFontInflationScreenSize(gfxSize(-1.0, -1.0)),
     mPageSize(-1, -1), mPPScale(1.0f),
     mViewportStyleScrollbar(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO),
@@ -603,11 +604,6 @@ nsPresContext::GetUserPreferences()
                         GET_BIDI_OPTION_NUMERAL(bidiOptions));
   SET_BIDI_OPTION_NUMERAL(bidiOptions, prefInt);
 
-  prefInt =
-    Preferences::GetInt(IBMBIDI_SUPPORTMODE_STR,
-                        GET_BIDI_OPTION_SUPPORT(bidiOptions));
-  SET_BIDI_OPTION_SUPPORT(bidiOptions, prefInt);
-
   // We don't need to force reflow: either we are initializing a new
   // prescontext or we are being called from UpdateAfterPreferencesChanged()
   // which triggers a reflow anyway.
@@ -887,10 +883,6 @@ nsPresContext::Init(nsDeviceContext* aDeviceContext)
   mInitialized = true;
 #endif
 
-  mBorderWidthTable[NS_STYLE_BORDER_WIDTH_THIN] = CSSPixelsToAppUnits(1);
-  mBorderWidthTable[NS_STYLE_BORDER_WIDTH_MEDIUM] = CSSPixelsToAppUnits(3);
-  mBorderWidthTable[NS_STYLE_BORDER_WIDTH_THICK] = CSSPixelsToAppUnits(5);
-
   return NS_OK;
 }
 
@@ -987,7 +979,7 @@ nsPresContext::DetachShell()
     mRestyleManager->Disconnect();
     mRestyleManager = nullptr;
   }
-  if (mRefreshDriver && mRefreshDriver->PresContext() == this) {
+  if (mRefreshDriver && mRefreshDriver->GetPresContext() == this) {
     mRefreshDriver->Disconnect();
     // Can't null out the refresh driver here.
   }
@@ -1156,17 +1148,17 @@ nsPresContext::CompatibilityModeChanged()
 
   StyleSetHandle styleSet = mShell->StyleSet();
   auto cache = nsLayoutStylesheetCache::For(styleSet->BackendType());
-  StyleSheetHandle sheet = cache->QuirkSheet();
+  StyleSheet* sheet = cache->QuirkSheet();
 
   if (needsQuirkSheet) {
     // quirk.css needs to come after html.css; we just keep it at the end.
     DebugOnly<nsresult> rv =
       styleSet->AppendStyleSheet(SheetType::Agent, sheet);
-    NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "failed to insert quirk.css");
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "failed to insert quirk.css");
   } else {
     DebugOnly<nsresult> rv =
       styleSet->RemoveStyleSheet(SheetType::Agent, sheet);
-    NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "failed to remove quirk.css");
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "failed to remove quirk.css");
   }
 
   mQuirkSheetAdded = needsQuirkSheet;
@@ -1308,6 +1300,16 @@ nsPresContext::SetFullZoom(float aZoom)
   mSuppressResizeReflow = false;
 }
 
+void
+nsPresContext::SetOverrideDPPX(float aDPPX)
+{
+  mOverrideDPPX = aDPPX;
+
+  if (HasCachedStyleData()) {
+    MediaFeatureValuesChanged(nsRestyleHint(0), nsChangeHint(0));
+  }
+}
+
 gfxSize
 nsPresContext::ScreenSizeInchesForFontInflation(bool* aChanged)
 {
@@ -1363,15 +1365,6 @@ static nsIContent*
 GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
                                         ScrollbarStyles *aStyles)
 {
-  // Set default
-  *aStyles = ScrollbarStyles(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO);
-
-  // We never mess with the viewport scroll state
-  // when printing or in print preview
-  if (aPresContext->IsPaginated()) {
-    return nullptr;
-  }
-
   nsIDocument* document = aPresContext->Document();
   Element* docElement = document->GetRootElement();
 
@@ -1383,7 +1376,9 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
   // Check the style on the document root element
   StyleSetHandle styleSet = aPresContext->StyleSet();
   RefPtr<nsStyleContext> rootStyle;
-  rootStyle = styleSet->ResolveStyleFor(docElement, nullptr);
+  rootStyle = styleSet->ResolveStyleFor(docElement, nullptr,
+                                        ConsumeStyleBehavior::DontConsume,
+                                        LazyComputeBehavior::Allow);
   if (CheckOverflow(rootStyle->StyleDisplay(), aStyles)) {
     // tell caller we stole the overflow style from the root element
     return docElement;
@@ -1411,7 +1406,9 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
   }
 
   RefPtr<nsStyleContext> bodyStyle;
-  bodyStyle = styleSet->ResolveStyleFor(bodyElement->AsElement(), rootStyle);
+  bodyStyle = styleSet->ResolveStyleFor(bodyElement->AsElement(), rootStyle,
+                                        ConsumeStyleBehavior::DontConsume,
+                                        LazyComputeBehavior::Allow);
 
   if (CheckOverflow(bodyStyle->StyleDisplay(), aStyles)) {
     // tell caller we stole the overflow style from the body element
@@ -1424,8 +1421,15 @@ GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
 nsIContent*
 nsPresContext::UpdateViewportScrollbarStylesOverride()
 {
-  nsIContent* propagatedFrom =
-    GetPropagatedScrollbarStylesForViewport(this, &mViewportStyleScrollbar);
+  // Start off with our default styles, and then update them as needed.
+  mViewportStyleScrollbar = ScrollbarStyles(NS_STYLE_OVERFLOW_AUTO,
+                                            NS_STYLE_OVERFLOW_AUTO);
+  nsIContent* propagatedFrom = nullptr;
+  // Don't propagate the scrollbar state in printing or print preview.
+  if (!IsPaginated()) {
+    propagatedFrom =
+      GetPropagatedScrollbarStylesForViewport(this, &mViewportStyleScrollbar);
+  }
 
   nsIDocument* document = Document();
   if (Element* fullscreenElement = document->GetFullscreenElement()) {
@@ -1442,6 +1446,24 @@ nsPresContext::UpdateViewportScrollbarStylesOverride()
   }
 
   return propagatedFrom;
+}
+
+bool
+nsPresContext::ElementWouldPropagateScrollbarStyles(Element* aElement)
+{
+  MOZ_ASSERT(IsPaginated(), "Should only be called on paginated contexts");
+  if (aElement->GetParent() && !aElement->IsHTMLElement(nsGkAtoms::body)) {
+    // We certainly won't be propagating from this element.
+    return false;
+  }
+
+  // Go ahead and just call GetPropagatedScrollbarStylesForViewport, but update
+  // a dummy ScrollbarStyles we don't care about.  It'll do a bit of extra work,
+  // but saves us having to have more complicated code or more code duplication;
+  // in practice we will make this call quite rarely, because we checked for all
+  // the common cases above.
+  ScrollbarStyles dummy(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO);
+  return GetPropagatedScrollbarStylesForViewport(this, &dummy) == aElement;
 }
 
 void
@@ -1631,7 +1653,7 @@ nsPresContext::ThemeChangedInternal()
     // Vector images (SVG) may be using theme colors so we discard all cached
     // surfaces. (We could add a vector image only version of DiscardAll, but
     // in bug 940625 we decided theme changes are rare enough not to bother.)
-    mozilla::image::SurfaceCache::DiscardAll();
+    image::SurfaceCacheUtils::DiscardAll();
   }
 
   // This will force the system metrics to be generated the next time they're used
@@ -2036,16 +2058,10 @@ nsPresContext::UpdateIsChrome()
               nsIDocShellTreeItem::typeChrome == mContainer->ItemType();
 }
 
-/* virtual */ bool
+bool
 nsPresContext::HasAuthorSpecifiedRules(const nsIFrame *aFrame,
                                        uint32_t ruleTypeMask) const
 {
-#ifdef MOZ_STYLO
-  if (!mShell || mShell->StyleSet()->IsServo()) {
-    NS_ERROR("stylo: nsPresContext::HasAuthorSpecifiedRules not implemented");
-    return true;
-  }
-#endif
   return
     nsRuleNode::HasAuthorSpecifiedRules(aFrame->StyleContext(),
                                         ruleTypeMask,
@@ -2498,8 +2514,9 @@ nsPresContext::HasCachedStyleData()
   nsStyleSet* styleSet = mShell->StyleSet()->GetAsGecko();
   if (!styleSet) {
     // XXXheycam ServoStyleSets do not use the rule tree, so just assume for now
-    // that we need to restyle when e.g. dppx changes.
-    return true;
+    // that we need to restyle when e.g. dppx changes assuming we're sufficiently
+    // bootstrapped.
+    return mShell->DidInitialize();
   }
 
   return styleSet->HasCachedStyleData();
@@ -2687,6 +2704,12 @@ nsPresContext::CheckForInterrupt(nsIFrame* aFrame)
     TimeStamp::Now() - mReflowStartTime > sInterruptTimeout &&
     HavePendingInputEvent() &&
     !IsChrome();
+
+  if (mPendingInterruptFromTest) {
+    mPendingInterruptFromTest = false;
+    mHasPendingInterrupt = true;
+  }
+
   if (mHasPendingInterrupt) {
 #ifdef NOISY_INTERRUPTIBLE_REFLOW
     printf("*** DETECTED pending interrupt (time=%lld)\n", PR_Now());
@@ -2744,6 +2767,19 @@ nsPresContext::IsRootContentDocument() const
 
   nsIFrame* f = view->GetFrame();
   return (f && f->PresContext()->IsChrome());
+}
+
+void
+nsPresContext::NotifyNonBlankPaint()
+{
+  MOZ_ASSERT(!mHadNonBlankPaint);
+  mHadNonBlankPaint = true;
+  if (IsRootContentDocument()) {
+    RefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
+    if (timing) {
+      timing->NotifyNonBlankPaintForRootContentDocument();
+    }
+  }
 }
 
 bool nsPresContext::GetPaintFlashing() const
@@ -2968,8 +3004,7 @@ SortConfigurations(nsTArray<nsIWidget::Configuration>* aConfigurations)
       for (uint32_t j = 0; j < pluginsToMove.Length(); ++j) {
         if (i == j)
           continue;
-        LayoutDeviceIntRect bounds;
-        pluginsToMove[j].mChild->GetBounds(bounds);
+        LayoutDeviceIntRect bounds = pluginsToMove[j].mChild->GetBounds();
         AutoTArray<LayoutDeviceIntRect,1> clipRects;
         pluginsToMove[j].mChild->GetWindowClipRegion(&clipRects);
         if (HasOverlap(bounds.TopLeft(), clipRects,

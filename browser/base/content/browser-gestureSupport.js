@@ -125,7 +125,7 @@ var gGestureSupport = {
    */
   _setupGesture: function GS__setupGesture(aEvent, aGesture, aPref, aInc, aDec) {
     // Try to load user-set values from preferences
-    for (let [pref, def] in Iterator(aPref))
+    for (let [pref, def] of Object.entries(aPref))
       aPref[pref] = this._getPref(aGesture + "." + pref, def);
 
     // Keep track of the total deltas and latching behavior
@@ -134,9 +134,9 @@ var gGestureSupport = {
     let isLatched = false;
 
     // Create the update function here to capture closure state
-    this._doUpdate = function GS__doUpdate(aEvent) {
+    this._doUpdate = function GS__doUpdate(updateEvent) {
       // Update the offset with new event data
-      offset += aEvent.delta;
+      offset += updateEvent.delta;
 
       // Check if the cumulative deltas exceed the threshold
       if (Math.abs(offset) > aPref["threshold"]) {
@@ -145,7 +145,7 @@ var gGestureSupport = {
         // initial motion; or we're latched and going the opposite way
         let sameDir = (latchDir ^ offset) >= 0;
         if (!aPref["latched"] || (isLatched ^ sameDir)) {
-          this._doAction(aEvent, [aGesture, offset > 0 ? aInc : aDec]);
+          this._doAction(updateEvent, [aGesture, offset > 0 ? aInc : aDec]);
 
           // We must be getting latched or leaving it, so just toggle
           isLatched = !isLatched;
@@ -242,8 +242,8 @@ var gGestureSupport = {
     this._doEnd = function GS__doEnd(aEvent) {
       gHistorySwipeAnimation.swipeEndEventReceived();
 
-      this._doUpdate = function (aEvent) {};
-      this._doEnd = function (aEvent) {};
+      this._doUpdate = function() {};
+      this._doEnd = function() {};
     }
   },
 
@@ -260,7 +260,7 @@ var gGestureSupport = {
     let num = 1 << aArray.length;
     while (--num >= 0) {
       // Only select array elements where the current bit is set
-      yield aArray.reduce(function (aPrev, aCurr, aIndex) {
+      yield aArray.reduce(function(aPrev, aCurr, aIndex) {
         if (num & 1 << aIndex)
           aPrev.push(aCurr);
         return aPrev;
@@ -714,22 +714,20 @@ var gHistorySwipeAnimation = {
 
       // The forward page should be pushed offscreen all the way to the right.
       this._positionBox(this._nextBox, 1);
-    } else {
+    } else if (this._canGoForward) {
       // The intention is to go forward. If there is a page to go forward to,
       // it should slide in from the right (LTR) or left (RTL).
       // Otherwise, the current page should slide to the left (LTR) or
       // right (RTL) and the backdrop should appear in the background.
       // For the backdrop to be visible in that case, the previous page needs
       // to be hidden (if it exists).
-      if (this._canGoForward) {
-        this._nextBox.collapsed = false;
-        let offset = this.isLTR ? 1 : -1;
-        this._positionBox(this._curBox, 0);
-        this._positionBox(this._nextBox, offset + aVal);
-      } else {
-        this._prevBox.collapsed = true;
-        this._positionBox(this._curBox, aVal / dampValue);
-      }
+      this._nextBox.collapsed = false;
+      let offset = this.isLTR ? 1 : -1;
+      this._positionBox(this._curBox, 0);
+      this._positionBox(this._nextBox, offset + aVal);
+    } else {
+      this._prevBox.collapsed = true;
+      this._positionBox(this._curBox, aVal / dampValue);
     }
   },
 
@@ -856,7 +854,6 @@ var gHistorySwipeAnimation = {
     catch (ex) {
       return false;
     }
-    return true;
   },
 
   /**

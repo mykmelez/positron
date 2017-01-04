@@ -17,22 +17,20 @@
 #include "nsDataHashtable.h"
 #include "nsThreadUtils.h"
 
-class GMPCrashHelper;
-
 namespace mozilla
 {
 
 namespace layers
 {
   class ImageContainer;
+  class KnowsCompositor;
 } // namespace layers
 class MediaResource;
 class ReentrantMonitor;
 class VideoFrameContainer;
 class MediaDecoderOwner;
-#ifdef MOZ_EME
 class CDMProxy;
-#endif
+class GMPCrashHelper;
 
 typedef nsDataHashtable<nsCStringHashKey, nsCString> MetadataTags;
 
@@ -67,6 +65,27 @@ public:
   // in order to update buffer ranges.
   // Return null if this decoder doesn't support the event.
   virtual MediaEventSource<void>* DataArrivedEvent()
+  {
+    return nullptr;
+  }
+
+  // Returns an event that will be notified when the owning document changes state
+  // and we might have a new compositor. If this new compositor requires us to
+  // recreate our decoders, then we expect the existing decoderis to return an
+  // error independently of this.
+  virtual MediaEventSource<RefPtr<layers::KnowsCompositor>>* CompositorUpdatedEvent()
+  {
+    return nullptr;
+  }
+
+  // Notify the media decoder that a decryption key is required before emitting
+  // further output. This only needs to be overridden for decoders that expect
+  // encryption, such as the MediaSource decoder.
+  virtual void NotifyWaitingForKey() {}
+
+  // Return an event that will be notified when a decoder is waiting for a
+  // decryption key before it can return more output.
+  virtual MediaEventSource<void>* WaitingForKeyEvent()
   {
     return nullptr;
   }

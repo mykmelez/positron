@@ -135,7 +135,7 @@ GfxInfo::GetData()
     // only useful for Linux kernel version check for FGLRX driver.
     // assumes X client == X server, which is sad.
     struct utsname unameobj;
-    if (!uname(&unameobj))
+    if (uname(&unameobj) >= 0)
     {
       mOS.Assign(unameobj.sysname);
       mOSRelease.Assign(unameobj.release);
@@ -302,7 +302,8 @@ GfxInfo::GetFeatureStatusImpl(int32_t aFeature,
     // Blacklist software GL implementations from using layers acceleration.
     // On the test infrastructure, we'll force-enable layers acceleration.
     if (aFeature == nsIGfxInfo::FEATURE_OPENGL_LAYERS &&
-        (mIsLlvmpipe || mIsOldSwrast))
+        (mIsLlvmpipe || mIsOldSwrast) &&
+        !PR_GetEnv("MOZ_LAYERS_ALLOW_SOFTWARE_GL"))
     {
       *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
       aFailureId = "FEATURE_FAILURE_SOFTWARE_GL";

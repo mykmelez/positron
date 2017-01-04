@@ -7,7 +7,6 @@ package org.mozilla.gecko.util;
 import java.util.concurrent.SynchronousQueue;
 
 import org.mozilla.gecko.annotation.WrapForJNI;
-import org.mozilla.gecko.AppConstants.Versions;
 
 import android.content.ClipData;
 import android.content.Context;
@@ -32,7 +31,7 @@ public final class Clipboard {
         mContext = c.getApplicationContext();
     }
 
-    @WrapForJNI(stubName = "GetClipboardTextWrapper")
+    @WrapForJNI(calledFrom = "gecko")
     public static String getText() {
         // If we're on the UI thread or the background thread, we have a looper on the thread
         // and can just call this directly. For any other threads, post the call to the
@@ -59,30 +58,23 @@ public final class Clipboard {
         }
     }
 
-    @WrapForJNI(stubName = "SetClipboardText")
+    @WrapForJNI(calledFrom = "gecko")
     public static void setText(final CharSequence text) {
         ThreadUtils.postToBackgroundThread(new Runnable() {
             @Override
-            @SuppressWarnings("deprecation")
             public void run() {
                 // In API Level 11 and above, CLIPBOARD_SERVICE returns android.content.ClipboardManager,
                 // which is a subclass of android.text.ClipboardManager.
-                if (Versions.feature11Plus) {
-                    final android.content.ClipboardManager cm = (android.content.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
-                    final ClipData clip = ClipData.newPlainText("Text", text);
-                    try {
-                        cm.setPrimaryClip(clip);
-                    } catch (NullPointerException e) {
-                        // Bug 776223: This is a Samsung clipboard bug. setPrimaryClip() can throw
-                        // a NullPointerException if Samsung's /data/clipboard directory is full.
-                        // Fortunately, the text is still successfully copied to the clipboard.
-                    }
-                    return;
+                final android.content.ClipboardManager cm = (android.content.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
+                final ClipData clip = ClipData.newPlainText("Text", text);
+                try {
+                    cm.setPrimaryClip(clip);
+                } catch (NullPointerException e) {
+                    // Bug 776223: This is a Samsung clipboard bug. setPrimaryClip() can throw
+                    // a NullPointerException if Samsung's /data/clipboard directory is full.
+                    // Fortunately, the text is still successfully copied to the clipboard.
                 }
-
-                // Deprecated.
-                android.text.ClipboardManager cm = (android.text.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
-                cm.setText(text);
+                return;
             }
         });
     }
@@ -90,22 +82,16 @@ public final class Clipboard {
     /**
      * @return true if the clipboard is nonempty, false otherwise.
      */
-    @WrapForJNI
+    @WrapForJNI(calledFrom = "gecko")
     public static boolean hasText() {
-        if (Versions.feature11Plus) {
-            android.content.ClipboardManager cm = (android.content.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
-            return cm.hasPrimaryClip();
-        }
-
-        // Deprecated.
-        android.text.ClipboardManager cm = (android.text.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
-        return cm.hasText();
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
+        return cm.hasPrimaryClip();
     }
 
     /**
      * Deletes all text from the clipboard.
      */
-    @WrapForJNI
+    @WrapForJNI(calledFrom = "gecko")
     public static void clearText() {
         setText(null);
     }
@@ -117,19 +103,12 @@ public final class Clipboard {
      */
     @SuppressWarnings("deprecation")
     static String getClipboardTextImpl() {
-        if (Versions.feature11Plus) {
-            android.content.ClipboardManager cm = (android.content.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm.hasPrimaryClip()) {
-                ClipData clip = cm.getPrimaryClip();
-                if (clip != null) {
-                    ClipData.Item item = clip.getItemAt(0);
-                    return item.coerceToText(mContext).toString();
-                }
-            }
-        } else {
-            android.text.ClipboardManager cm = (android.text.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm.hasText()) {
-                return cm.getText().toString();
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) mContext.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm.hasPrimaryClip()) {
+            ClipData clip = cm.getPrimaryClip();
+            if (clip != null) {
+                ClipData.Item item = clip.getItemAt(0);
+                return item.coerceToText(mContext).toString();
             }
         }
         return null;

@@ -8,19 +8,11 @@
 "unpack": true
 },
 {
-"version": "rust 1.10 repack",
-"size": 150726627,
-"digest": "a30476113212895a837b2c4c18eb34d767c7192c3e327fba84c0138eaf7e671e84d5294e75370af3fe7e527a61e0938cd6cce20fba0aec94537070eb0094e27e",
+"version": "rustc 1.13.0 (2c6933acc 2016-11-07) repack",
+"size": 104593379,
+"digest": "9cbc4a6d4d647dd79629e97c0e7b177443d30e669ccd761ab520728d8c2b7e1cc4ab38ec444c1957649338c4088861db3bfe4f840ec3fedcc01f9f1a74da200a",
 "algorithm": "sha512",
 "filename": "rustc.tar.bz2",
-"unpack": true
-},
-{
-"version": "cargo 0.13.0-nightly (664125b 2016-07-19)",
-"size": 2571167,
-"digest": "b2616459fbf15c75b54628a6bfe8cf89c0841ea08431f5096e72be4fac4c685785dfc7a2f18a03a5f7bd377e78d3c108e5029b12616842cbbd0497ff7363fdaf",
-"algorithm": "sha512",
-"filename": "cargo.tar.bz2",
 "unpack": true
 },
 {
@@ -32,10 +24,12 @@
 "unpack": true
 },
 {
-"size": 167175,
-"digest": "0b71a936edf5bd70cf274aaa5d7abc8f77fe8e7b5593a208f805cc9436fac646b9c4f0b43c2b10de63ff3da671497d35536077ecbc72dba7f8159a38b580f831",
+"version": "sccache rev b21198a7183a2fe226ff49348b1c0b51bae9f4f8",
 "algorithm": "sha512",
-"filename": "sccache.tar.bz2",
-"unpack": true
+"visibility": "public",
+"filename": "sccache2.tar.bz2",
+"unpack": true,
+"digest": "a285c7c6468ad7438262dfec90f65981e84abf2adbb1aa075c0ec1759b4f98ce5d5f14a3d555274f970704210a00738ba7d95db2fc320f7780e6b99bcb0ffb6c",
+"size": 1143715
 }
 ]

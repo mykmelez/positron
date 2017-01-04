@@ -20,11 +20,14 @@ with Files('GetUserMedia*'):
     BUG_COMPONENT = component_av
 
 DIRS += [
+    'eme',
     'encoder',
+    'flac',
     'gmp',
     'gmp-plugin',
     'gmp-plugin-openh264',
     'imagecapture',
+    'ipc',
     'mediasink',
     'mediasource',
     'ogg',
@@ -39,9 +42,6 @@ DIRS += [
     'standalone',
 ]
 
-if CONFIG['MOZ_RAW']:
-    DIRS += ['raw']
-
 if CONFIG['MOZ_DIRECTSHOW']:
     DIRS += ['directshow']
 
@@ -54,14 +54,7 @@ if CONFIG['MOZ_FMP4']:
 if CONFIG['MOZ_WEBRTC']:
     DIRS += ['bridge']
 
-if CONFIG['MOZ_OMX_DECODER']:
-    DIRS += ['omx']
-
-if CONFIG['MOZ_EME']:
-    DIRS += ['eme']
-
 TEST_DIRS += [
-    'compiledtest',
     'gtest',
 ]
 
@@ -84,7 +77,6 @@ XPIDL_MODULE = 'dom_media'
 
 EXPORTS += [
     'AbstractMediaDecoder.h',
-    'AccurateSeekTask.h',
     'ADTSDecoder.h',
     'ADTSDemuxer.h',
     'AudioBufferUtils.h',
@@ -108,6 +100,7 @@ EXPORTS += [
     'Intervals.h',
     'Latency.h',
     'MediaCache.h',
+    'MediaContentType.h',
     'MediaData.h',
     'MediaDataDemuxer.h',
     'MediaDecoder.h',
@@ -123,6 +116,7 @@ EXPORTS += [
     'MediaRecorder.h',
     'MediaResource.h',
     'MediaResourceCallback.h',
+    'MediaResult.h',
     'MediaSegment.h',
     'MediaStatistics.h',
     'MediaStreamGraph.h',
@@ -134,14 +128,11 @@ EXPORTS += [
     'MP3Decoder.h',
     'MP3Demuxer.h',
     'MP3FrameParser.h',
-    'NextFrameSeekTask.h',
     'nsIDocumentActivity.h',
     'PrincipalChangeObserver.h',
     'QueueObject.h',
-    'RtspMediaResource.h',
     'SeekJob.h',
     'SeekTarget.h',
-    'SeekTask.h',
     'SelfRef.h',
     'SharedBuffer.h',
     'StreamTracks.h',
@@ -172,11 +163,6 @@ IPDL_SOURCES += [
     'webrtc/PWebrtcGlobal.ipdl'
 ]
 
-if CONFIG['MOZ_B2G']:
-    EXPORTS.mozilla += [
-        'MediaPermissionGonk.h',
-    ]
-
 EXPORTS.mozilla.dom += [
     'AudioStreamTrack.h',
     'AudioTrack.h',
@@ -199,7 +185,6 @@ EXPORTS.mozilla.dom += [
 ]
 
 UNIFIED_SOURCES += [
-    'AccurateSeekTask.cpp',
     'ADTSDecoder.cpp',
     'ADTSDemuxer.cpp',
     'AudioCaptureStream.cpp',
@@ -222,6 +207,7 @@ UNIFIED_SOURCES += [
     'GraphDriver.cpp',
     'Latency.cpp',
     'MediaCache.cpp',
+    'MediaContentType.cpp',
     'MediaData.cpp',
     'MediaDecoder.cpp',
     'MediaDecoderReader.cpp',
@@ -247,11 +233,8 @@ UNIFIED_SOURCES += [
     'MP3Decoder.cpp',
     'MP3Demuxer.cpp',
     'MP3FrameParser.cpp',
-    'NextFrameSeekTask.cpp',
     'QueueObject.cpp',
-    'RtspMediaResource.cpp',
     'SeekJob.cpp',
-    'SeekTask.cpp',
     'StreamTracks.cpp',
     'TextTrack.cpp',
     'TextTrackCue.cpp',
@@ -272,11 +255,6 @@ UNIFIED_SOURCES += [
 
 if CONFIG['OS_TARGET'] == 'WINNT':
   SOURCES += [ 'ThreadPoolCOMListener.cpp' ]
-
-if CONFIG['MOZ_B2G']:
-    SOURCES += [
-        'MediaPermissionGonk.cpp',
-    ]
 
 # DecoderTraits.cpp needs to be built separately because of Mac OS X headers.
 SOURCES += [
@@ -302,7 +280,6 @@ EXTRA_JS_MODULES.media += [
 LOCAL_INCLUDES += [
     '/caps',
     '/dom/base',
-    '/dom/camera',
     '/layout/generic',
     '/layout/xul',
     '/netwerk/base',
@@ -325,9 +302,6 @@ if CONFIG['OS_TARGET'] == 'WINNT':
     DEFINES['WEBRTC_WIN'] = True
 else:
     DEFINES['WEBRTC_POSIX'] = True
-
-if CONFIG['MOZ_OMX_DECODER']:
-    DEFINES['MOZ_OMX_DECODER'] = True
 
 if CONFIG['ANDROID_VERSION'] > '15':
     DEFINES['MOZ_OMX_WEBM_DECODER'] = True

@@ -33,14 +33,10 @@
 #ifdef DEBUG
 #undef  NOISY_INLINEDIR_ALIGN
 #undef  NOISY_BLOCKDIR_ALIGN
-#undef  REALLY_NOISY_BLOCKDIR_ALIGN
 #undef  NOISY_REFLOW
 #undef  REALLY_NOISY_REFLOW
 #undef  NOISY_PUSHING
 #undef  REALLY_NOISY_PUSHING
-#undef  DEBUG_ADD_TEXT
-#undef  NOISY_MAX_ELEMENT_SIZE
-#undef  REALLY_NOISY_MAX_ELEMENT_SIZE
 #undef  NOISY_CAN_PLACE_FRAME
 #undef  NOISY_TRIM
 #undef  REALLY_NOISY_TRIM
@@ -304,8 +300,8 @@ nsLineLayout::UpdateBand(WritingMode aWM,
                                                     ContainerSize());
 #ifdef REALLY_NOISY_REFLOW
   printf("nsLL::UpdateBand %d, %d, %d, %d, (converted to %d, %d, %d, %d); frame=%p\n  will set mImpacted to true\n",
-         aNewAvailSpace.x, aNewAvailSpace.y,
-         aNewAvailSpace.width, aNewAvailSpace.height,
+         aNewAvailSpace.IStart(aWM), aNewAvailSpace.BStart(aWM),
+         aNewAvailSpace.ISize(aWM), aNewAvailSpace.BSize(aWM),
          availSpace.IStart(lineWM), availSpace.BStart(lineWM),
          availSpace.ISize(lineWM), availSpace.BSize(lineWM),
          aFloatFrame);
@@ -328,11 +324,11 @@ nsLineLayout::UpdateBand(WritingMode aWM,
 #endif
 
   // Compute the difference between last times width and the new width
-  NS_WARN_IF_FALSE(mRootSpan->mIEnd != NS_UNCONSTRAINEDSIZE &&
-                   availSpace.ISize(lineWM) != NS_UNCONSTRAINEDSIZE,
-                   "have unconstrained inline size; this should only result "
-                   "from very large sizes, not attempts at intrinsic width "
-                   "calculation");
+  NS_WARNING_ASSERTION(
+    mRootSpan->mIEnd != NS_UNCONSTRAINEDSIZE &&
+    availSpace.ISize(lineWM) != NS_UNCONSTRAINEDSIZE,
+    "have unconstrained inline size; this should only result from very large "
+    "sizes, not attempts at intrinsic width calculation");
   // The root span's mIStart moves to aICoord
   nscoord deltaICoord = availSpace.IStart(lineWM) - mRootSpan->mIStart;
   // The inline size of all spans changes by this much (the root span's
@@ -762,8 +758,8 @@ IsPercentageAware(const nsIFrame* aFrame)
        pos->mWidth.GetUnit() != eStyleUnit_Auto) ||
       pos->MaxWidthDependsOnContainer() ||
       pos->MinWidthDependsOnContainer() ||
-      pos->OffsetHasPercent(NS_SIDE_RIGHT) ||
-      pos->OffsetHasPercent(NS_SIDE_LEFT)) {
+      pos->OffsetHasPercent(eSideRight) ||
+      pos->OffsetHasPercent(eSideLeft)) {
     return true;
   }
 
@@ -771,8 +767,8 @@ IsPercentageAware(const nsIFrame* aFrame)
     // We need to check for frames that shrink-wrap when they're auto
     // width.
     const nsStyleDisplay* disp = aFrame->StyleDisplay();
-    if (disp->mDisplay == NS_STYLE_DISPLAY_INLINE_BLOCK ||
-        disp->mDisplay == NS_STYLE_DISPLAY_INLINE_TABLE ||
+    if (disp->mDisplay == StyleDisplay::InlineBlock ||
+        disp->mDisplay == StyleDisplay::InlineTable ||
         fType == nsGkAtoms::HTMLButtonControlFrame ||
         fType == nsGkAtoms::gfxButtonControlFrame ||
         fType == nsGkAtoms::fieldSetFrame ||
@@ -1188,15 +1184,15 @@ nsLineLayout::AllowForStartMargin(PerFrameData* pfd,
   if ((pfd->mFrame->GetPrevContinuation() ||
        pfd->mFrame->FrameIsNonFirstInIBSplit()) &&
       aReflowInput.mStyleBorder->mBoxDecorationBreak ==
-        NS_STYLE_BOX_DECORATION_BREAK_SLICE) {
+        StyleBoxDecorationBreak::Slice) {
     // Zero this out so that when we compute the max-element-width of
     // the frame we will properly avoid adding in the starting margin.
     pfd->mMargin.IStart(lineWM) = 0;
   } else if (NS_UNCONSTRAINEDSIZE == aReflowInput.ComputedISize()) {
-    NS_WARN_IF_FALSE(NS_UNCONSTRAINEDSIZE != aReflowInput.AvailableISize(),
-                     "have unconstrained inline-size; this should only result "
-                     "from very large sizes, not attempts at intrinsic "
-                     "inline-size calculation");
+    NS_WARNING_ASSERTION(
+      NS_UNCONSTRAINEDSIZE != aReflowInput.AvailableISize(),
+      "have unconstrained inline-size; this should only result from very "
+      "large sizes, not attempts at intrinsic inline-size calculation");
     // For inline-ish and text-ish things (which don't compute widths
     // in the reflow state), adjust available inline-size to account
     // for the start margin. The end margin will be accounted for when
@@ -1302,7 +1298,7 @@ nsLineLayout::CanPlaceFrame(PerFrameData* pfd,
        pfd->mFrame->FrameIsNonLastInIBSplit()) &&
       !pfd->mIsLetterFrame &&
       pfd->mFrame->StyleBorder()->mBoxDecorationBreak ==
-        NS_STYLE_BOX_DECORATION_BREAK_SLICE) {
+        StyleBoxDecorationBreak::Slice) {
     pfd->mMargin.IEnd(lineWM) = 0;
   }
 
@@ -1696,10 +1692,9 @@ nsLineLayout::AdjustLeadings(nsIFrame* spanFrame, PerSpanData* psd,
     // required by section Line Spacing in the CSS Ruby spec.
     // See http://dev.w3.org/csswg/css-ruby/#line-height
     auto rubyFrame = static_cast<nsRubyFrame*>(spanFrame);
-    nscoord startLeading, endLeading;
-    rubyFrame->GetBlockLeadings(startLeading, endLeading);
-    requiredStartLeading += startLeading;
-    requiredEndLeading += endLeading;
+    RubyBlockLeadings leadings = rubyFrame->GetBlockLeadings();
+    requiredStartLeading += leadings.mStart;
+    requiredEndLeading += leadings.mEnd;
   }
   if (aStyleText->HasTextEmphasis()) {
     nscoord bsize = GetBSizeOfEmphasisMarks(spanFrame, aInflation);
@@ -1797,7 +1792,6 @@ nsLineLayout::VerticalAlignFrames(PerSpanData* psd)
          spanFramePFD->mBounds.BSize(lineWM),
          emptyContinuation ? "yes" : "no");
   if (psd != mRootSpan) {
-    WritingMode frameWM = spanFramePFD->mWritingMode;
     printf(" bp=%d,%d,%d,%d margin=%d,%d,%d,%d",
            spanFramePFD->mBorderPadding.Top(lineWM),
            spanFramePFD->mBorderPadding.Right(lineWM),
@@ -2004,7 +1998,7 @@ nsLineLayout::VerticalAlignFrames(PerSpanData* psd)
     uint8_t verticalAlignEnum = frame->VerticalAlignEnum();
 #ifdef NOISY_BLOCKDIR_ALIGN
     printf("  [frame]");
-    nsFrame::ListTag(stdout, mFrame);
+    nsFrame::ListTag(stdout, frame);
     printf(": verticalAlignUnit=%d (enum == %d",
            verticalAlign.GetUnit(),
            ((eStyleUnit_Enumerated == verticalAlign.GetUnit())
@@ -2386,7 +2380,7 @@ nsLineLayout::VerticalAlignFrames(PerSpanData* psd)
 #ifdef NOISY_BLOCKDIR_ALIGN
     printf("   [span]adjusting for zeroEffectiveSpanBox\n");
     printf("     Original: minBCoord=%d, maxBCoord=%d, bSize=%d, ascent=%d, logicalBSize=%d, topLeading=%d, bottomLeading=%d\n",
-           minBCoord, maxBCoord, spanFramePFD->mBounds.BSize(frameWM),
+           minBCoord, maxBCoord, spanFramePFD->mBounds.BSize(lineWM),
            spanFramePFD->mAscent,
            psd->mLogicalBSize, psd->mBStartLeading, psd->mBEndLeading);
 #endif
@@ -2971,7 +2965,7 @@ FindNearestRubyBaseAncestor(nsIFrame* aFrame)
   // XXX It is possible that no ruby base ancestor is found because of
   // some edge cases like form control or canvas inside ruby text.
   // See bug 1138092 comment 4.
-  NS_WARN_IF_FALSE(aFrame, "no ruby base ancestor?");
+  NS_WARNING_ASSERTION(aFrame, "no ruby base ancestor?");
   return aFrame;
 }
 

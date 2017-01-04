@@ -3,7 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/ContentChild.h"
-#include "mozilla/unused.h"
+#include "mozilla/Unused.h"
+#include "nsArrayUtils.h"
 #include "nsClipboardProxy.h"
 #include "nsISupportsPrimitives.h"
 #include "nsCOMPtr.h"
@@ -47,11 +48,11 @@ nsClipboardProxy::GetData(nsITransferable *aTransferable, int32_t aWhichClipboar
 {
    nsTArray<nsCString> types;
   
-  nsCOMPtr<nsISupportsArray> flavorList;
+  nsCOMPtr<nsIArray> flavorList;
   aTransferable->FlavorsTransferableCanImport(getter_AddRefs(flavorList));
   if (flavorList) {
     uint32_t flavorCount = 0;
-    flavorList->Count(&flavorCount);
+    flavorList->GetLength(&flavorCount);
     for (uint32_t j = 0; j < flavorCount; ++j) {
       nsCOMPtr<nsISupportsCString> flavor = do_QueryElementAt(flavorList, j);
       if (flavor) {

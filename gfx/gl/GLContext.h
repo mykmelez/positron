@@ -41,6 +41,7 @@
 #include "GLContextSymbols.h"
 #include "base/platform_thread.h"       // for PlatformThreadId
 #include "mozilla/GenericRefCounted.h"
+#include "mozilla/WeakPtr.h"
 #include "gfx2DGlue.h"
 #include "GeckoProfiler.h"
 
@@ -176,8 +177,10 @@ enum class GLRenderer {
     AdrenoTM330,
     AdrenoTM420,
     Mali400MP,
+    Mali450MP,
     SGX530,
     SGX540,
+    SGX544MP,
     Tegra,
     AndroidEmulator,
     GalliumLlvmpipe,
@@ -189,7 +192,11 @@ enum class GLRenderer {
 class GLContext
     : public GLLibraryLoader
     , public GenericAtomicRefCounted
+    , public SupportsWeakPtr<GLContext>
 {
+public:
+    MOZ_DECLARE_WEAKREFERENCE_TYPENAME(GLContext)
+
 // -----------------------------------------------------------------------------
 // basic enums
 public:
@@ -473,6 +480,8 @@ public:
         IMG_texture_compression_pvrtc,
         IMG_texture_npot,
         KHR_debug,
+        KHR_texture_compression_astc_hdr,
+        KHR_texture_compression_astc_ldr,
         NV_draw_instanced,
         NV_fence,
         NV_framebuffer_blit,
@@ -1967,6 +1976,9 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fFramebufferTexture2D(target, attachmentPoint, textureTarget, texture, level);
         AFTER_GL_CALL;
+        if (mNeedsCheckAfterAttachTextureToFb) {
+            fCheckFramebufferStatus(target);
+        }
     }
 
     void fFramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer) {
@@ -3531,6 +3543,7 @@ protected:
     bool mNeedsTextureSizeChecks;
     bool mNeedsFlushBeforeDeleteFB;
     bool mTextureAllocCrashesOnMapFailure;
+    bool mNeedsCheckAfterAttachTextureToFb;
     bool mWorkAroundDriverBugs;
 
     bool IsTextureSizeSafeToPassToDriver(GLenum target, GLsizei width, GLsizei height) const {

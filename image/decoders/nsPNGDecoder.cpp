@@ -190,7 +190,8 @@ nsPNGDecoder::CreateFrame(const FrameInfo& aFrameInfo)
   MOZ_ASSERT(!IsMetadataDecode());
 
   // Check if we have transparency, and send notifications if needed.
-  auto transparency = GetTransparencyType(aFrameInfo.mFormat, aFrameInfo.mFrameRect);
+  auto transparency = GetTransparencyType(aFrameInfo.mFormat,
+                                          aFrameInfo.mFrameRect);
   PostHasTransparencyIfNeeded(transparency);
   SurfaceFormat format = transparency == TransparencyType::eNone
                        ? SurfaceFormat::B8G8R8X8
@@ -339,10 +340,18 @@ nsPNGDecoder::InitInternal()
   png_set_check_for_invalid_index(mPNG, 0);
 #endif
 
-#if defined(PNG_SET_OPTION_SUPPORTED) && defined(PNG_sRGB_PROFILE_CHECKS) && \
-            PNG_sRGB_PROFILE_CHECKS >= 0
+#ifdef PNG_SET_OPTION_SUPPORTED
+#if defined(PNG_sRGB_PROFILE_CHECKS) && PNG_sRGB_PROFILE_CHECKS >= 0
   // Skip checking of sRGB ICC profiles
   png_set_option(mPNG, PNG_SKIP_sRGB_CHECK_PROFILE, PNG_OPTION_ON);
+#endif
+
+#ifdef PNG_MAXIMUM_INFLATE_WINDOW
+  // Force a larger zlib inflate window as some images in the wild have
+  // incorrectly set metadata (specifically CMF bits) which prevent us from
+  // decoding them otherwise.
+  png_set_option(mPNG, PNG_MAXIMUM_INFLATE_WINDOW, PNG_OPTION_ON);
+#endif
 #endif
 
   // use this as libpng "progressive pointer" (retrieve in callbacks)
@@ -686,13 +695,15 @@ nsPNGDecoder::info_callback(png_structp png_ptr, png_infop info_ptr)
 #endif
 
   if (decoder->IsMetadataDecode()) {
-    // If we are animated then the first frame rect is either: 1) the whole image
-    // if the IDAT chunk is part of the animation 2) the frame rect of the first
-    // fDAT chunk otherwise. If we are not animated then we want to make sure to
-    // call PostHasTransparency in the metadata decode if we need to. So it's okay
-    // to pass IntRect(0, 0, width, height) here for animated images; they will
-    // call with the proper first frame rect in the full decode.
-    auto transparency = decoder->GetTransparencyType(decoder->format, frameRect);
+    // If we are animated then the first frame rect is either:
+    // 1) the whole image if the IDAT chunk is part of the animation
+    // 2) the frame rect of the first fDAT chunk otherwise.
+    // If we are not animated then we want to make sure to call
+    // PostHasTransparency in the metadata decode if we need to. So it's
+    // okay to pass IntRect(0, 0, width, height) here for animated images;
+    // they will call with the proper first frame rect in the full decode.
+    auto transparency = decoder->GetTransparencyType(decoder->format,
+                                                     frameRect);
     decoder->PostHasTransparencyIfNeeded(transparency);
 
     // We have the metadata we're looking for, so stop here, before we allocate
@@ -757,7 +768,8 @@ static NextPixel<uint32_t>
 PackRGBPixelAndAdvance(uint8_t*& aRawPixelInOut)
 {
   const uint32_t pixel =
-    gfxPackedPixel(0xFF, aRawPixelInOut[0], aRawPixelInOut[1], aRawPixelInOut[2]);
+    gfxPackedPixel(0xFF, aRawPixelInOut[0], aRawPixelInOut[1],
+                   aRawPixelInOut[2]);
   aRawPixelInOut += 3;
   return AsVariant(pixel);
 }
@@ -831,7 +843,8 @@ nsPNGDecoder::row_callback(png_structp png_ptr, png_bytep new_row,
     decoder->mPass++;
   }
 
-  const png_uint_32 height = static_cast<png_uint_32>(decoder->mFrameRect.height);
+  const png_uint_32 height =
+    static_cast<png_uint_32>(decoder->mFrameRect.height);
 
   if (row_num >= height) {
     // Bail if we receive extra rows. This is especially important because if we
@@ -936,7 +949,8 @@ nsPNGDecoder::DoYield(png_structp aPNGStruct)
   // the data that was passed to png_process_data() have not been consumed yet.
   // We use this information to tell StreamingLexer where to place us in the
   // input stream when we come back from the yield.
-  png_size_t pendingBytes = png_process_data_pause(aPNGStruct, /* save = */ false);
+  png_size_t pendingBytes = png_process_data_pause(aPNGStruct,
+                                                   /* save = */ false);
 
   MOZ_ASSERT(pendingBytes < mLastChunkLength);
   size_t consumedBytes = mLastChunkLength - min(pendingBytes, mLastChunkLength);
@@ -956,7 +970,9 @@ nsPNGDecoder::frame_info_callback(png_structp png_ptr, png_uint_32 frame_num)
   // old frame is done
   decoder->EndImageFrame();
 
-  if (!decoder->mFrameIsHidden && decoder->IsFirstFrameDecode()) {
+  const bool previousFrameWasHidden = decoder->mFrameIsHidden;
+
+  if (!previousFrameWasHidden && decoder->IsFirstFrameDecode()) {
     // We're about to get a second non-hidden frame, but we only want the first.
     // Stop decoding now. (And avoid allocating the unnecessary buffers below.)
     decoder->PostDecodeDone();
@@ -972,14 +988,34 @@ nsPNGDecoder::frame_info_callback(png_structp png_ptr, png_uint_32 frame_num)
                           png_get_next_frame_y_offset(png_ptr, decoder->mInfo),
                           png_get_next_frame_width(png_ptr, decoder->mInfo),
                           png_get_next_frame_height(png_ptr, decoder->mInfo));
-
   const bool isInterlaced = bool(decoder->interlacebuf);
 
-  decoder->mNextFrameInfo = Some(FrameInfo{ decoder->format,
-                                            frameRect,
-                                            isInterlaced });
+#ifndef MOZ_EMBEDDED_LIBPNG
+  // if using system library, check frame_width and height against 0
+  if (frameRect.width == 0) {
+    png_error(png_ptr, "Frame width must not be 0");
+  }
+  if (frameRect.height == 0) {
+    png_error(png_ptr, "Frame height must not be 0");
+  }
+#endif
+
+  const FrameInfo info { decoder->format, frameRect, isInterlaced };
+
+  // If the previous frame was hidden, skip the yield (which will mislead the
+  // caller, who will think the previous frame was real) and just allocate the
+  // new frame here.
+  if (previousFrameWasHidden) {
+    if (NS_FAILED(decoder->CreateFrame(info))) {
+      return decoder->DoTerminate(png_ptr, TerminalState::FAILURE);
+    }
+
+    MOZ_ASSERT(decoder->mImageData, "Should have a buffer now");
+    return;  // No yield, so we'll just keep decoding.
+  }
 
   // Yield to the caller to notify them that the previous frame is now complete.
+  decoder->mNextFrameInfo = Some(info);
   return decoder->DoYield(png_ptr);
 }
 #endif
@@ -1048,7 +1084,7 @@ nsPNGDecoder::IsValidICO() const
 
   // If there are errors in the call to png_get_IHDR, the error_callback in
   // nsPNGDecoder.cpp is called.  In this error callback we do a longjmp, so
-  // we need to save the jump buffer here. Oterwise we'll end up without a
+  // we need to save the jump buffer here. Otherwise we'll end up without a
   // proper callstack.
   if (setjmp(png_jmpbuf(mPNG))) {
     // We got here from a longjmp call indirectly from png_get_IHDR

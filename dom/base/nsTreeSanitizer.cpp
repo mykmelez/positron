@@ -7,12 +7,12 @@
 #include "nsTreeSanitizer.h"
 
 #include "mozilla/ArrayUtils.h"
-#include "mozilla/CSSStyleSheet.h"
+#include "mozilla/StyleSheetInlines.h"
 #include "mozilla/css/Declaration.h"
 #include "mozilla/css/StyleRule.h"
 #include "mozilla/css/Rule.h"
 #include "nsCSSParser.h"
-#include "nsCSSProperty.h"
+#include "nsCSSPropertyID.h"
 #include "nsUnicharInputStream.h"
 #include "nsIDOMCSSRule.h"
 #include "nsAttrName.h"
@@ -203,6 +203,7 @@ nsIAtom** const kAttributesHTML[] = {
   &nsGkAtoms::media,
   &nsGkAtoms::method,
   &nsGkAtoms::min,
+  &nsGkAtoms::minlength,
   &nsGkAtoms::multiple,
   &nsGkAtoms::muted,
   &nsGkAtoms::name,
@@ -592,6 +593,7 @@ nsIAtom** const kAttributesSVG[] = {
 };
 
 nsIAtom** const kURLAttributesSVG[] = {
+  &nsGkAtoms::href,
   nullptr
 };
 
@@ -1065,8 +1067,8 @@ bool
 nsTreeSanitizer::SanitizeStyleDeclaration(mozilla::css::Declaration* aDeclaration,
                                           nsAutoString& aRuleText)
 {
-  bool didSanitize = aDeclaration->HasProperty(eCSSProperty_binding);
-  aDeclaration->RemoveProperty(eCSSProperty_binding);
+  bool didSanitize = aDeclaration->HasProperty(eCSSProperty__moz_binding);
+  aDeclaration->RemovePropertyByID(eCSSProperty__moz_binding);
   aDeclaration->ToString(aRuleText);
   return didSanitize;
 }
@@ -1417,7 +1419,8 @@ nsTreeSanitizer::SanitizeChildren(nsINode* aRoot)
         nsCOMPtr<nsIContent> child; // Must keep the child alive during move
         ErrorResult rv;
         while ((child = node->GetFirstChild())) {
-          parent->InsertBefore(*child, node, rv);
+          nsCOMPtr<nsINode> refNode = node;
+          parent->InsertBefore(*child, refNode, rv);
           if (rv.Failed()) {
             break;
           }

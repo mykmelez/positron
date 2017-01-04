@@ -5,14 +5,13 @@
 
 package org.mozilla.gecko.gfx;
 
-import org.mozilla.gecko.AppConstants.Versions;
-
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PointF;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
+import android.os.Build;
 import android.widget.EdgeEffect;
 
 import java.lang.reflect.Field;
@@ -32,7 +31,7 @@ public class OverscrollEdgeEffect implements Overscroll {
 
     public OverscrollEdgeEffect(final LayerView v) {
         Field paintField = null;
-        if (Versions.feature21Plus) {
+        if (Build.VERSION.SDK_INT >= 21) {
             try {
                 paintField = EdgeEffect.class.getDeclaredField("mPaint");
                 paintField.setAccessible(true);
@@ -84,7 +83,7 @@ public class OverscrollEdgeEffect implements Overscroll {
     }
 
     private void invalidate() {
-        if (Versions.feature16Plus) {
+        if (Build.VERSION.SDK_INT >= 16) {
             mView.postInvalidateOnAnimation();
         } else {
             mView.postInvalidateDelayed(10);
@@ -124,25 +123,24 @@ public class OverscrollEdgeEffect implements Overscroll {
             return;
         }
 
-        float fillerSize = mView.getDynamicToolbarAnimator().getMaxTranslation();
         PointF visibleEnd = mView.getDynamicToolbarAnimator().getVisibleEndOfLayerView();
 
         // If we're pulling an edge, or fading it out, draw!
         boolean invalidate = false;
         if (!mEdges[TOP].isFinished()) {
-            invalidate |= draw(mEdges[TOP], canvas, 0, fillerSize, 0);
+            invalidate |= draw(mEdges[TOP], canvas, 0, 0, 0);
         }
 
         if (!mEdges[BOTTOM].isFinished()) {
-            invalidate |= draw(mEdges[BOTTOM], canvas, visibleEnd.x, fillerSize + visibleEnd.y, 180);
+            invalidate |= draw(mEdges[BOTTOM], canvas, visibleEnd.x, visibleEnd.y, 180);
         }
 
         if (!mEdges[LEFT].isFinished()) {
-            invalidate |= draw(mEdges[LEFT], canvas, 0, fillerSize + visibleEnd.y, 270);
+            invalidate |= draw(mEdges[LEFT], canvas, 0, visibleEnd.y, 270);
         }
 
         if (!mEdges[RIGHT].isFinished()) {
-            invalidate |= draw(mEdges[RIGHT], canvas, visibleEnd.x, fillerSize, 90);
+            invalidate |= draw(mEdges[RIGHT], canvas, visibleEnd.x, 0, 90);
         }
 
         // If the edge effect is animating off screen, invalidate.

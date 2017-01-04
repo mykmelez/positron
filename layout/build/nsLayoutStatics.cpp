@@ -7,6 +7,7 @@
 #include "nsLayoutStatics.h"
 #include "nscore.h"
 
+#include "DateTimeFormat.h"
 #include "nsAttrValue.h"
 #include "nsAutoCopyListener.h"
 #include "nsColorNames.h"
@@ -116,12 +117,11 @@ using namespace mozilla::system;
 #include "nsPermissionManager.h"
 #include "nsCookieService.h"
 #include "nsApplicationCacheService.h"
+#include "mozilla/dom/CustomElementRegistry.h"
 #include "mozilla/dom/time/DateCacheCleaner.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/IMEStateManager.h"
-#include "nsDocument.h"
 #include "mozilla/dom/HTMLVideoElement.h"
-#include "CameraPreferences.h"
 #include "TouchManager.h"
 #include "MediaDecoder.h"
 #include "MediaPrefs.h"
@@ -129,10 +129,6 @@ using namespace mozilla::system;
 #include "mozilla/ServoBindings.h"
 #include "mozilla/StaticPresData.h"
 #include "mozilla/dom/WebIDLGlobalNameHash.h"
-
-#ifdef MOZ_B2G_BT
-#include "mozilla/dom/BluetoothUUID.h"
-#endif
 
 using namespace mozilla;
 using namespace mozilla::net;
@@ -294,8 +290,6 @@ nsLayoutStatics::Initialize()
 
   CounterStyleManager::InitializeBuiltinCounterStyles();
 
-  CameraPreferences::Initialize();
-
   IMEStateManager::Init();
 
   ServiceWorkerRegistrar::Initialize();
@@ -330,10 +324,6 @@ nsLayoutStatics::Shutdown()
 {
   // Don't need to shutdown nsWindowMemoryReporter, that will be done by the
   // memory reporter manager.
-
-#ifdef MOZ_STYLO
-  Servo_Shutdown();
-#endif
 
   nsMessageManagerScriptExecutor::Shutdown();
   nsFocusManager::Shutdown();
@@ -394,6 +384,7 @@ nsLayoutStatics::Shutdown()
   nsAutoCopyListener::Shutdown();
   FrameLayerBuilder::Shutdown();
 
+
 #ifdef MOZ_ANDROID_OMX
   AndroidMediaPluginHost::Shutdown();
 #endif
@@ -433,19 +424,15 @@ nsLayoutStatics::Shutdown()
   nsHyphenationManager::Shutdown();
   nsDOMMutationObserver::Shutdown();
 
+  DateTimeFormat::Shutdown();
+
   ContentParent::ShutDown();
 
   DisplayItemClip::Shutdown();
 
-  nsDocument::XPCOMShutdown();
+  CustomElementRegistry::XPCOMShutdown();
 
   CacheObserver::Shutdown();
 
-  CameraPreferences::Shutdown();
-
   PromiseDebugging::Shutdown();
-
-#ifdef MOZ_B2G_BT
-  BluetoothUUID::HandleShutdown();
-#endif
 }

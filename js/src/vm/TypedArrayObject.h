@@ -120,8 +120,7 @@ class TypedArrayObject : public NativeObject
     AllocKindForLazyBuffer(size_t nbytes)
     {
         MOZ_ASSERT(nbytes <= INLINE_BUFFER_LIMIT);
-        /* For GGC we need at least one slot in which to store a forwarding pointer. */
-        size_t dataSlots = Max(size_t(1), AlignBytes(nbytes, sizeof(Value)) / sizeof(Value));
+        size_t dataSlots = AlignBytes(nbytes, sizeof(Value)) / sizeof(Value);
         MOZ_ASSERT(nbytes <= dataSlots * sizeof(Value));
         return gc::GetGCObjectKind(FIXED_DATA_START + dataSlots);
     }
@@ -294,6 +293,8 @@ class TypedArrayObject : public NativeObject
     static bool set(JSContext* cx, unsigned argc, Value* vp);
 };
 
+MOZ_MUST_USE bool TypedArray_bufferGetter(JSContext* cx, unsigned argc, Value* vp);
+
 extern TypedArrayObject*
 TypedArrayCreateWithTemplate(JSContext* cx, HandleObject templateObj, int32_t len);
 
@@ -415,6 +416,11 @@ SetDisjointTypedElements(TypedArrayObject* target, uint32_t targetOffset,
 extern JSObject*
 InitDataViewClass(JSContext* cx, HandleObject obj);
 
+// In the DataViewObject, the private slot contains a raw pointer into
+// the buffer.  The buffer may be shared memory and the raw pointer
+// should not be exposed without sharedness information accompanying
+// it.
+
 class DataViewObject : public NativeObject
 {
   private:
@@ -425,8 +431,8 @@ class DataViewObject : public NativeObject
     }
 
     template <typename NativeType>
-    static uint8_t*
-    getDataPointer(JSContext* cx, Handle<DataViewObject*> obj, double offset);
+    static SharedMem<uint8_t*>
+    getDataPointer(JSContext* cx, Handle<DataViewObject*> obj, uint64_t offset, bool* isSharedMemory);
 
     template<Value ValueGetter(DataViewObject* view)>
     static bool
@@ -448,7 +454,7 @@ class DataViewObject : public NativeObject
     friend bool ArrayBufferObject::createDataViewForThisImpl(JSContext* cx, const CallArgs& args);
     static DataViewObject*
     create(JSContext* cx, uint32_t byteOffset, uint32_t byteLength,
-           Handle<ArrayBufferObject*> arrayBuffer, JSObject* proto);
+           Handle<ArrayBufferObjectMaybeShared*> arrayBuffer, JSObject* proto);
 
   public:
     static const Class class_;
@@ -477,11 +483,25 @@ class DataViewObject : public NativeObject
         return byteLengthValue(const_cast<DataViewObject*>(this)).toInt32();
     }
 
-    ArrayBufferObject& arrayBuffer() const {
-        return bufferValue(const_cast<DataViewObject*>(this)).toObject().as<ArrayBufferObject>();
+    ArrayBufferObjectMaybeShared& arrayBufferEither() const {
+        return bufferValue(
+            const_cast<DataViewObject*>(this)).toObject().as<ArrayBufferObjectMaybeShared>();
     }
 
-    void* dataPointer() const {
+    SharedMem<void*> dataPointerEither() const {
+        void *p = getPrivate();
+        if (isSharedMemory())
+            return SharedMem<void*>::shared(p);
+        return SharedMem<void*>::unshared(p);
+    }
+
+    void* dataPointerUnshared() const {
+        MOZ_ASSERT(!isSharedMemory());
+        return getPrivate();
+    }
+
+    void* dataPointerShared() const {
+        MOZ_ASSERT(isSharedMemory());
         return getPrivate();
     }
 
@@ -558,6 +578,24 @@ ClampIntForUint8Array(int32_t x)
     if (x > 255)
         return 255;
     return x;
+}
+
+static inline bool
+IsAnyArrayBuffer(HandleObject obj)
+{
+    return IsArrayBuffer(obj) || IsSharedArrayBuffer(obj);
+}
+
+static inline bool
+IsAnyArrayBuffer(JSObject* obj)
+{
+    return IsArrayBuffer(obj) || IsSharedArrayBuffer(obj);
+}
+
+static inline bool
+IsAnyArrayBuffer(HandleValue v)
+{
+    return v.isObject() && IsAnyArrayBuffer(&v.toObject());
 }
 
 } // namespace js

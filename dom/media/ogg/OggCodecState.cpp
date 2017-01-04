@@ -6,17 +6,19 @@
 
 #include <string.h>
 
-#include "mozilla/DebugOnly.h"
 #include "mozilla/EndianUtils.h"
 #include <stdint.h>
 
 #include "nsDebug.h"
-#include "MediaDecoderReader.h"
 #include "OggCodecState.h"
-#include "OggDecoder.h"
-#include "nsISupportsImpl.h"
+#include "OpusDecoder.h"
+#include "OpusParser.h"
 #include "VideoUtils.h"
 #include <algorithm>
+
+#include <opus/opus.h>
+#include "opus/opus_multistream.h"
+#include "XiphExtradata.h"
 
 // On Android JellyBean, the hardware.h header redefines version_major and
 // version_minor, which breaks our build.  See:
@@ -49,10 +51,12 @@ OggCodecState::Create(ogg_page* aPage)
     codecState = new OpusState(aPage);
   } else if (aPage->body_len > 8 && memcmp(aPage->body, "fishead\0", 8) == 0) {
     codecState = new SkeletonState(aPage);
+  } else if (aPage->body_len > 5 && memcmp(aPage->body, "\177FLAC", 5) == 0) {
+    codecState = new FlacState(aPage);
   } else {
     codecState = new OggCodecState(aPage, false);
   }
-  return codecState->OggCodecState::Init() ? codecState.forget() : nullptr;
+  return codecState->OggCodecState::InternalInit() ? codecState.forget() : nullptr;
 }
 
 OggCodecState::OggCodecState(ogg_page* aBosPage, bool aActive)
@@ -97,7 +101,7 @@ OggCodecState::ClearUnstamped()
 }
 
 bool
-OggCodecState::Init()
+OggCodecState::InternalInit()
 {
   int ret = ogg_stream_init(&mState, mSerial);
   return ret == 0;
@@ -140,6 +144,24 @@ OggCodecState::AddVorbisComment(MetadataTags* aTags,
     return false;
   }
   aTags->Put(key, value);
+  return true;
+}
+
+bool
+OggCodecState::SetCodecSpecificConfig(MediaByteBuffer* aBuffer,
+                                      OggPacketQueue& aHeaders)
+{
+  nsTArray<const unsigned char*> headers;
+  nsTArray<size_t> headerLens;
+  for (size_t i = 0; i < aHeaders.Length(); i++) {
+    headers.AppendElement(aHeaders[i]->packet);
+    headerLens.AppendElement(aHeaders[i]->bytes);
+  }
+  // Save header packets for the decoder
+  if (!XiphHeadersToExtradata(aBuffer, headers, headerLens)) {
+    return false;
+  }
+  aHeaders.Erase();
   return true;
 }
 
@@ -226,7 +248,7 @@ OggCodecState::PushFront(OggPacketQueue &&aOther)
   }
 }
 
-RefPtr<MediaRawData>
+already_AddRefed<MediaRawData>
 OggCodecState::PacketOutAsMediaRawData()
 {
   ogg_packet* packet = PacketOut();
@@ -251,7 +273,7 @@ OggCodecState::PacketOutAsMediaRawData()
 
   ReleasePacket(packet);
 
-  return sample;
+  return sample.forget();
 }
 
 nsresult
@@ -315,10 +337,9 @@ TheoraState::TheoraState(ogg_page* aBosPage)
   : OggCodecState(aBosPage, true)
   , mSetup(0)
   , mCtx(0)
-  , mPixelAspectRatio(0)
 {
   MOZ_COUNT_CTOR(TheoraState);
-  th_info_init(&mInfo);
+  th_info_init(&mTheoraInfo);
   th_comment_init(&mComment);
 }
 
@@ -328,7 +349,8 @@ TheoraState::~TheoraState()
   th_setup_free(mSetup);
   th_decode_free(mCtx);
   th_comment_clear(&mComment);
-  th_info_clear(&mInfo);
+  th_info_clear(&mTheoraInfo);
+  Reset();
 }
 
 bool
@@ -338,34 +360,49 @@ TheoraState::Init()
     return false;
   }
 
-  int64_t n = mInfo.aspect_numerator;
-  int64_t d = mInfo.aspect_denominator;
+  int64_t n = mTheoraInfo.aspect_numerator;
+  int64_t d = mTheoraInfo.aspect_denominator;
 
-  mPixelAspectRatio = (n == 0 || d == 0)
+  float aspectRatio = (n == 0 || d == 0)
     ? 1.0f : static_cast<float>(n) / static_cast<float>(d);
 
   // Ensure the frame and picture regions aren't larger than our prescribed
   // maximum, or zero sized.
-  nsIntSize frame(mInfo.frame_width, mInfo.frame_height);
-  nsIntRect picture(mInfo.pic_x, mInfo.pic_y, mInfo.pic_width, mInfo.pic_height);
-  if (!IsValidVideoRegion(frame, picture, frame)) {
+  nsIntSize frame(mTheoraInfo.frame_width, mTheoraInfo.frame_height);
+  nsIntRect picture(mTheoraInfo.pic_x, mTheoraInfo.pic_y, mTheoraInfo.pic_width, mTheoraInfo.pic_height);
+  nsIntSize display(mTheoraInfo.pic_width, mTheoraInfo.pic_height);
+  ScaleDisplayByAspectRatio(display, aspectRatio);
+  if (!IsValidVideoRegion(frame, picture, display)) {
     return mActive = false;
   }
 
-  mCtx = th_decode_alloc(&mInfo, mSetup);
+  mCtx = th_decode_alloc(&mTheoraInfo, mSetup);
   if (!mCtx) {
     return mActive = false;
   }
 
-  return true;
+  // Video track's frame sizes will not overflow. Activate the video track.
+  mInfo.mMimeType = NS_LITERAL_CSTRING("video/theora");
+  mInfo.mDisplay = display;
+  mInfo.mImage = frame;
+  mInfo.SetImageRect(picture);
+
+  return mActive = SetCodecSpecificConfig(mInfo.mCodecSpecificConfig, mHeaders);
+}
+
+nsresult
+TheoraState::Reset()
+{
+  mHeaders.Erase();
+  return OggCodecState::Reset();
 }
 
 bool
 TheoraState::DecodeHeader(ogg_packet* aPacket)
 {
-  nsAutoRef<ogg_packet> autoRelease(aPacket);
+  mHeaders.Append(aPacket);
   mPacketCount++;
-  int ret = th_decode_headerin(&mInfo,
+  int ret = th_decode_headerin(&mTheoraInfo,
                                &mComment,
                                &mSetup,
                                aPacket);
@@ -403,7 +440,7 @@ TheoraState::Time(int64_t granulepos)
   if (!mActive) {
     return -1;
   }
-  return TheoraState::Time(&mInfo, granulepos);
+  return TheoraState::Time(&mTheoraInfo, granulepos);
 }
 
 bool
@@ -440,26 +477,26 @@ TheoraState::Time(th_info* aInfo, int64_t aGranulepos)
 
 int64_t TheoraState::StartTime(int64_t granulepos)
 {
-  if (granulepos < 0 || !mActive || mInfo.fps_numerator == 0) {
+  if (granulepos < 0 || !mActive || mTheoraInfo.fps_numerator == 0) {
     return -1;
   }
   CheckedInt64 t =
     (CheckedInt64(th_granule_frame(mCtx, granulepos)) * USECS_PER_S)
-    * mInfo.fps_denominator;
+    * mTheoraInfo.fps_denominator;
   if (!t.isValid()) {
     return -1;
   }
-  return t.value() / mInfo.fps_numerator;
+  return t.value() / mTheoraInfo.fps_numerator;
 }
 
 int64_t
 TheoraState::PacketDuration(ogg_packet* aPacket)
 {
-  if (!mActive || mInfo.fps_numerator == 0) {
+  if (!mActive || mTheoraInfo.fps_numerator == 0) {
     return -1;
   }
-  CheckedInt64 t =
-    SaferMultDiv(mInfo.fps_denominator, USECS_PER_S, mInfo.fps_numerator);
+  CheckedInt64 t = SaferMultDiv(mTheoraInfo.fps_denominator, USECS_PER_S,
+                                mTheoraInfo.fps_numerator);
   return t.isValid() ? t.value() : -1;
 }
 
@@ -474,10 +511,11 @@ TheoraState::MaxKeyframeOffset()
   int64_t frameDuration;
 
   // Max number of frames keyframe could possibly be offset.
-  int64_t keyframeDiff = (1 << mInfo.keyframe_granule_shift) - 1;
+  int64_t keyframeDiff = (1 << mTheoraInfo.keyframe_granule_shift) - 1;
 
   // Length of frame in usecs.
-  frameDuration = (mInfo.fps_denominator * USECS_PER_S) / mInfo.fps_numerator;
+  frameDuration =
+    (mTheoraInfo.fps_denominator * USECS_PER_S) / mTheoraInfo.fps_numerator;
 
   // Total time in usecs keyframe can be offset from any given frame.
   return frameDuration * keyframeDiff;
@@ -549,8 +587,8 @@ TheoraState::ReconstructTheoraGranulepos()
   // frames. Granulepos are stored as ((keyframe<<shift)+offset). We
   // know the granulepos of the last frame in the list, so we can infer
   // the granulepos of the intermediate frames using their frame numbers.
-  ogg_int64_t shift = mInfo.keyframe_granule_shift;
-  ogg_int64_t version_3_2_1 = TheoraVersion(&mInfo,3,2,1);
+  ogg_int64_t shift = mTheoraInfo.keyframe_granule_shift;
+  ogg_int64_t version_3_2_1 = TheoraVersion(&mTheoraInfo,3,2,1);
   ogg_int64_t lastFrame = th_granule_frame(mCtx,
                                            lastGranulepos) + version_3_2_1;
   ogg_int64_t firstFrame = lastFrame - mUnstamped.Length() + 1;
@@ -623,6 +661,7 @@ VorbisState::Reset()
   if (mActive && vorbis_synthesis_restart(&mDsp) != 0) {
     res = NS_ERROR_FAILURE;
   }
+  mHeaders.Erase();
   if (NS_FAILED(OggCodecState::Reset())) {
     return NS_ERROR_FAILURE;
   }
@@ -639,7 +678,7 @@ VorbisState::VorbisState(ogg_page* aBosPage)
   , mGranulepos(0)
 {
   MOZ_COUNT_CTOR(VorbisState);
-  vorbis_info_init(&mInfo);
+  vorbis_info_init(&mVorbisInfo);
   vorbis_comment_init(&mComment);
   memset(&mDsp, 0, sizeof(vorbis_dsp_state));
   memset(&mBlock, 0, sizeof(vorbis_block));
@@ -651,16 +690,16 @@ VorbisState::~VorbisState()
   Reset();
   vorbis_block_clear(&mBlock);
   vorbis_dsp_clear(&mDsp);
-  vorbis_info_clear(&mInfo);
+  vorbis_info_clear(&mVorbisInfo);
   vorbis_comment_clear(&mComment);
 }
 
 bool
 VorbisState::DecodeHeader(ogg_packet* aPacket)
 {
-  nsAutoRef<ogg_packet> autoRelease(aPacket);
+  mHeaders.Append(aPacket);
   mPacketCount++;
-  int ret = vorbis_synthesis_headerin(&mInfo,
+  int ret = vorbis_synthesis_headerin(&mVorbisInfo,
                                       &mComment,
                                       aPacket);
   // We must determine when we've read the last header packet.
@@ -686,11 +725,12 @@ VorbisState::DecodeHeader(ogg_packet* aPacket)
     // header packets. Assume bad input. Our caller will deactivate the
     // bitstream.
     return false;
-  } else if (ret == 0 && isSetupHeader && mPacketCount == 3) {
+  } else if (!ret && isSetupHeader && mPacketCount == 3) {
     // Successfully read the three header packets.
     // The bitstream remains active.
     mDoneReadingHeaders = true;
   }
+
   return true;
 }
 
@@ -701,7 +741,7 @@ VorbisState::Init()
     return false;
   }
 
-  int ret = vorbis_synthesis_init(&mDsp, &mInfo);
+  int ret = vorbis_synthesis_init(&mDsp, &mVorbisInfo);
   if (ret != 0) {
     NS_WARNING("vorbis_synthesis_init() failed initializing vorbis bitstream");
     return mActive = false;
@@ -714,6 +754,24 @@ VorbisState::Init()
     }
     return mActive = false;
   }
+
+  nsTArray<const unsigned char*> headers;
+  nsTArray<size_t> headerLens;
+  for (size_t i = 0; i < mHeaders.Length(); i++) {
+    headers.AppendElement(mHeaders[i]->packet);
+    headerLens.AppendElement(mHeaders[i]->bytes);
+  }
+  // Save header packets for the decoder
+  if (!XiphHeadersToExtradata(mInfo.mCodecSpecificConfig,
+                              headers, headerLens)) {
+    return mActive = false;
+  }
+  mHeaders.Erase();
+  mInfo.mMimeType = NS_LITERAL_CSTRING("audio/vorbis");
+  mInfo.mRate = mVorbisInfo.rate;
+  mInfo.mChannels = mVorbisInfo.channels;
+  mInfo.mBitDepth = 16;
+
   return true;
 }
 
@@ -724,7 +782,7 @@ VorbisState::Time(int64_t granulepos)
     return -1;
   }
 
-  return VorbisState::Time(&mInfo, granulepos);
+  return VorbisState::Time(&mVorbisInfo, granulepos);
 }
 
 int64_t
@@ -830,12 +888,12 @@ VorbisState::ReconstructVorbisGranulepos()
   // each packet.
 
   NS_ASSERTION(mUnstamped.Length() > 0, "Length must be > 0");
-  ogg_packet* last = mUnstamped[mUnstamped.Length()-1];
+  ogg_packet* last = mUnstamped.LastElement();
   NS_ASSERTION(last->e_o_s || last->granulepos >= 0,
     "Must know last granulepos!");
   if (mUnstamped.Length() == 1) {
     ogg_packet* packet = mUnstamped[0];
-    long blockSize = vorbis_packet_blocksize(&mInfo, packet);
+    long blockSize = vorbis_packet_blocksize(&mVorbisInfo, packet);
     if (blockSize < 0) {
       // On failure vorbis_packet_blocksize returns < 0. If we've got
       // a bad packet, we just assume that decode will have to skip this
@@ -866,8 +924,8 @@ VorbisState::ReconstructVorbisGranulepos()
     ogg_packet* prev = mUnstamped[i-1];
     ogg_int64_t granulepos = packet->granulepos;
     NS_ASSERTION(granulepos != -1, "Must know granulepos!");
-    long prevBlockSize = vorbis_packet_blocksize(&mInfo, prev);
-    long blockSize = vorbis_packet_blocksize(&mInfo, packet);
+    long prevBlockSize = vorbis_packet_blocksize(&mVorbisInfo, prev);
+    long blockSize = vorbis_packet_blocksize(&mVorbisInfo, packet);
 
     if (blockSize < 0 || prevBlockSize < 0) {
       // On failure vorbis_packet_blocksize returns < 0. If we've got
@@ -891,7 +949,7 @@ VorbisState::ReconstructVorbisGranulepos()
   }
 
   ogg_packet* first = mUnstamped[0];
-  long blockSize = vorbis_packet_blocksize(&mInfo, first);
+  long blockSize = vorbis_packet_blocksize(&mVorbisInfo, first);
   if (blockSize < 0) {
     mPrevVorbisBlockSize = 0;
     blockSize = 0;
@@ -917,7 +975,7 @@ VorbisState::ReconstructVorbisGranulepos()
 #endif
   }
 
-  mPrevVorbisBlockSize = vorbis_packet_blocksize(&mInfo, last);
+  mPrevVorbisBlockSize = vorbis_packet_blocksize(&mVorbisInfo, last);
   mPrevVorbisBlockSize = std::max(static_cast<long>(0), mPrevVorbisBlockSize);
   mGranulepos = last->granulepos;
 
@@ -928,7 +986,6 @@ OpusState::OpusState(ogg_page* aBosPage)
   : OggCodecState(aBosPage, true)
   , mParser(nullptr)
   , mDecoder(nullptr)
-  , mSkip(0)
   , mPrevPacketGranulepos(0)
   , mPrevPageGranulepos(0)
 {
@@ -960,8 +1017,6 @@ OpusState::Reset(bool aStart)
   if (mActive && mDecoder) {
     // Reset the decoder.
     opus_multistream_decoder_ctl(mDecoder, OPUS_RESET_STATE);
-    // Let the seek logic handle pre-roll if we're not seeking to the start.
-    mSkip = aStart ? mParser->mPreSkip : 0;
     // This lets us distinguish the first page being the last page vs. just
     // not having processed the previous page when we encounter the last page.
     mPrevPageGranulepos = aStart ? 0 : -1;
@@ -973,7 +1028,7 @@ OpusState::Reset(bool aStart)
     return NS_ERROR_FAILURE;
   }
 
-  LOG(LogLevel::Debug, ("Opus decoder reset, to skip %d", mSkip));
+  LOG(LogLevel::Debug, ("Opus decoder reset"));
 
   return res;
 }
@@ -996,9 +1051,20 @@ OpusState::Init(void)
                                              mParser->mMappingTable,
                                              &error);
 
-  mSkip = mParser->mPreSkip;
-
-  LOG(LogLevel::Debug, ("Opus decoder init, to skip %d", mSkip));
+  mInfo.mMimeType = NS_LITERAL_CSTRING("audio/opus");
+  mInfo.mRate = mParser->mRate;
+  mInfo.mChannels = mParser->mChannels;
+  mInfo.mBitDepth = 16;
+  // Save preskip & the first header packet for the Opus decoder
+  OpusDataDecoder::AppendCodecDelay(mInfo.mCodecSpecificConfig,
+                                    Time(0, mParser->mPreSkip));
+  if (!mHeaders.PeekFront()) {
+    return false;
+  }
+  mInfo.mCodecSpecificConfig->AppendElements(mHeaders.PeekFront()->packet,
+                                             mHeaders.PeekFront()->bytes);
+  mHeaders.Erase();
+  LOG(LogLevel::Debug, ("Opus decoder init"));
 
   return error == OPUS_OK;
 }
@@ -1014,14 +1080,7 @@ OpusState::DecodeHeader(ogg_packet* aPacket)
       if (!mParser->DecodeHeader(aPacket->packet, aPacket->bytes)) {
         return false;
       }
-      mRate = mParser->mRate;
-      mChannels = mParser->mChannels;
-      mPreSkip = mParser->mPreSkip;
-#ifdef MOZ_SAMPLE_TYPE_FLOAT32
-      mGain = mParser->mGain;
-#else
-      mGain_Q16 = mParser->mGain_Q16;
-#endif
+      mHeaders.Append(autoRelease.disown());
       break;
 
     // Parse the metadata header.
@@ -1144,7 +1203,7 @@ bool
 OpusState::ReconstructOpusGranulepos(void)
 {
   NS_ASSERTION(mUnstamped.Length() > 0, "Must have unstamped packets");
-  ogg_packet* last = mUnstamped[mUnstamped.Length()-1];
+  ogg_packet* last = mUnstamped.LastElement();
   NS_ASSERTION(last->e_o_s || last->granulepos > 0,
       "Must know last granulepos!");
   int64_t gp;
@@ -1154,7 +1213,7 @@ OpusState::ReconstructOpusGranulepos(void)
     if (mPrevPageGranulepos != -1) {
       // If this file only has one page and the final granule position is
       // smaller than the pre-skip amount, we MUST reject the stream.
-      if (!mDoneReadingHeaders && last->granulepos < mPreSkip)
+      if (!mDoneReadingHeaders && last->granulepos < mParser->mPreSkip)
         return false;
       int64_t last_gp = last->granulepos;
       gp = mPrevPageGranulepos;
@@ -1227,6 +1286,166 @@ OpusState::ReconstructOpusGranulepos(void)
     return false;
   }
   mPrevPageGranulepos = last->granulepos;
+  return true;
+}
+
+already_AddRefed<MediaRawData>
+OpusState::PacketOutAsMediaRawData()
+{
+  ogg_packet* packet = PacketPeek();
+  if (!packet) {
+    return nullptr;
+  }
+
+  uint32_t frames = 0;
+  const int64_t endFrame = packet->granulepos;
+
+  if (packet->e_o_s) {
+    frames = GetOpusDeltaGP(packet);
+  }
+
+  RefPtr<MediaRawData> data = OggCodecState::PacketOutAsMediaRawData();
+
+  if (data->mEOS && mPrevPacketGranulepos != -1) {
+    // If this is the last packet, perform end trimming.
+    int64_t startFrame = mPrevPacketGranulepos;
+    frames -= std::max<int64_t>(
+      0, std::min(endFrame - startFrame, static_cast<int64_t>(frames)));
+    data->mDiscardPadding = frames;
+  }
+
+  // Save this packet's granule position in case we need to perform end
+  // trimming on the next packet.
+  mPrevPacketGranulepos = endFrame;
+
+  return data.forget();
+}
+
+FlacState::FlacState(ogg_page* aBosPage)
+  : OggCodecState(aBosPage, true)
+{
+}
+
+bool
+FlacState::DecodeHeader(ogg_packet* aPacket)
+{
+  nsAutoRef<ogg_packet> autoRelease(aPacket);
+
+  if (!mParser.DecodeHeaderBlock(aPacket->packet, aPacket->bytes)) {
+    return false;
+  }
+  if (mParser.HasFullMetadata()) {
+    mDoneReadingHeaders = true;
+  }
+  return true;
+}
+
+int64_t
+FlacState::Time(int64_t granulepos)
+{
+  if (!mParser.mInfo.IsValid()) {
+    return -1;
+  }
+  CheckedInt64 t =
+      SaferMultDiv(granulepos, USECS_PER_S, mParser.mInfo.mRate);
+  if (!t.isValid()) {
+    return -1;
+  }
+  return t.value();
+}
+
+int64_t
+FlacState::PacketDuration(ogg_packet* aPacket)
+{
+  return mParser.BlockDuration(aPacket->packet, aPacket->bytes);
+}
+
+bool
+FlacState::IsHeader(ogg_packet* aPacket)
+{
+  return mParser.IsHeaderBlock(aPacket->packet, aPacket->bytes);
+}
+
+nsresult
+FlacState::PageIn(ogg_page* aPage)
+{
+  if (!mActive) {
+    return NS_OK;
+  }
+  NS_ASSERTION(static_cast<uint32_t>(ogg_page_serialno(aPage)) == mSerial,
+               "Page must be for this stream!");
+  if (ogg_stream_pagein(&mState, aPage) == -1)
+    return NS_ERROR_FAILURE;
+  bool foundGp;
+  nsresult res = PacketOutUntilGranulepos(foundGp);
+  if (NS_FAILED(res)) {
+    return res;
+  }
+  if (foundGp && mDoneReadingHeaders) {
+    // We've found a packet with a granulepos, and we've loaded our metadata
+    // and initialized our decoder. Determine granulepos of buffered packets.
+    ReconstructFlacGranulepos();
+    for (uint32_t i = 0; i < mUnstamped.Length(); ++i) {
+      ogg_packet* packet = mUnstamped[i];
+      NS_ASSERTION(!IsHeader(packet), "Don't try to recover header packet gp");
+      NS_ASSERTION(packet->granulepos != -1, "Packet must have gp by now");
+      mPackets.Append(packet);
+    }
+    mUnstamped.Clear();
+  }
+  return NS_OK;
+}
+
+// Return a hash table with tag metadata.
+MetadataTags*
+FlacState::GetTags()
+{
+  return mParser.GetTags();
+}
+
+const TrackInfo*
+FlacState::GetInfo() const
+{
+  return &mParser.mInfo;
+}
+
+bool
+FlacState::ReconstructFlacGranulepos(void)
+{
+  NS_ASSERTION(mUnstamped.Length() > 0, "Must have unstamped packets");
+  ogg_packet* last = mUnstamped.LastElement();
+  NS_ASSERTION(last->e_o_s || last->granulepos > 0,
+      "Must know last granulepos!");
+  int64_t gp;
+
+  gp = last->granulepos;
+  // Loop through the packets backwards, subtracting the next
+  // packet's duration from its granulepos to get the value
+  // for the current packet.
+  for (uint32_t i = mUnstamped.Length() - 1; i > 0; i--) {
+    int offset =
+        mParser.BlockDuration(mUnstamped[i]->packet, mUnstamped[i]->bytes);
+    // Check for error (negative offset) and overflow.
+    if (offset >= 0) {
+      if (offset <= gp) {
+        gp -= offset;
+      } else {
+        // If the granule position of the first data page is smaller than the
+        // number of decodable audio samples on that page, then we MUST reject
+        // the stream.
+        if (!mDoneReadingHeaders) {
+          return false;
+        }
+        // It's too late to reject the stream.
+        // If we get here, this almost certainly means the file has screwed-up
+        // timestamps somewhere after the first page.
+        NS_WARNING("Clamping negative granulepos to zero.");
+        gp = 0;
+      }
+    }
+    mUnstamped[i - 1]->granulepos = gp;
+  }
+
   return true;
 }
 
@@ -1665,7 +1884,6 @@ SkeletonState::DecodeHeader(ogg_packet* aPacket)
   }
   return true;
 }
-
 
 } // namespace mozilla
 

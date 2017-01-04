@@ -51,7 +51,7 @@
 #ifdef XP_WIN
 #include "nsCExternalHandlerService.h"
 #include "nsEscape.h"
-#include "nsIMimeInfo.h"
+#include "nsIMIMEInfo.h"
 #include "nsIMIMEService.h"
 #include "nsIURL.h"
 #include "nsReadableUtils.h"
@@ -255,7 +255,8 @@ SelectionCopyHelper(nsISelection *aSel, nsIDocument *aDoc,
         nsIURI *uri = aDoc->GetDocumentURI();
         if (uri) {
           nsAutoCString spec;
-          uri->GetSpec(spec);
+          nsresult rv = uri->GetSpec(spec);
+          NS_ENSURE_SUCCESS(rv, rv);
           if (!spec.IsEmpty()) {
             nsAutoString shortcut;
             AppendUTF8toUTF16(spec, shortcut);
@@ -305,6 +306,15 @@ nsCopySupport::HTMLCopy(nsISelection* aSel, nsIDocument* aDoc,
     flags |= nsIDocumentEncoder::OutputRubyAnnotation;
   }
   return SelectionCopyHelper(aSel, aDoc, true, aClipboardID, flags, nullptr);
+}
+
+nsresult
+nsCopySupport::ClearSelectionCache()
+{
+  nsresult rv;
+  nsCOMPtr<nsIClipboard> clipboard = do_GetService(kCClipboardCID, &rv);
+  clipboard->EmptyClipboard(nsIClipboard::kSelectionCache);
+  return rv;
 }
 
 nsresult
@@ -536,7 +546,8 @@ static nsresult AppendDOMNode(nsITransferable *aTransferable,
   // Note that XHTML is not counted as HTML here, because we can't copy it
   // properly (all the copy code for non-plaintext assumes using HTML
   // serializers and parsers is OK, and those mess up XHTML).
-  nsCOMPtr<nsIHTMLDocument> htmlDoc = do_QueryInterface(document, &rv);
+  DebugOnly<nsCOMPtr<nsIHTMLDocument>> htmlDoc =
+    nsCOMPtr<nsIHTMLDocument>(do_QueryInterface(document, &rv));
   NS_ENSURE_SUCCESS(rv, NS_OK);
 
   NS_ENSURE_TRUE(document->IsHTMLDocument(), NS_OK);
@@ -578,6 +589,15 @@ static nsresult AppendImagePromise(nsITransferable* aTransferable,
   nsresult rv;
 
   NS_ENSURE_TRUE(aImgRequest, NS_OK);
+
+  uint32_t imageStatus;
+  rv = aImgRequest->GetImageStatus(&imageStatus);
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (!(imageStatus & imgIRequest::STATUS_FRAME_COMPLETE) ||
+      (imageStatus & imgIRequest::STATUS_ERROR)) {
+    return NS_OK;
+  }
+
   nsCOMPtr<nsINode> node = do_QueryInterface(aImageElement, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 

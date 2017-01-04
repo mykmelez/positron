@@ -61,7 +61,6 @@
 #include "nsIDOMMutationEvent.h"
 #include "nsIDOMNodeList.h"
 #include "nsIEditor.h"
-#include "nsIEditorIMESupport.h"
 #include "nsILinkHandler.h"
 #include "mozilla/dom/NodeInfo.h"
 #include "mozilla/dom/NodeInfoInlines.h"
@@ -86,7 +85,6 @@
 #include "nsRuleProcessorData.h"
 #include "nsString.h"
 #include "nsStyleConsts.h"
-#include "nsSVGFeatures.h"
 #include "nsSVGUtils.h"
 #include "nsTextNode.h"
 #include "nsUnicharUtils.h"
@@ -107,6 +105,10 @@
 #include "GeometryUtils.h"
 #include "nsIAnimationObserver.h"
 #include "nsChildContentList.h"
+
+#ifdef ACCESSIBILITY
+#include "mozilla/dom/AccessibleNode.h"
+#endif
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -475,14 +477,6 @@ nsINode::GetParentNode(nsIDOMNode** aParentNode)
 }
 
 nsresult
-nsINode::GetParentElement(nsIDOMElement** aParentElement)
-{
-  *aParentElement = nullptr;
-  nsINode* parent = GetParentElement();
-  return parent ? CallQueryInterface(parent, aParentElement) : NS_OK;
-}
-
-nsresult
 nsINode::GetChildNodes(nsIDOMNodeList** aChildNodes)
 {
   NS_ADDREF(*aChildNodes = ChildNodes());
@@ -684,26 +678,32 @@ nsINode::Normalize()
   }
 }
 
-void
+nsresult
 nsINode::GetBaseURI(nsAString &aURI) const
 {
   nsCOMPtr<nsIURI> baseURI = GetBaseURI();
 
   nsAutoCString spec;
   if (baseURI) {
-    baseURI->GetSpec(spec);
+    nsresult rv = baseURI->GetSpec(spec);
+    NS_ENSURE_SUCCESS(rv, rv);
   }
 
   CopyUTF8toUTF16(spec, aURI);
+  return NS_OK;
 }
 
 void
-nsINode::GetBaseURIFromJS(nsAString& aURI) const
+nsINode::GetBaseURIFromJS(nsAString& aURI, ErrorResult& aRv) const
 {
   nsCOMPtr<nsIURI> baseURI = GetBaseURI(nsContentUtils::IsCallerChrome());
   nsAutoCString spec;
   if (baseURI) {
-    baseURI->GetSpec(spec);
+    nsresult res = baseURI->GetSpec(spec);
+    if (NS_FAILED(res)) {
+      aRv.Throw(res);
+      return;
+    }
   }
   CopyUTF8toUTF16(spec, aURI);
 }
@@ -1230,7 +1230,7 @@ nsINode::RemoveEventListener(const nsAString& aType,
 NS_IMPL_REMOVE_SYSTEM_EVENT_LISTENER(nsINode)
 
 nsresult
-nsINode::PreHandleEvent(EventChainPreVisitor& aVisitor)
+nsINode::GetEventTargetParent(EventChainPreVisitor& aVisitor)
 {
   // This is only here so that we can use the NS_DECL_NSIDOMTARGET macro
   NS_ABORT();
@@ -1531,8 +1531,7 @@ static nsresult
 CheckForOutdatedParent(nsINode* aParent, nsINode* aNode)
 {
   if (JSObject* existingObjUnrooted = aNode->GetWrapper()) {
-    JSRuntime* runtime = JS_GetObjectRuntime(existingObjUnrooted);
-    JS::Rooted<JSObject*> existingObj(runtime, existingObjUnrooted);
+    JS::Rooted<JSObject*> existingObj(RootingCx(), existingObjUnrooted);
 
     AutoJSContext cx;
     nsIGlobalObject* global = aParent->OwnerDoc()->GetScopeObject();
@@ -1754,7 +1753,8 @@ nsINode::Before(const Sequence<OwningNodeOrString>& aNodes,
     return;
   }
 
-  nsINode* viablePreviousSibling = FindViablePreviousSibling(*this, aNodes);
+  nsCOMPtr<nsINode> viablePreviousSibling =
+    FindViablePreviousSibling(*this, aNodes);
 
   nsCOMPtr<nsINode> node =
     ConvertNodesOrStringsIntoNode(aNodes, OwnerDoc(), aRv);
@@ -1777,7 +1777,7 @@ nsINode::After(const Sequence<OwningNodeOrString>& aNodes,
     return;
   }
 
-  nsINode* viableNextSibling = FindViableNextSibling(*this, aNodes);
+  nsCOMPtr<nsINode> viableNextSibling = FindViableNextSibling(*this, aNodes);
 
   nsCOMPtr<nsINode> node =
     ConvertNodesOrStringsIntoNode(aNodes, OwnerDoc(), aRv);
@@ -1797,7 +1797,7 @@ nsINode::ReplaceWith(const Sequence<OwningNodeOrString>& aNodes,
     return;
   }
 
-  nsINode* viableNextSibling = FindViableNextSibling(*this, aNodes);
+  nsCOMPtr<nsINode> viableNextSibling = FindViableNextSibling(*this, aNodes);
 
   nsCOMPtr<nsINode> node =
     ConvertNodesOrStringsIntoNode(aNodes, OwnerDoc(), aRv);
@@ -1865,7 +1865,8 @@ nsINode::Prepend(const Sequence<OwningNodeOrString>& aNodes,
     return;
   }
 
-  InsertBefore(*node, mFirstChild, aRv);
+  nsCOMPtr<nsINode> refNode = mFirstChild;
+  InsertBefore(*node, refNode, aRv);
 }
 
 void
@@ -2498,49 +2499,6 @@ nsINode::ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
   return result;
 }
 
-nsresult
-nsINode::ReplaceOrInsertBefore(bool aReplace, nsIDOMNode *aNewChild,
-                               nsIDOMNode *aRefChild, nsIDOMNode **aReturn)
-{
-  nsCOMPtr<nsINode> newChild = do_QueryInterface(aNewChild);
-  if (!newChild) {
-    return NS_ERROR_NULL_POINTER;
-  }
-
-  if (aReplace && !aRefChild) {
-    return NS_ERROR_NULL_POINTER;
-  }
-
-  nsCOMPtr<nsINode> refChild = do_QueryInterface(aRefChild);
-  if (aRefChild && !refChild) {
-    return NS_NOINTERFACE;
-  }
-
-  ErrorResult rv;
-  nsINode* result = ReplaceOrInsertBefore(aReplace, newChild, refChild, rv);
-  if (result) {
-    NS_ADDREF(*aReturn = result->AsDOMNode());
-  }
-  return rv.StealNSResult();
-}
-
-nsresult
-nsINode::CompareDocumentPosition(nsIDOMNode* aOther, uint16_t* aReturn)
-{
-  nsCOMPtr<nsINode> other = do_QueryInterface(aOther);
-  NS_ENSURE_ARG(other);
-  *aReturn = CompareDocumentPosition(*other);
-  return NS_OK;
-}
-
-nsresult
-nsINode::IsEqualNode(nsIDOMNode* aOther, bool* aReturn)
-{
-  nsCOMPtr<nsINode> other = do_QueryInterface(aOther);
-  *aReturn = IsEqualNode(other);
-  return NS_OK;
-}
-
 void
 nsINode::BindObject(nsISupports* aObject)
 {
@@ -2578,6 +2536,17 @@ nsINode::GetBoundMutationObservers(nsTArray<RefPtr<nsDOMMutationObserver> >& aRe
       }
     }
   }
+}
+
+already_AddRefed<AccessibleNode>
+nsINode::GetAccessibleNode()
+{
+#ifdef ACCESSIBILITY
+  RefPtr<AccessibleNode> anode = new AccessibleNode(this);
+  return anode.forget();
+#endif
+
+  return nullptr;
 }
 
 size_t
@@ -2655,14 +2624,6 @@ nsINode::Contains(const nsINode* aOther) const
   return nsContentUtils::ContentIsDescendantOf(other, this);
 }
 
-nsresult
-nsINode::Contains(nsIDOMNode* aOther, bool* aReturn)
-{
-  nsCOMPtr<nsINode> node = do_QueryInterface(aOther);
-  *aReturn = Contains(node);
-  return NS_OK;
-}
-
 uint32_t
 nsINode::Length() const
 {
@@ -2693,7 +2654,10 @@ nsINode::ParseSelectorList(const nsAString& aSelectorString,
   if (haveCachedList) {
     if (!selectorList) {
       // Invalid selector.
-      aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
+      aRv.ThrowDOMException(NS_ERROR_DOM_SYNTAX_ERR,
+        NS_LITERAL_CSTRING("'") + NS_ConvertUTF16toUTF8(aSelectorString) +
+        NS_LITERAL_CSTRING("' is not a valid selector")
+      );
     }
     return selectorList;
   }
@@ -2710,6 +2674,13 @@ nsINode::ParseSelectorList(const nsAString& aSelectorString,
     // of selectors, but it sees if we can parse them first.)
     MOZ_ASSERT(aRv.ErrorCodeIs(NS_ERROR_DOM_SYNTAX_ERR),
                "Unexpected error, so cached version won't return it");
+
+    // Change the error message to match above.
+    aRv.ThrowDOMException(NS_ERROR_DOM_SYNTAX_ERR,
+      NS_LITERAL_CSTRING("'") + NS_ConvertUTF16toUTF8(aSelectorString) +
+      NS_LITERAL_CSTRING("' is not a valid selector")
+    );
+
     cache.CacheList(aSelectorString, nullptr);
     return nullptr;
   }
@@ -2907,27 +2878,6 @@ nsINode::QuerySelectorAll(const nsAString& aSelector, ErrorResult& aResult)
   }
 
   return contentList.forget();
-}
-
-nsresult
-nsINode::QuerySelector(const nsAString& aSelector, nsIDOMElement **aReturn)
-{
-  ErrorResult rv;
-  Element* result = nsINode::QuerySelector(aSelector, rv);
-  if (rv.Failed()) {
-    return rv.StealNSResult();
-  }
-  nsCOMPtr<nsIDOMElement> elt = do_QueryInterface(result);
-  elt.forget(aReturn);
-  return NS_OK;
-}
-
-nsresult
-nsINode::QuerySelectorAll(const nsAString& aSelector, nsIDOMNodeList **aReturn)
-{
-  ErrorResult rv;
-  *aReturn = nsINode::QuerySelectorAll(aSelector, rv).take();
-  return rv.StealNSResult();
 }
 
 Element*

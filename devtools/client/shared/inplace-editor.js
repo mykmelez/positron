@@ -23,9 +23,9 @@
 
 "use strict";
 
-const {Ci, Cc} = require("chrome");
 const Services = require("Services");
 const focusManager = Services.focus;
+const {KeyCodes} = require("devtools/client/shared/keycodes");
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const CONTENT_TYPES = {
@@ -42,13 +42,12 @@ const MAX_POPUP_ENTRIES = 500;
 const FOCUS_FORWARD = focusManager.MOVEFOCUS_FORWARD;
 const FOCUS_BACKWARD = focusManager.MOVEFOCUS_BACKWARD;
 
-const { XPCOMUtils } = require("resource://gre/modules/XPCOMUtils.jsm");
 const EventEmitter = require("devtools/shared/event-emitter");
 const { findMostRelevantCssPropertyIndex } = require("./suggestion-picker");
 
 /**
  * Helper to check if the provided key matches one of the expected keys.
- * Keys will be prefixed with DOM_VK_ and should match a key in nsIDOMKeyEvent.
+ * Keys will be prefixed with DOM_VK_ and should match a key in KeyCodes.
  *
  * @param {String} key
  *        the key to check (can be a keyCode).
@@ -58,7 +57,7 @@ const { findMostRelevantCssPropertyIndex } = require("./suggestion-picker");
  */
 function isKeyIn(key, ...keys) {
   return keys.some(expectedKey => {
-    return key === Ci.nsIDOMKeyEvent["DOM_VK_" + expectedKey];
+    return key === KeyCodes["DOM_VK_" + expectedKey];
   });
 }
 
@@ -89,6 +88,8 @@ function isKeyIn(key, ...keys) {
  *       This function is called before the editor has been torn down.
  *    {Function} destroy:
  *       Called when the editor is destroyed and has been torn down.
+ *    {Function} contextMenu:
+ *       Called when the user triggers a contextmenu event on the input.
  *    {Object} advanceChars:
  *       This can be either a string or a function.
  *       If it is a string, then if any characters in it are typed,
@@ -223,6 +224,7 @@ function InplaceEditor(options, event) {
   this.cssProperties = options.cssProperties;
   this.change = options.change;
   this.done = options.done;
+  this.contextMenu = options.contextMenu;
   this.destroy = options.destroy;
   this.initial = options.initial ? options.initial : this.elt.textContent;
   this.multiline = options.multiline || false;
@@ -250,6 +252,7 @@ function InplaceEditor(options, event) {
   this._onInput = this._onInput.bind(this);
   this._onKeyup = this._onKeyup.bind(this);
   this._onAutocompletePopupClick = this._onAutocompletePopupClick.bind(this);
+  this._onContextMenu = this._onContextMenu.bind(this);
 
   this._createInput();
 
@@ -291,6 +294,7 @@ function InplaceEditor(options, event) {
   this.input.addEventListener("dblclick", this._stopEventPropagation, false);
   this.input.addEventListener("click", this._stopEventPropagation, false);
   this.input.addEventListener("mousedown", this._stopEventPropagation, false);
+  this.input.addEventListener("contextmenu", this._onContextMenu, false);
   this.doc.defaultView.addEventListener("blur", this._onWindowBlur, false);
 
   this.validate = options.validate;
@@ -350,11 +354,10 @@ InplaceEditor.prototype = {
     this.input.removeEventListener("keypress", this._onKeyPress, false);
     this.input.removeEventListener("keyup", this._onKeyup, false);
     this.input.removeEventListener("input", this._onInput, false);
-    this.input.removeEventListener("dblclick", this._stopEventPropagation,
-      false);
+    this.input.removeEventListener("dblclick", this._stopEventPropagation, false);
     this.input.removeEventListener("click", this._stopEventPropagation, false);
-    this.input.removeEventListener("mousedown", this._stopEventPropagation,
-      false);
+    this.input.removeEventListener("mousedown", this._stopEventPropagation, false);
+    this.input.removeEventListener("contextmenu", this._onContextMenu, false);
     this.doc.defaultView.removeEventListener("blur", this._onWindowBlur, false);
 
     this._stopAutosize();
@@ -1165,6 +1168,12 @@ InplaceEditor.prototype = {
     }
   },
 
+  _onContextMenu: function (event) {
+    if (this.contextMenu) {
+      this.contextMenu(event);
+    }
+  },
+
   /**
    * Open the autocomplete popup, adding a custom click handler and classname.
    *
@@ -1466,7 +1475,7 @@ InplaceEditor.prototype = {
    * @return {Array} array of CSS property names (Strings)
    */
   _getCSSPropertyList: function () {
-    return CSSPropertyList;
+    return this.cssProperties.getNames().sort();
   },
 
   /**
@@ -1555,11 +1564,3 @@ function copyBoxModelStyles(from, to) {
 function moveFocus(win, direction) {
   return focusManager.moveFocus(win, null, direction, 0);
 }
-
-XPCOMUtils.defineLazyGetter(this, "CSSPropertyList", function () {
-  return domUtils.getCSSPropertyNames(domUtils.INCLUDE_ALIASES).sort();
-});
-
-XPCOMUtils.defineLazyGetter(this, "domUtils", function () {
-  return Cc["@mozilla.org/inspector/dom-utils;1"].getService(Ci.inIDOMUtils);
-});

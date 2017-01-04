@@ -6,23 +6,20 @@ from __future__ import absolute_import, print_function, unicode_literals
 
 import copy
 import logging
-import os
-import yaml
 
-from . import base
-from taskgraph.util.python_path import find_object
-from taskgraph.transforms.base import TransformSequence, TransformConfig
+from . import transform
+from ..util.yaml import load_yaml
 
 logger = logging.getLogger(__name__)
 
 
-class TestTask(base.Task):
+class TestTask(transform.TransformTask):
     """
     A task implementing a Gecko test.
     """
 
     @classmethod
-    def load_tasks(cls, kind, path, config, params, loaded_tasks):
+    def get_inputs(cls, kind, path, config, params, loaded_tasks):
 
         # the kind on which this one depends
         if len(config.get('kind-dependencies', [])) != 1:
@@ -43,33 +40,18 @@ class TestTask(base.Task):
         # load the test descriptions
         test_descriptions = load_yaml(path, 'tests.yml')
 
-        # load the transformation functions
-        transforms = cls.load_transforms(config['transforms'])
-
         # generate all tests for all test platforms
-        def tests():
-            for test_platform_name, test_platform in test_platforms.iteritems():
-                for test_name in test_platform['test-names']:
-                    test = copy.deepcopy(test_descriptions[test_name])
-                    test['build-platform'] = test_platform['build-platform']
-                    test['test-platform'] = test_platform_name
-                    test['build-label'] = test_platform['build-label']
-                    test['test-name'] = test_name
-                    yield test
+        for test_platform_name, test_platform in test_platforms.iteritems():
+            for test_name in test_platform['test-names']:
+                test = copy.deepcopy(test_descriptions[test_name])
+                test['build-platform'] = test_platform['build-platform']
+                test['test-platform'] = test_platform_name
+                test['build-label'] = test_platform['build-label']
+                test['test-name'] = test_name
 
-        # log each source test definition as it is created; this helps when debugging
-        # an exception in task generation
-        def log_tests(config, tests):
-            for test in tests:
                 logger.debug("Generating tasks for {} test {} on platform {}".format(
-                    kind, test['test-name'], test['test-platform']))
+                    kind, test_name, test['test-platform']))
                 yield test
-        transforms = TransformSequence([log_tests] + transforms)
-
-        # perform the transformations
-        config = TransformConfig(kind, path, config, params)
-        tasks = [cls(config.kind, t) for t in transforms(config, tests())]
-        return tasks
 
     @classmethod
     def get_builds_by_platform(cls, dep_kind, loaded_tasks):
@@ -79,9 +61,6 @@ class TestTask(base.Task):
         builds_by_platform = {}
         for task in loaded_tasks:
             if task.kind != dep_kind:
-                continue
-            # remove this check when builds are no longer legacy
-            if task.attributes['legacy_kind'] != 'build':
                 continue
 
             build_platform = task.attributes.get('build_platform')
@@ -108,10 +87,10 @@ class TestTask(base.Task):
                         build_platform, test_platform))
                 continue
             test_platforms[test_platform] = {
-                'test-set': cfg['test-set'],
                 'build-platform': build_platform,
                 'build-label': builds_by_platform[build_platform],
             }
+            test_platforms[test_platform].update(cfg)
         return test_platforms
 
     @classmethod
@@ -122,44 +101,14 @@ class TestTask(base.Task):
         names."""
         rv = {}
         for test_platform, cfg in test_platforms.iteritems():
-            test_set = cfg['test-set']
-            if test_set not in test_sets_cfg:
+            test_sets = cfg['test-sets']
+            if not set(test_sets) < set(test_sets_cfg):
                 raise Exception(
-                    "Test set '{}' for test platform {} is not defined".format(
-                        test_set, test_platform))
-            test_names = test_sets_cfg[test_set]
+                    "Test sets {} for test platform {} are not defined".format(
+                        ', '.join(test_sets), test_platform))
+            test_names = set()
+            for test_set in test_sets:
+                test_names.update(test_sets_cfg[test_set])
             rv[test_platform] = cfg.copy()
             rv[test_platform]['test-names'] = test_names
         return rv
-
-    @classmethod
-    def load_transforms(cls, transforms_cfg):
-        """Load the transforms specified in kind.yml"""
-        transforms = []
-        for path in transforms_cfg:
-            transform = find_object(path)
-            transforms.append(transform)
-        return transforms
-
-    @classmethod
-    def from_json(cls, task_dict):
-        test_task = cls(kind=task_dict['attributes']['kind'],
-                        task=task_dict)
-        return test_task
-
-    def __init__(self, kind, task):
-        self.dependencies = task['dependencies']
-        super(TestTask, self).__init__(kind, task['label'], task['attributes'], task['task'])
-
-    def get_dependencies(self, taskgraph):
-        return [(label, name) for name, label in self.dependencies.items()]
-
-    def optimize(self):
-        return False, None
-
-
-def load_yaml(path, name):
-    """Convenience method to load a YAML file in the kind directory"""
-    filename = os.path.join(path, name)
-    with open(filename, "rb") as f:
-        return yaml.load(f)

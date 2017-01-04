@@ -10,7 +10,8 @@
 
 /* Use only 1px separator between nav toolbox and page content */
 #navigator-toolbox::after {
-  background: linear-gradient(to top, var(--chrome-navigator-toolbox-separator-color), var(--chrome-navigator-toolbox-separator-color) 1px, transparent 1px);
+  border-top-style: none;
+  margin-top: -1px;
 }
 
 /* Include extra space on left/right for dragging since there is no space above
@@ -19,6 +20,11 @@
   padding-left: 50px;
   padding-right: 50px;
   margin-bottom: 0; /* Don't overlap the inner highlight at the top of the nav-bar */
+}
+
+/* Don't use the default background for tabs toolbar */
+#TabsToolbar {
+  -moz-appearance: none !important;
 }
 
 /* Get rid of 1px bright strip at the top of window */
@@ -30,16 +36,6 @@
 #main-window[tabsintitlebar] > #titlebar > #titlebar-content > #titlebar-buttonbox-container,
 #main-window[tabsintitlebar] > #titlebar > #titlebar-content > #titlebar-secondary-buttonbox > #titlebar-fullscreen-button {
   margin-top: 6px;
-}
-
-/* In private windows, the #titlebar-content is higher because of the
- * private browsing indicator. With the margin-top the titlebar buttons
- * align to the top correctly in that case, but only if we don't stretch
- * the box they're in because the container is too high, so we override
- * the default alignment value (stretch).
- */
-#main-window[tabsintitlebar] > #titlebar > #titlebar-content > #titlebar-buttonbox-container {
-  -moz-box-align: start;
 }
 
 /* Square back and forward buttons.  Need !important on these because there
@@ -96,16 +92,6 @@
   }
 }
 
-#forward-button:hover:active:not(:-moz-lwtheme) {
-  background-image: none;
-  box-shadow: none;
-}
-
-/* Don't use the default background for tabs toolbar */
-#TabsToolbar {
-  -moz-appearance: none !important;
-}
-
 /* Prevent the hover styling from on the identity icon from overlapping the
    urlbar border. */
 #identity-box {
@@ -115,15 +101,20 @@
   padding-bottom: 3px !important;
 }
 
+#PanelUI-button {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
 :root[devtoolstheme="dark"] .findbar-closebutton:not(:hover),
 /* Tab styling - make sure to use an inverted icon for the selected tab
    (brighttext only covers the unselected tabs) */
-.tab-close-button[visuallyselected=true]:not(:hover) {
+.tab-close-button[selected=true]:not(:hover) {
   -moz-image-region: rect(0, 64px, 16px, 48px);
 }
 @media (min-resolution: 2dppx) {
   :root[devtoolstheme="dark"] .findbar-closebutton:not(:hover),
-  .tab-close-button[visuallyselected=true]:not(:hover) {
+  .tab-close-button[selected=true]:not(:hover) {
     -moz-image-region: rect(0, 128px, 32px, 96px);
   }
 }

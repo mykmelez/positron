@@ -3,7 +3,6 @@ from __future__ import print_function, unicode_literals
 import abc
 import argparse
 import ast
-import fnmatch
 import json
 import os
 import re
@@ -12,10 +11,11 @@ import sys
 
 from collections import defaultdict
 
-from .. import localpaths
+from . import fnmatch
+from ..localpaths import repo_root
 
 from manifest.sourcefile import SourceFile
-from six import iteritems
+from six import iteritems, itervalues
 from six.moves import range
 
 here = os.path.abspath(os.path.split(__file__)[0])
@@ -39,46 +39,40 @@ def all_git_paths(repo_root):
     for item in output.split("\n"):
         yield item
 
-def all_filesystem_paths(repo_root):
-    for dirpath, dirnames, filenames in os.walk(repo_root):
-        for filename in filenames:
-            yield os.path.relpath(os.path.join(dirpath, filename), repo_root)
-
-def all_paths(repo_root, ignore_local):
-    fn = all_git_paths if ignore_local else all_filesystem_paths
-    for item in fn(repo_root):
-        yield item
 
 def check_path_length(repo_root, path):
     if len(path) + 1 > 150:
         return [("PATH LENGTH", "/%s longer than maximum path length (%d > 150)" % (path, len(path) + 1), None)]
     return []
 
-def set_type(error_type, errors):
-    return [(error_type,) + error for error in errors]
 
-def parse_whitelist_file(filename):
+def parse_whitelist(f):
     """
-    Parse the whitelist file at `filename`, and return the parsed structure.
+    Parse the whitelist file given by `f`, and return the parsed structure.
     """
 
     data = defaultdict(lambda:defaultdict(set))
+    ignored_files = set()
 
-    with open(filename) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = [item.strip() for item in line.split(":")]
-            if len(parts) == 2:
-                parts.append(None)
-            else:
-                parts[-1] = int(parts[-1])
+    for line in f:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [item.strip() for item in line.split(":")]
+        if len(parts) == 2:
+            parts.append(None)
+        else:
+            parts[-1] = int(parts[-1])
 
-            error_type, file_match, line_number = parts
+        error_type, file_match, line_number = parts
+        file_match = os.path.normcase(file_match)
+
+        if error_type == "*":
+            ignored_files.add(file_match)
+        else:
             data[file_match][error_type].add(line_number)
 
-    return data
+    return data, ignored_files
 
 
 def filter_whitelist_errors(data, path, errors):
@@ -86,14 +80,16 @@ def filter_whitelist_errors(data, path, errors):
     Filter out those errors that are whitelisted in `data`.
     """
 
+    if not errors:
+        return []
+
     whitelisted = [False for item in range(len(errors))]
+    normpath = os.path.normcase(path)
 
     for file_match, whitelist_errors in iteritems(data):
-        if fnmatch.fnmatch(path, file_match):
+        if fnmatch.fnmatchcase(path, file_match):
             for i, (error_type, msg, path, line) in enumerate(errors):
-                if "*" in whitelist_errors:
-                    whitelisted[i] = True
-                elif error_type in whitelist_errors:
+                if error_type in whitelist_errors:
                     allowed_lines = whitelist_errors[error_type]
                     if None in allowed_lines or line in allowed_lines:
                         whitelisted[i] = True
@@ -144,7 +140,7 @@ class Webidl2Regexp(Regexp):
 class ConsoleRegexp(Regexp):
     pattern = b"console\.[a-zA-Z]+\s*\("
     error = "CONSOLE"
-    file_extensions = [".html", ".htm", ".js", ".xht", ".html", ".svg"]
+    file_extensions = [".html", ".htm", ".js", ".xht", ".xhtml", ".svg"]
     description = "Console logging API used"
 
 class PrintRegexp(Regexp):
@@ -175,7 +171,7 @@ def check_regexp_line(repo_root, path, f):
     return errors
 
 def check_parsed(repo_root, path, f):
-    source_file = SourceFile(repo_root, path, "/")
+    source_file = SourceFile(repo_root, path, "/", contents=f.read())
 
     errors = []
 
@@ -209,6 +205,11 @@ def check_parsed(repo_root, path, f):
             if len(testharnessreport_nodes) > 1:
                 errors.append(("MULTIPLE-TESTHARNESSREPORT",
                                "More than one <script src='/resources/testharnessreport.js'>", path, None))
+
+        testharnesscss_nodes = source_file.root.findall(".//{http://www.w3.org/1999/xhtml}link[@href='/resources/testharness.css']")
+        if testharnesscss_nodes:
+            errors.append(("PRESENT-TESTHARNESSCSS",
+                           "Explicit link to testharness.css present", path, None))
 
         for element in source_file.variant_nodes:
             if "content" not in element.attrib:
@@ -247,6 +248,14 @@ def check_parsed(repo_root, path, f):
             if all(seen_elements[name] for name in required_elements):
                 break
 
+
+    for element in source_file.root.findall(".//{http://www.w3.org/1999/xhtml}script[@src]"):
+        src = element.attrib["src"]
+        for name in ["testharness", "testharnessreport"]:
+            if "%s.js" % name == src or ("/%s.js" % name in src and src != "/resources/%s.js" % name):
+                errors.append(("%s-PATH" % name.upper(), "%s.js script seen with incorrect path" % name, path, None))
+
+
     return errors
 
 class ASTCheck(object):
@@ -278,12 +287,49 @@ def check_python_ast(repo_root, path, f):
     if not path.endswith(".py"):
         return []
 
+    try:
+        root = ast.parse(f.read())
+    except SyntaxError as e:
+        return [("PARSE-FAILED", "Unable to parse file", path, e.lineno)]
+
     errors = []
-    root = ast.parse(f.read())
     for checker in ast_checkers:
         for lineno in checker.check(root):
             errors.append((checker.error, checker.description, path, lineno))
     return errors
+
+
+def check_path(repo_root, path):
+    """
+    Runs lints that check the file path.
+
+    :param repo_root: the repository root
+    :param path: the path of the file within the repository
+    :returns: a list of errors found in ``path``
+    """
+
+    errors = []
+    for path_fn in path_lints:
+        errors.extend(path_fn(repo_root, path))
+    return errors
+
+
+def check_file_contents(repo_root, path, f):
+    """
+    Runs lints that check the file contents.
+
+    :param repo_root: the repository root
+    :param path: the path of the file within the repository
+    :param f: a file-like object with the file contents
+    :returns: a list of errors found in ``f``
+    """
+
+    errors = []
+    for file_fn in file_lints:
+        errors.extend(file_fn(repo_root, path, f))
+        f.seek(0)
+    return errors
+
 
 def output_errors_text(errors):
     for error_type, description, path, line_number in errors:
@@ -314,55 +360,67 @@ def parse_args():
                         help="List of paths to lint")
     parser.add_argument("--json", action="store_true",
                         help="Output machine-readable JSON format")
-    parser.add_argument("--ignore-local", action="store_true",
-                        help="Ignore locally added files in the working directory (requires git).")
     return parser.parse_args()
 
 def main():
-    repo_root = localpaths.repo_root
     args = parse_args()
-    paths = args.paths if args.paths else all_paths(repo_root, args.ignore_local)
+    paths = args.paths if args.paths else all_git_paths(repo_root)
     return lint(repo_root, paths, args.json)
 
 def lint(repo_root, paths, output_json):
     error_count = defaultdict(int)
     last = None
 
-    whitelist = parse_whitelist_file(os.path.join(repo_root, "lint.whitelist"))
+    with open(os.path.join(repo_root, "lint.whitelist")) as f:
+        whitelist, ignored_files = parse_whitelist(f)
 
     if output_json:
         output_errors = output_errors_json
     else:
         output_errors = output_errors_text
 
-    def run_lint(path, fn, last, *args):
-        errors = filter_whitelist_errors(whitelist, path, fn(repo_root, path, *args))
-        if errors:
-            last = (errors[-1][0], path)
+    def process_errors(path, errors):
+        """
+        Filters and prints the errors, and updates the ``error_count`` object.
+
+        :param path: the path of the file that contains the errors
+        :param errors: a list of error tuples (error type, message, path, line number)
+        :returns: ``None`` if there were no errors, or
+                  a tuple of the error type and the path otherwise
+        """
+
+        errors = filter_whitelist_errors(whitelist, path, errors)
+
+        if not errors:
+            return None
 
         output_errors(errors)
         for error_type, error, path, line in errors:
             error_count[error_type] += 1
-        return last
+
+        return (errors[-1][0], path)
 
     for path in paths:
         abs_path = os.path.join(repo_root, path)
         if not os.path.exists(abs_path):
             continue
-        for path_fn in path_lints:
-            last = run_lint(path, path_fn, last)
+
+        if any(fnmatch.fnmatch(path, file_match) for file_match in ignored_files):
+            continue
+
+        errors = check_path(repo_root, path)
+        last = process_errors(path, errors) or last
 
         if not os.path.isdir(abs_path):
-            with open(abs_path) as f:
-                for file_fn in file_lints:
-                    last = run_lint(path, file_fn, last, f)
-                    f.seek(0)
+            with open(abs_path, 'rb') as f:
+                errors = check_file_contents(repo_root, path, f)
+                last = process_errors(path, errors) or last
 
     if not output_json:
         output_error_count(error_count)
         if error_count:
             print(ERROR_MSG % (last[0], last[1], last[0], last[1]))
-    return sum(error_count.itervalues())
+    return sum(itervalues(error_count))
 
 path_lints = [check_path_length]
 file_lints = [check_regexp_line, check_parsed, check_python_ast]

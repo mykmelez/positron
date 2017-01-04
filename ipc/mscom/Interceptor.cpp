@@ -8,9 +8,10 @@
 #include "mozilla/mscom/Interceptor.h"
 #include "mozilla/mscom/InterceptorLog.h"
 
+#include "mozilla/mscom/DispatchForwarder.h"
 #include "mozilla/mscom/MainThreadInvoker.h"
 #include "mozilla/mscom/Registration.h"
-#include "mozilla/mscom/utils.h"
+#include "mozilla/mscom/Utils.h"
 #include "MainThreadUtils.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/DebugOnly.h"
@@ -22,9 +23,10 @@ namespace mozilla {
 namespace mscom {
 
 /* static */ HRESULT
-Interceptor::Create(STAUniquePtr<IUnknown>& aTarget, IInterceptorSink* aSink,
+Interceptor::Create(STAUniquePtr<IUnknown> aTarget, IInterceptorSink* aSink,
                     REFIID aIid, void** aOutput)
 {
+  MOZ_ASSERT(aOutput && aTarget && aSink);
   if (!aOutput) {
     return E_INVALIDARG;
   }
@@ -32,13 +34,13 @@ Interceptor::Create(STAUniquePtr<IUnknown>& aTarget, IInterceptorSink* aSink,
   if (!aTarget || !aSink) {
     return E_INVALIDARG;
   }
-  Interceptor* intcpt = new Interceptor(aTarget, aSink);
+  Interceptor* intcpt = new Interceptor(Move(aTarget), aSink);
   HRESULT hr = intcpt->QueryInterface(aIid, aOutput);
   static_cast<WeakReferenceSupport*>(intcpt)->Release();
   return hr;
 }
 
-Interceptor::Interceptor(STAUniquePtr<IUnknown>& aTarget, IInterceptorSink* aSink)
+Interceptor::Interceptor(STAUniquePtr<IUnknown> aTarget, IInterceptorSink* aSink)
   : WeakReferenceSupport(WeakReferenceSupport::Flags::eDestroyOnMainThread)
   , mTarget(Move(aTarget))
   , mEventSink(aSink)
@@ -59,7 +61,7 @@ Interceptor::~Interceptor()
   MOZ_ASSERT(NS_IsMainThread());
   for (uint32_t index = 0, len = mInterceptorMap.Length(); index < len; ++index) {
     MapEntry& entry = mInterceptorMap[index];
-    entry.mInterceptor->Release();
+    entry.mInterceptor = nullptr;
     entry.mTargetInterface->Release();
   }
 }
@@ -141,6 +143,13 @@ Interceptor::GetInterceptorForIID(REFIID aIid, void** aOutInterceptor)
 {
   if (!aOutInterceptor) {
     return E_INVALIDARG;
+  }
+
+  if (aIid == IID_IUnknown) {
+    // Special case: When we see IUnknown, we just provide a reference to this
+    *aOutInterceptor = static_cast<IInterceptor*>(this);
+    AddRef();
+    return S_OK;
   }
 
   RefPtr<IUnknown> unkInterceptor;
@@ -225,12 +234,9 @@ Interceptor::GetInterceptorForIID(REFIID aIid, void** aOutInterceptor)
     if (entry && entry->mInterceptor) {
       unkInterceptor = entry->mInterceptor;
     } else {
-      // We're inserting unkInterceptor into the map but we still want to hang
-      // onto it locally so that we can QI it below.
-      unkInterceptor->AddRef();
-      // OTOH we must not touch the refcount for the target interface
-      // because we are just moving it into the map and its refcounting might
-      // not be thread-safe.
+      // MapEntry has a RefPtr to unkInterceptor, OTOH we must not touch the
+      // refcount for the target interface because we are just moving it into
+      // the map and its refcounting might not be thread-safe.
       IUnknown* rawTargetInterface = targetInterface.release();
       mInterceptorMap.AppendElement(MapEntry(aIid,
                                              unkInterceptor,
@@ -272,6 +278,17 @@ Interceptor::ThreadSafeQueryInterface(REFIID aIid, IUnknown** aOutInterface)
     *aOutInterface = static_cast<IInterceptor*>(this);
     (*aOutInterface)->AddRef();
     return S_OK;
+  }
+
+  if (aIid == IID_IDispatch) {
+    STAUniquePtr<IDispatch> disp;
+    IDispatch* rawDisp = nullptr;
+    HRESULT hr = QueryInterfaceTarget(aIid, (void**)&rawDisp);
+    if (FAILED(hr)) {
+      return hr;
+    }
+    disp.reset(rawDisp);
+    return DispatchForwarder::Create(this, disp, aOutInterface);
   }
 
   return GetInterceptorForIID(aIid, (void**)aOutInterface);

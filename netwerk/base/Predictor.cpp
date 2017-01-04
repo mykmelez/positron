@@ -48,10 +48,7 @@
 #include "SerializedLoadContext.h"
 #include "mozilla/net/NeckoChild.h"
 
-#if defined(ANDROID) && !defined(MOZ_WIDGET_GONK)
-#include "nsIPropertyBag2.h"
-static const int32_t ANDROID_23_VERSION = 10;
-#endif
+#include "mozilla/dom/ContentParent.h"
 
 using namespace mozilla;
 
@@ -334,11 +331,7 @@ Predictor::Predictor()
   :mInitialized(false)
   ,mEnabled(true)
   ,mEnableHoverOnSSL(false)
-#ifdef NIGHTLY_BUILD
   ,mEnablePrefetch(true)
-#else
-  ,mEnablePrefetch(false)
-#endif
   ,mPageDegradationDay(PREDICTOR_PAGE_DELTA_DAY_DEFAULT)
   ,mPageDegradationWeek(PREDICTOR_PAGE_DELTA_WEEK_DEFAULT)
   ,mPageDegradationMonth(PREDICTOR_PAGE_DELTA_MONTH_DEFAULT)
@@ -392,11 +385,7 @@ Predictor::InstallObserver()
   Preferences::AddBoolVarCache(&mEnabled, PREDICTOR_ENABLED_PREF, true);
   Preferences::AddBoolVarCache(&mEnableHoverOnSSL,
                                PREDICTOR_SSL_HOVER_PREF, false);
-#ifdef NIGHTLY_BUILD
   Preferences::AddBoolVarCache(&mEnablePrefetch, PREDICTOR_PREFETCH_PREF, true);
-#else
-  Preferences::AddBoolVarCache(&mEnablePrefetch, PREDICTOR_PREFETCH_PREF, false);
-#endif
   Preferences::AddIntVarCache(&mPageDegradationDay,
                               PREDICTOR_PAGE_DELTA_DAY_PREF,
                               PREDICTOR_PAGE_DELTA_DAY_DEFAULT);
@@ -590,22 +579,6 @@ Predictor::Init()
 
   nsresult rv = NS_OK;
 
-#if defined(ANDROID) && !defined(MOZ_WIDGET_GONK)
-  // This is an ugly hack to disable the predictor on android < 2.3, as it
-  // doesn't play nicely with those android versions, at least on our infra.
-  // Causes timeouts in reftests. See bug 881804 comment 86.
-  nsCOMPtr<nsIPropertyBag2> infoService =
-    do_GetService("@mozilla.org/system-info;1");
-  if (infoService) {
-    int32_t androidVersion = -1;
-    rv = infoService->GetPropertyAsInt32(NS_LITERAL_STRING("version"),
-                                         &androidVersion);
-    if (NS_SUCCEEDED(rv) && (androidVersion < ANDROID_23_VERSION)) {
-      return NS_ERROR_NOT_AVAILABLE;
-    }
-  }
-#endif
-
   rv = InstallObserver();
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -620,7 +593,7 @@ Predictor::Init()
   NS_ENSURE_SUCCESS(rv, rv);
 
   RefPtr<LoadContextInfo> lci =
-    new LoadContextInfo(false, false, NeckoOriginAttributes());
+    new LoadContextInfo(false, NeckoOriginAttributes());
 
   rv = cacheStorageService->DiskCacheStorage(lci, false,
                                              getter_AddRefs(mCacheDiskStorage));
@@ -999,7 +972,7 @@ Predictor::PredictForLink(nsIURI *targetURI, nsIURI *sourceURI,
     }
   }
 
-  mSpeculativeService->SpeculativeConnect(targetURI, nullptr);
+  mSpeculativeService->SpeculativeConnect2(targetURI, nullptr, nullptr);
   if (verifier) {
     PREDICTOR_LOG(("    sending verification"));
     verifier->OnPredictPreconnect(targetURI);
@@ -1387,7 +1360,7 @@ Predictor::RunPredictions(nsIURI *referrer, nsINetworkPredictorVerifier *verifie
     nsCOMPtr<nsIURI> uri = preconnects[i];
     ++totalPredictions;
     ++totalPreconnects;
-    mSpeculativeService->SpeculativeConnect(uri, this);
+    mSpeculativeService->SpeculativeConnect2(uri, nullptr, this);
     predicted = true;
     if (verifier) {
       PREDICTOR_LOG(("    sending preconnect verification"));
@@ -1653,7 +1626,7 @@ Predictor::LearnInternal(PredictorLearnReason reason, nsICacheEntry *entry,
 
           nsCOMPtr<nsIURI> uri;
           uint32_t hitCount, lastHit, flags;
-          if (!ParseMetaDataEntry(key, value, getter_AddRefs(uri), hitCount, lastHit, flags)) {
+          if (!ParseMetaDataEntry(nullptr, value, nullptr, hitCount, lastHit, flags)) {
             // This failed, get rid of it so we don't waste space
             entry->SetMetaDataElement(key, nullptr);
             continue;
@@ -1693,10 +1666,8 @@ Predictor::SpaceCleaner::OnMetaDataElement(const char *key, const char *value)
     return NS_OK;
   }
 
-  nsCOMPtr<nsIURI> parsedURI;
   uint32_t hitCount, lastHit, flags;
-  bool ok = mPredictor->ParseMetaDataEntry(key, value,
-                                           getter_AddRefs(parsedURI),
+  bool ok = mPredictor->ParseMetaDataEntry(nullptr, value, nullptr,
                                            hitCount, lastHit, flags);
 
   if (!ok) {
@@ -1707,11 +1678,9 @@ Predictor::SpaceCleaner::OnMetaDataElement(const char *key, const char *value)
     return NS_OK;
   }
 
-  nsCString uri;
-  nsresult rv = parsedURI->GetAsciiSpec(uri);
+  nsCString uri(key + (sizeof(META_DATA_PREFIX) - 1));
   uint32_t uriLength = uri.Length();
-  if (NS_SUCCEEDED(rv) &&
-      uriLength > mPredictor->mMaxURILength) {
+  if (uriLength > mPredictor->mMaxURILength) {
     // Default to getting rid of URIs that are too long and were put in before
     // we had our limit on URI length, in order to free up some space.
     nsCString nsKey;
@@ -2260,17 +2229,26 @@ NS_IMETHODIMP
 Predictor::OnPredictPrefetch(nsIURI *aURI, uint32_t httpStatus)
 {
   if (IsNeckoChild()) {
-    MOZ_DIAGNOSTIC_ASSERT(mChildVerifier);
-    return mChildVerifier->OnPredictPrefetch(aURI, httpStatus);
+    if (mChildVerifier) {
+      // Ideally, we'd assert here. But since we're slowly moving towards a
+      // world where we have multiple child processes, and only one child process
+      // will be likely to have a verifier, we have to play it safer.
+      return mChildVerifier->OnPredictPrefetch(aURI, httpStatus);
+    }
+    return NS_OK;
   }
-
-  MOZ_DIAGNOSTIC_ASSERT(gNeckoParent);
 
   ipc::URIParams serURI;
   SerializeURI(aURI, serURI);
 
-  if (!gNeckoParent->SendPredOnPredictPrefetch(serURI, httpStatus)) {
-    return NS_ERROR_NOT_AVAILABLE;
+  for (auto* cp : ContentParent::AllProcesses(ContentParent::eLive)) {
+    PNeckoParent* neckoParent = SingleManagedOrNull(cp->ManagedPNeckoParent());
+    if (!neckoParent) {
+      continue;
+    }
+    if (!neckoParent->SendPredOnPredictPrefetch(serURI, httpStatus)) {
+      return NS_ERROR_NOT_AVAILABLE;
+    }
   }
 
   return NS_OK;
@@ -2279,17 +2257,26 @@ Predictor::OnPredictPrefetch(nsIURI *aURI, uint32_t httpStatus)
 NS_IMETHODIMP
 Predictor::OnPredictPreconnect(nsIURI *aURI) {
   if (IsNeckoChild()) {
-    MOZ_DIAGNOSTIC_ASSERT(mChildVerifier);
-    return mChildVerifier->OnPredictPreconnect(aURI);
+    if (mChildVerifier) {
+      // Ideally, we'd assert here. But since we're slowly moving towards a
+      // world where we have multiple child processes, and only one child process
+      // will be likely to have a verifier, we have to play it safer.
+      return mChildVerifier->OnPredictPreconnect(aURI);
+    }
+    return NS_OK;
   }
-
-  MOZ_DIAGNOSTIC_ASSERT(gNeckoParent);
 
   ipc::URIParams serURI;
   SerializeURI(aURI, serURI);
 
-  if (!gNeckoParent->SendPredOnPredictPreconnect(serURI)) {
-    return NS_ERROR_NOT_AVAILABLE;
+  for (auto* cp : ContentParent::AllProcesses(ContentParent::eLive)) {
+    PNeckoParent* neckoParent = SingleManagedOrNull(cp->ManagedPNeckoParent());
+    if (!neckoParent) {
+      continue;
+    }
+    if (!neckoParent->SendPredOnPredictPreconnect(serURI)) {
+      return NS_ERROR_NOT_AVAILABLE;
+    }
   }
 
   return NS_OK;
@@ -2298,17 +2285,26 @@ Predictor::OnPredictPreconnect(nsIURI *aURI) {
 NS_IMETHODIMP
 Predictor::OnPredictDNS(nsIURI *aURI) {
   if (IsNeckoChild()) {
-    MOZ_DIAGNOSTIC_ASSERT(mChildVerifier);
-    return mChildVerifier->OnPredictDNS(aURI);
+    if (mChildVerifier) {
+      // Ideally, we'd assert here. But since we're slowly moving towards a
+      // world where we have multiple child processes, and only one child process
+      // will be likely to have a verifier, we have to play it safer.
+      return mChildVerifier->OnPredictDNS(aURI);
+    }
+    return NS_OK;
   }
-
-  MOZ_DIAGNOSTIC_ASSERT(gNeckoParent);
 
   ipc::URIParams serURI;
   SerializeURI(aURI, serURI);
 
-  if (!gNeckoParent->SendPredOnPredictDNS(serURI)) {
-    return NS_ERROR_NOT_AVAILABLE;
+  for (auto* cp : ContentParent::AllProcesses(ContentParent::eLive)) {
+    PNeckoParent* neckoParent = SingleManagedOrNull(cp->ManagedPNeckoParent());
+    if (!neckoParent) {
+      continue;
+    }
+    if (!neckoParent->SendPredOnPredictDNS(serURI)) {
+      return NS_ERROR_NOT_AVAILABLE;
+    }
   }
 
   return NS_OK;
@@ -2432,6 +2428,22 @@ Predictor::UpdateCacheabilityInternal(nsIURI *sourceURI, nsIURI *targetURI,
                                       const nsCString &method)
 {
   PREDICTOR_LOG(("Predictor::UpdateCacheability httpStatus=%u", httpStatus));
+
+  if (!mInitialized) {
+    PREDICTOR_LOG(("    not initialized"));
+    return;
+  }
+
+  if (!mEnabled) {
+    PREDICTOR_LOG(("    not enabled"));
+    return;
+  }
+
+  if (!mEnablePrefetch) {
+    PREDICTOR_LOG(("    prefetch not enabled"));
+    return;
+  }
+
   uint32_t openFlags = nsICacheStorage::OPEN_READONLY |
                        nsICacheStorage::OPEN_SECRETLY |
                        nsICacheStorage::CHECK_MULTITHREADED;

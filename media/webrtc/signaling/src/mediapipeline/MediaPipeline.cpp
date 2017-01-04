@@ -54,6 +54,7 @@
 #include "mozilla/gfx/Types.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/UniquePtrExtensions.h"
+#include "mozilla/Sprintf.h"
 
 #include "webrtc/common_types.h"
 #include "webrtc/common_video/interface/native_handle.h"
@@ -303,7 +304,7 @@ protected:
           break;
         default:
           // XXX Bug NNNNNNN
-          // use http://mxr.mozilla.org/mozilla-central/source/content/media/omx/I420ColorConverterHelper.cpp
+          // use http://dxr.mozilla.org/mozilla-central/source/content/media/omx/I420ColorConverterHelper.cpp
           // to convert unknown types (OEM-specific) to I420
           MOZ_MTLOG(ML_ERROR, "Un-handled GRALLOC buffer type:" << pixelFormat);
           MOZ_CRASH();
@@ -1075,11 +1076,11 @@ void MediaPipeline::RtpPacketReceived(TransportLayer *layer,
   if (!NS_SUCCEEDED(res)) {
     char tmp[16];
 
-    PR_snprintf(tmp, sizeof(tmp), "%.2x %.2x %.2x %.2x",
-                inner_data[0],
-                inner_data[1],
-                inner_data[2],
-                inner_data[3]);
+    SprintfLiteral(tmp, "%.2x %.2x %.2x %.2x",
+                   inner_data[0],
+                   inner_data[1],
+                   inner_data[2],
+                   inner_data[3]);
 
     MOZ_MTLOG(ML_NOTICE, "Error unprotecting RTP in " << description_
               << "len= " << len << "[" << tmp << "...]");
@@ -1906,6 +1907,11 @@ class GenericReceiveListener : public MediaStreamListener
     AddListener(source_, this);
   }
 
+  void EndTrack()
+  {
+    source_->EndTrack(track_id_);
+  }
+
 #ifndef USE_FAKE_MEDIA_STREAMS
   // Must be called on the main thread
   void SetPrincipalHandle_m(const PrincipalHandle& principal_handle)
@@ -1941,7 +1947,7 @@ class GenericReceiveListener : public MediaStreamListener
 
  protected:
   SourceMediaStream *source_;
-  TrackID track_id_;
+  const TrackID track_id_;
   TrackTicks played_ticks_;
   PrincipalHandle principal_handle_;
 };
@@ -2103,7 +2109,8 @@ MediaPipelineReceiveAudio::MediaPipelineReceiveAudio(
 void MediaPipelineReceiveAudio::DetachMedia()
 {
   ASSERT_ON_THREAD(main_thread_);
-  if (stream_) {
+  if (stream_ && listener_) {
+    listener_->EndTrack();
     stream_->RemoveListener(listener_);
     stream_ = nullptr;
   }
@@ -2334,7 +2341,8 @@ void MediaPipelineReceiveVideo::DetachMedia()
   // avoid cycles, and the render callbacks are invoked from a different
   // thread so simple null-checks would cause TSAN bugs without locks.
   static_cast<VideoSessionConduit*>(conduit_.get())->DetachRenderer();
-  if (stream_) {
+  if (stream_ && listener_) {
+    listener_->EndTrack();
     stream_->RemoveListener(listener_);
     stream_ = nullptr;
   }

@@ -23,6 +23,8 @@
 
 using namespace mozilla;
 
+static bool sShowPreviousPage = true;
+
 nsView::nsView(nsViewManager* aViewManager, nsViewVisibility aVisibility)
 {
   MOZ_COUNT_CTOR(nsView);
@@ -36,6 +38,12 @@ nsView::nsView(nsViewManager* aViewManager, nsViewVisibility aVisibility)
   mViewManager = aViewManager;
   mDirtyRegion = nullptr;
   mWidgetIsTopLevel = false;
+
+  static bool sShowPreviousPageInitialized = false;
+  if (!sShowPreviousPageInitialized) {
+    Preferences::AddBoolVarCache(&sShowPreviousPage, "layout.show_previous_page", true);
+    sShowPreviousPageInitialized = true;
+  }
 }
 
 void nsView::DropMouseGrabbing()
@@ -304,8 +312,7 @@ void nsView::DoResetWidgetBounds(bool aMoveOnly,
 
   nsWindowType type = widget->WindowType();
 
-  LayoutDeviceIntRect curBounds;
-  widget->GetClientBounds(curBounds);
+  LayoutDeviceIntRect curBounds = widget->GetClientBounds();
   bool invisiblePopup = type == eWindowType_popup &&
                         ((curBounds.IsEmpty() && mDimBounds.IsEmpty()) ||
                          mVis == nsViewVisibility_kHide);
@@ -691,9 +698,7 @@ nsresult nsView::AttachToTopLevelWidget(nsIWidget* aWidget)
 
   // Note, the previous device context will be released. Detaching
   // will not restore the old one.
-  nsresult rv = aWidget->AttachViewToTopLevel(!nsIWidget::UsePuppetWidgets());
-  if (NS_FAILED(rv))
-    return rv;
+  aWidget->AttachViewToTopLevel(!nsIWidget::UsePuppetWidgets());
 
   mWindow = aWidget;
 
@@ -782,10 +787,9 @@ void nsView::List(FILE* out, int32_t aIndent) const
   fprintf(out, "%p ", (void*)this);
   if (nullptr != mWindow) {
     nscoord p2a = mViewManager->AppUnitsPerDevPixel();
-    LayoutDeviceIntRect rect;
-    mWindow->GetClientBounds(rect);
+    LayoutDeviceIntRect rect = mWindow->GetClientBounds();
     nsRect windowBounds = LayoutDeviceIntRect::ToAppUnits(rect, p2a);
-    mWindow->GetBounds(rect);
+    rect = mWindow->GetBounds();
     nsRect nonclientBounds = LayoutDeviceIntRect::ToAppUnits(rect, p2a);
     nsrefcnt widgetRefCnt = mWindow.get()->AddRef() - 1;
     mWindow.get()->Release();
@@ -1127,5 +1131,5 @@ nsView::HandleEvent(WidgetGUIEvent* aEvent,
 bool
 nsView::IsPrimaryFramePaintSuppressed()
 {
-  return mFrame ? mFrame->PresContext()->PresShell()->IsPaintingSuppressed() : false;
+  return sShowPreviousPage && mFrame && mFrame->PresContext()->PresShell()->IsPaintingSuppressed();
 }

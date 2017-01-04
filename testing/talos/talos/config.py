@@ -140,8 +140,11 @@ DEFAULTS = dict(
             'http://127.0.0.1/extensions-dummy/repositorySearchURL',
         'media.gmp-manager.url':
             'http://127.0.0.1/gmpmanager-dummy/update.xml',
+        'media.gmp-manager.updateEnabled': False,
         'extensions.systemAddon.update.url':
             'http://127.0.0.1/dummy-system-addons.xml',
+        'extensions.shield-recipe-client.api_url':
+            'https://127.0.0.1/selfsupport-dummy/',
         'media.navigator.enabled': True,
         'media.peerconnection.enabled': True,
         'media.navigator.permission.disabled': True,
@@ -175,7 +178,8 @@ DEFAULTS = dict(
         'devtools.debugger.remote-enabled': False,
         'devtools.theme': "light",
         'devtools.timeline.enabled': False,
-        'identity.fxaccounts.migrateToDevEdition': False
+        'identity.fxaccounts.migrateToDevEdition': False,
+        'media.libavcodec.allow-obsolete': True
     }
 )
 

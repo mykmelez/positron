@@ -10,9 +10,9 @@
 #include "MainThreadUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
-#include "mozilla/Function.h"
+#include "mozilla/Unused.h"
 #include "mozilla/mscom/COMApartmentRegion.h"
-#include "mozilla/mscom/utils.h"
+#include "mozilla/mscom/Utils.h"
 #include "nsCOMPtr.h"
 #include "nsIThread.h"
 #include "nsThreadUtils.h"
@@ -26,8 +26,19 @@ namespace mscom {
 class MOZ_STACK_CLASS EnsureMTA
 {
 public:
+  /**
+   * This constructor just ensures that the MTA thread is up and running.
+   */
+  EnsureMTA()
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+    nsCOMPtr<nsIThread> thread = GetMTAThread();
+    MOZ_ASSERT(thread);
+    Unused << thread;
+  }
+
   template <typename FuncT>
-  EnsureMTA(const FuncT& aClosure)
+  explicit EnsureMTA(const FuncT& aClosure)
   {
     MOZ_ASSERT(NS_IsMainThread());
     if (IsCurrentThreadMTA()) {

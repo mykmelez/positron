@@ -31,6 +31,7 @@ private:
   const nsCString mScriptSpec;
   const nsString mCacheName;
   ServiceWorkerState mState;
+  PrincipalOriginAttributes mOriginAttributes;
 
   // This id is shared with WorkerPrivate to match requests issued by service
   // workers to their corresponding serviceWorkerInfo.
@@ -44,6 +45,12 @@ private:
 
   RefPtr<ServiceWorkerPrivate> mServiceWorkerPrivate;
   bool mSkipWaitingFlag;
+
+  enum {
+    Unknown,
+    Enabled,
+    Disabled
+  } mHandlesFetch;
 
   ~ServiceWorkerInfo();
 
@@ -104,6 +111,12 @@ public:
     return mState;
   }
 
+  const PrincipalOriginAttributes&
+  GetOriginAttributes() const
+  {
+    return mOriginAttributes;
+  }
+
   const nsString&
   CacheName() const
   {
@@ -125,6 +138,22 @@ public:
   {
     AssertIsOnMainThread();
     mState = aState;
+  }
+
+  void
+  SetHandlesFetch(bool aHandlesFetch)
+  {
+    AssertIsOnMainThread();
+    MOZ_DIAGNOSTIC_ASSERT(mHandlesFetch == Unknown);
+    mHandlesFetch = aHandlesFetch ? Enabled : Disabled;
+  }
+
+  bool
+  HandlesFetch() const
+  {
+    AssertIsOnMainThread();
+    MOZ_DIAGNOSTIC_ASSERT(mHandlesFetch != Unknown);
+    return mHandlesFetch != Disabled;
   }
 
   void

@@ -9,7 +9,7 @@
 
 #include "mozilla/AddonPathService.h"
 #include "mozilla/BasicEvents.h"
-#include "mozilla/CycleCollectedJSRuntime.h"
+#include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
@@ -387,9 +387,10 @@ EventListenerManager::AddEventListenerInternal(
       if (window) {
 #ifdef DEBUG
         nsCOMPtr<nsIDocument> d = window->GetExtantDoc();
-        NS_WARN_IF_FALSE(!nsContentUtils::IsChromeDoc(d),
-                         "Please do not use pointerenter/leave events in chrome. "
-                         "They are slower than pointerover/out!");
+        NS_WARNING_ASSERTION(
+          !nsContentUtils::IsChromeDoc(d),
+          "Please do not use pointerenter/leave events in chrome. "
+          "They are slower than pointerover/out!");
 #endif
         window->SetHasPointerEnterLeaveEventListeners();
       }
@@ -400,19 +401,18 @@ EventListenerManager::AddEventListenerInternal(
     if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
 #ifdef DEBUG
       nsCOMPtr<nsIDocument> d = window->GetExtantDoc();
-      NS_WARN_IF_FALSE(!nsContentUtils::IsChromeDoc(d),
-                       "Please do not use mouseenter/leave events in chrome. "
-                       "They are slower than mouseover/out!");
+      NS_WARNING_ASSERTION(
+        !nsContentUtils::IsChromeDoc(d),
+        "Please do not use mouseenter/leave events in chrome. "
+        "They are slower than mouseover/out!");
 #endif
       window->SetHasMouseEnterLeaveEventListeners();
     }
-#ifdef MOZ_GAMEPAD
   } else if (aEventMessage >= eGamepadEventFirst &&
              aEventMessage <= eGamepadEventLast) {
     if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
       window->SetHasGamepadEventListener();
     }
-#endif
   } else if (aTypeAtom == nsGkAtoms::onkeydown ||
              aTypeAtom == nsGkAtoms::onkeypress ||
              aTypeAtom == nsGkAtoms::onkeyup) {
@@ -650,31 +650,26 @@ EventListenerManager::RemoveEventListenerInternal(
   Listener* listener;
 
   uint32_t count = mListeners.Length();
-  uint32_t typeCount = 0;
   bool deviceType = IsDeviceType(aEventMessage);
+
+  RefPtr<EventListenerManager> kungFuDeathGrip(this);
 
   for (uint32_t i = 0; i < count; ++i) {
     listener = &mListeners.ElementAt(i);
     if (EVENT_TYPE_EQUALS(listener, aEventMessage, aUserType, aTypeString,
                           aAllEvents)) {
-      ++typeCount;
       if (listener->mListener == aListenerHolder &&
           listener->mFlags.EqualsForRemoval(aFlags)) {
-        RefPtr<EventListenerManager> kungFuDeathGrip(this);
         mListeners.RemoveElementAt(i);
-        --count;
         NotifyEventListenerRemoved(aUserType);
-        if (!deviceType) {
-          return;
+        if (!aAllEvents && deviceType) {
+          DisableDevice(aEventMessage);
         }
-        --typeCount;
+        return;
       }
     }
   }
 
-  if (!aAllEvents && deviceType && typeCount == 0) {
-    DisableDevice(aEventMessage);
-  }
 }
 
 bool
@@ -859,7 +854,7 @@ EventListenerManager::SetEventHandler(nsIAtom* aName,
     if (csp) {
       // let's generate a script sample and pass it as aContent,
       // it will not match the hash, but allows us to pass
-      // the script sample in aCOntent.
+      // the script sample in aContent.
       nsAutoString scriptSample, attr, tagName(NS_LITERAL_STRING("UNKNOWN"));
       aName->ToString(attr);
       nsCOMPtr<nsIDOMNode> domNode(do_QueryInterface(mTarget));
@@ -875,6 +870,7 @@ EventListenerManager::SetEventHandler(nsIAtom* aName,
       bool allowsInlineScript = true;
       rv = csp->GetAllowsInline(nsIContentPolicy::TYPE_SCRIPT,
                                 EmptyString(), // aNonce
+                                true, // aParserCreated (true because attribute event handler)
                                 scriptSample,
                                 0,             // aLineNumber
                                 &allowsInlineScript);
@@ -924,6 +920,9 @@ EventListenerManager::RemoveEventHandler(nsIAtom* aName,
   if (listener) {
     mListeners.RemoveElementAt(uint32_t(listener - &mListeners.ElementAt(0)));
     NotifyEventListenerRemoved(aName);
+    if (IsDeviceType(eventMessage)) {
+      DisableDevice(eventMessage);
+    }
   }
 }
 
@@ -995,14 +994,12 @@ EventListenerManager::CompileEventHandlerInternal(Listener* aListener,
   }
   aListener = nullptr;
 
-  uint32_t lineNo = 0;
   nsAutoCString url (NS_LITERAL_CSTRING("-moz-evil:lying-event-listener"));
   MOZ_ASSERT(body);
   MOZ_ASSERT(aElement);
   nsIURI *uri = aElement->OwnerDoc()->GetDocumentURI();
   if (uri) {
     uri->GetSpec(url);
-    lineNo = 1;
   }
 
   nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(mTarget);
@@ -1072,8 +1069,9 @@ EventListenerManager::CompileEventHandlerInternal(Listener* aListener,
     return NS_ERROR_FAILURE;
   }
   JS::CompileOptions options(cx);
+  // Use line 0 to make the function body starts from line 1.
   options.setIntroductionType("eventHandler")
-         .setFileAndLine(url.get(), lineNo)
+         .setFileAndLine(url.get(), 0)
          .setVersion(JSVERSION_DEFAULT)
          .setElement(&v.toObject())
          .setElementAttributeName(jsStr);
@@ -1541,9 +1539,9 @@ EventListenerManager::GetListenerInfo(nsCOMArray<nsIEventListenerInfo>* aList)
   nsCOMPtr<EventTarget> target = do_QueryInterface(mTarget);
   NS_ENSURE_STATE(target);
   aList->Clear();
-  uint32_t count = mListeners.Length();
-  for (uint32_t i = 0; i < count; ++i) {
-    const Listener& listener = mListeners.ElementAt(i);
+  nsAutoTObserverArray<Listener, 2>::ForwardIterator iter(mListeners);
+  while (iter.HasMore()) {
+    const Listener& listener = iter.GetNext();
     // If this is a script handler and we haven't yet
     // compiled the event handler itself go ahead and compile it
     if (listener.mListenerType == Listener::eJSEventListener &&

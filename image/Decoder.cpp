@@ -63,7 +63,6 @@ Decoder::Decoder(RasterImage* aImage)
   , mReachedTerminalState(false)
   , mDecodeDone(false)
   , mError(false)
-  , mDecodeAborted(false)
   , mShouldReportError(false)
 { }
 
@@ -98,10 +97,9 @@ Decoder::Init()
   // Metadata decoders must not set an output size.
   MOZ_ASSERT_IF(mMetadataDecode, !mHaveExplicitOutputSize);
 
-  // It doesn't make sense to decode anything but the first frame if we can't
-  // store anything in the SurfaceCache, since only the last frame we decode
-  // will be retrievable.
-  MOZ_ASSERT(ShouldUseSurfaceCache() || IsFirstFrameDecode());
+  // All decoders must be anonymous except for metadata decoders.
+  // XXX(seth): Soon that exception will be removed.
+  MOZ_ASSERT_IF(mImage, IsMetadataDecode());
 
   // Implementation-specific initialization.
   nsresult rv = InitInternal();
@@ -192,46 +190,39 @@ Decoder::CompleteDecode()
     PostError();
   }
 
-  // If this was a metadata decode and we never got a size, the decode failed.
-  if (IsMetadataDecode() && !HasSize()) {
-    PostError();
+  if (IsMetadataDecode()) {
+    // If this was a metadata decode and we never got a size, the decode failed.
+    if (!HasSize()) {
+      PostError();
+    }
+    return;
   }
 
-  // If the implementation left us mid-frame, finish that up.
-  if (mInFrame && !HasError()) {
+  // If the implementation left us mid-frame, finish that up. Note that it may
+  // have left us transparent.
+  if (mInFrame) {
+    PostHasTransparency();
     PostFrameStop();
   }
 
-  // If PostDecodeDone() has not been called, and this decoder wasn't aborted
-  // early because of low-memory conditions or losing a race with another
-  // decoder, we need to send teardown notifications (and report an error to the
-  // console later).
-  if (!IsMetadataDecode() && !mDecodeDone && !WasAborted()) {
+  // If PostDecodeDone() has not been called, we may need to send teardown
+  // notifications if it is unrecoverable.
+  if (!mDecodeDone) {
+    // We should always report an error to the console in this case.
     mShouldReportError = true;
 
-    // Even if we encountered an error, we're still usable if we have at least
-    // one complete frame.
     if (GetCompleteFrameCount() > 0) {
-      // We're usable, so do exactly what we should have when the decoder
-      // completed.
-
-      // Not writing to the entire frame may have left us transparent.
+      // We're usable if we have at least one complete frame, so do exactly
+      // what we should have when the decoder completed.
       PostHasTransparency();
-
-      if (mInFrame) {
-        PostFrameStop();
-      }
       PostDecodeDone();
     } else {
       // We're not usable. Record some final progress indicating the error.
-      if (!IsMetadataDecode()) {
-        mProgress |= FLAG_DECODE_COMPLETE;
-      }
-      mProgress |= FLAG_HAS_ERROR;
+      mProgress |= FLAG_DECODE_COMPLETE | FLAG_HAS_ERROR;
     }
   }
 
-  if (mDecodeDone && !IsMetadataDecode()) {
+  if (mDecodeDone) {
     MOZ_ASSERT(HasError() || mCurrentFrame, "Should have an error or a frame");
 
     // If this image wasn't animated and isn't a transient image, mark its frame
@@ -272,7 +263,6 @@ Decoder::FinalStatus() const
 {
   return DecoderFinalStatus(IsMetadataDecode(),
                             GetDecodeDone(),
-                            WasAborted(),
                             HasError(),
                             ShouldReportError());
 }
@@ -341,13 +331,6 @@ Decoder::AllocateFrameInternal(uint32_t aFrameNum,
     return RawAccessFrameRef();
   }
 
-  const uint32_t bytesPerPixel = aPaletteDepth == 0 ? 4 : 1;
-  if (ShouldUseSurfaceCache() &&
-      !SurfaceCache::CanHold(aFrameRect.Size(), bytesPerPixel)) {
-    NS_WARNING("Trying to add frame that's too large for the SurfaceCache");
-    return RawAccessFrameRef();
-  }
-
   NotNull<RefPtr<imgFrame>> frame = WrapNotNull(new imgFrame());
   bool nonPremult = bool(mSurfaceFlags & SurfaceFlags::NO_PREMULTIPLY_ALPHA);
   if (NS_FAILED(frame->InitForDecoder(aOutputSize, aFrameRect, aFormat,
@@ -360,29 +343,6 @@ Decoder::AllocateFrameInternal(uint32_t aFrameNum,
   if (!ref) {
     frame->Abort();
     return RawAccessFrameRef();
-  }
-
-  if (ShouldUseSurfaceCache()) {
-    NotNull<RefPtr<ISurfaceProvider>> provider =
-      WrapNotNull(new SimpleSurfaceProvider(frame));
-    InsertOutcome outcome =
-      SurfaceCache::Insert(provider, ImageKey(mImage.get()),
-                           RasterSurfaceKey(aOutputSize,
-                                            mSurfaceFlags,
-                                            aFrameNum));
-    if (outcome == InsertOutcome::FAILURE) {
-      // We couldn't insert the surface, almost certainly due to low memory. We
-      // treat this as a permanent error to help the system recover; otherwise,
-      // we might just end up attempting to decode this image again immediately.
-      ref->Abort();
-      return RawAccessFrameRef();
-    } else if (outcome == InsertOutcome::FAILURE_ALREADY_PRESENT) {
-      // Another decoder beat us to decoding this frame. We abort this decoder
-      // rather than treat this as a real error.
-      mDecodeAborted = true;
-      ref->Abort();
-      return RawAccessFrameRef();
-    }
   }
 
   if (aFrameNum == 1) {
@@ -548,8 +508,12 @@ Decoder::PostError()
 {
   mError = true;
 
-  if (mInFrame && mCurrentFrame) {
+  if (mInFrame) {
+    MOZ_ASSERT(mCurrentFrame);
+    MOZ_ASSERT(mFrameCount > 0);
     mCurrentFrame->Abort();
+    mInFrame = false;
+    --mFrameCount;
   }
 }
 
